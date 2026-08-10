@@ -1,0 +1,11 @@
+{
+  "name": "feishu-codex-channel-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@larksuite/channel": "0.4.1"
+  }
+}

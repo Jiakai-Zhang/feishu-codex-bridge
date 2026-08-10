@@ -1,0 +1,15 @@
+node_modules/
+# Deprecated pre-Channel prototype retained only in the original local workspace.
+bridge.mjs
+bridge.config.json
+.env
+.env.*
+work/
+*.log
+*.pid
+channel-secret.dpapi
+pending-deliveries.json
+completed.json
+selected-thread.json
+turn-*/
+new-thread-*/
