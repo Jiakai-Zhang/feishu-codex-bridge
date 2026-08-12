@@ -54,7 +54,7 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /new
 /new 项目规划
 /chat
-/chat 临时问题
+/chat 帮我解释一下这个报错
 /endchat
 /threads
 /use 2
@@ -86,7 +86,8 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 
 ### 临时异步 Chat
 
-- `/chat` 或 `/chat 主题`：创建临时 Codex Chat，并记住当前原任务。
+- `/chat`：创建临时 Codex Chat，并记住当前原任务。
+- `/chat 正文`：创建临时 Chat 后，直接把命令后面的内容作为第一条用户消息处理；正文不会被用作标题。已经处于临时 Chat 时，这种写法同样会直接处理正文。
 - 临时 Chat 与原任务使用不同的执行队列，因此原任务正在运行时也可以创建 Chat、继续提问；同一个任务中的多条消息仍按顺序处理。
 - `/endchat`（别名 `/end`）：立即把后续消息路由回原任务及其完整历史，不会取消已经提交到临时 Chat 的回合；这些回合完成后仍会更新自己的飞书卡片。
 - 临时 Chat 会保留在 Codex 任务列表中，但 `/new` 和 `/use` 在临时模式中会要求先执行 `/endchat`，避免意外覆盖返回位置。

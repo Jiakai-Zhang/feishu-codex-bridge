@@ -534,8 +534,13 @@ async function replyCommand(msg, markdown) {
   await persistCompleted(msg.messageId);
 }
 
-async function startTemporaryChat(msg, topic) {
+async function startTemporaryChat(msg, firstMessage) {
   if (temporaryChat) {
+    if (firstMessage) {
+      const threadId = await resolveMessageThreadId();
+      await workQueue.enqueue(threadId, () => processQueuedMessage(msg, firstMessage, threadId));
+      return;
+    }
     await replyCommand(msg, temporaryChat.status === "creating"
       ? "临时 Chat 正在创建，请稍等；创建后直接发送消息即可。"
       : "当前已经处于临时 Chat。直接发送消息继续，或发送 `/endchat` 返回原任务。");
@@ -552,11 +557,11 @@ async function startTemporaryChat(msg, topic) {
   temporaryChat = session;
   temporaryChatReady = (async () => {
     await channel.reply(msg, {
-      markdown: topic
-        ? `⏳ 正在创建临时 Chat：**${compactTitle(topic, 100)}**`
+      markdown: firstMessage
+        ? "⏳ 正在创建临时 Chat，随后直接处理这条消息…"
         : "⏳ 正在创建临时 Chat…",
     });
-    const thread = await createCodexThread(topic || "飞书临时 Chat");
+    const thread = await createCodexThread("飞书临时 Chat");
     session.threadId = thread.id;
     session.title = thread.title;
     session.status = "active";
@@ -568,13 +573,15 @@ async function startTemporaryChat(msg, topic) {
       status: session.status,
       startedAt: session.startedAt,
     }, null, 2), "utf8");
-    await persistCompleted(msg.messageId);
-    await channel.reply(msg, { markdown: [
-      `临时 Chat 已就绪：**${compactTitle(thread.title, 100)}**`,
-      "",
-      "现在可以随时发送消息。它与原任务使用独立队列，可以并行处理。",
-      "发送 `/endchat`（或 `/end`）即可立即返回原任务；已发出的临时 Chat 消息仍会在后台完成。",
-    ].join("\n") });
+    if (!firstMessage) {
+      await persistCompleted(msg.messageId);
+      await channel.reply(msg, { markdown: [
+        "临时 Chat 已就绪。",
+        "",
+        "现在可以随时发送消息。它与原任务使用独立队列，可以并行处理。",
+        "发送 `/endchat`（或 `/end`）即可立即返回原任务；已发出的临时 Chat 消息仍会在后台完成。",
+      ].join("\n") });
+    }
     log(`temporary Chat ${thread.id} started from ${session.baseThreadId}`);
     return thread;
   })();
@@ -585,6 +592,9 @@ async function startTemporaryChat(msg, topic) {
     if (temporaryChat === session) temporaryChat = undefined;
     temporaryChatReady = undefined;
     throw error;
+  }
+  if (firstMessage) {
+    await workQueue.enqueue(session.threadId, () => processQueuedMessage(msg, firstMessage, session.threadId));
   }
 }
 
@@ -726,7 +736,7 @@ async function handleCommand(msg, content) {
       "- `/new`：创建并切换到新任务",
       "- `/new 主题`：以指定主题创建并切换到新任务",
       "- `/chat`：创建临时异步 Chat，同时保留原任务上下文",
-      "- `/chat 主题`：以指定主题创建临时异步 Chat",
+      "- `/chat 正文`：创建临时异步 Chat，并直接处理后面的正文",
       "- `/endchat`（或 `/end`）：结束临时 Chat，立即返回原任务",
       "- `/threads`：列出最近任务",
       "- `/use 2`：切换到列表中的第 2 个任务",
