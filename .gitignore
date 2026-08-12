@@ -9,6 +9,9 @@ work/
 *.pid
 channel-secret.dpapi
 pending-deliveries.json
+pending-agent-events.json
+audit.jsonl
+task-leases.json
 completed.json
 selected-thread.json
 selected-thread.*.json

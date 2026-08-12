@@ -66,6 +66,7 @@ test("normalizes a Codex-first team config", () => {
   assert.deepEqual(sdkGroupAllowlist(config), ["oc_team"]);
   assert.deepEqual(config.collaboration.approverOpenIds, ["ou_owner"]);
   assert.equal(config.collaboration.defaultGroupChatId, "oc_team");
+  assert.equal(config.collaboration.taskLeaseMs, 12 * 60 * 60_000);
   assert.equal(config.collaboration.trustedPeers[0].allowedProjectIds[0], "bridge");
   assert.equal(config.project.id, "bridge");
   assert.equal(config.project.desktopProjectId, "desktop-project-1");

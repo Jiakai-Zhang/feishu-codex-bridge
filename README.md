@@ -88,6 +88,7 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `collaboration.defaultGroupChatId`：本 Bot 主动委派和回传 Agent 事件使用的群，必须同时位于 `groupChatIds`。
 - `collaboration.approverOpenIds`：可以接单、拒绝和审批结果的人类成员；必须是 `agent.allowedHumanOpenIds` 的子集，默认只有 owner。
 - `collaboration.autoAcceptPeerTasks`：是否跳过人工接单。建议保持 `false`；开启后仍会执行身份、Project、TTL、hop 和去重校验。
+- `collaboration.taskLeaseMs`：协作任务占用 Project 分支的持久租约时长，默认 12 小时、最大 24 小时；进程异常退出后租约会在到期时自动失效。
 - `teamHub.path`：共享知识根目录，可位于共享文件系统或专用 Git 仓库 checkout；Bridge 只管理其 `projects/<project.id>/` 命名空间，不自动 commit、pull 或 push。
 - `teamHub.writerOpenIds`：可创建和更新知识条目的人类成员，必须是 `agent.allowedHumanOpenIds` 的子集；其他可信成员只读。
 - `teamHub.repositoryIds`：该 Project 知识关联的一个或多个已配置 repository ID，条目和 Codex 上下文都会保留此范围。
@@ -132,6 +133,8 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /knowledge show knowledge/project-boundary
 /knowledge create summaries/milestone-1 第一阶段已完成，测试 61/61
 /knowledge update summaries/milestone-1 <完整revision> 更新后的总结
+/audit 20
+/metrics
 /help
 ```
 
@@ -166,6 +169,8 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `/knowledge show <category>/<id>`：读取条目正文与完整 revision；category 为 `knowledge`、`summaries` 或 `references`。
 - `/knowledge create <category>/<id> <Markdown>`：由 Team Hub writer 创建条目。
 - `/knowledge update <category>/<id> <完整revision> <Markdown>`：以乐观锁更新；revision 已变化时拒绝覆盖。
+- `/audit [1-100]`：显示最近的安全和协作事件、actor、任务 ID、时间与哈希摘要，不显示提示词、结果、凭据或完整路径。
+- `/metrics`：显示等待队列、两个可靠投递发件箱、任务状态、知识条目、分支租约、审计 head 与 executor capabilities。
 
 这些查询不启动 Codex，不产生模型 token。
 
@@ -225,3 +230,26 @@ Team Hub 把长期协作资料分成三个稳定类别：
 每个 Codex 回合会实时读取当前 Project 的 Team Hub，并在 `maxContextChars` 内按 `knowledge → summaries → references` 注入，明确标注“稳定知识不是实时状态；与当前仓库或运行态冲突时以可验证事实为准”。实时队列、运行中任务、审批状态和失败重试只保存在 Bridge 运行目录，绝不会自动写入稳定知识。
 
 多个 Agent 可以把 `teamHub.path` 指向同一共享目录，或分别指向同一个专用 Git 知识仓库的 checkout。Bridge 提供文件边界、并发锁和 revision 冲突保护，但不会擅自执行 Git 同步；团队仍可使用自己的 review/PR 流程共享这些 Markdown 文件。
+
+## 审计、可靠投递与编排互斥
+
+Bridge 在运行目录维护 `audit.jsonl`。每条 JSONL 记录包含递增 sequence、时间、事件类型、actor、Project、可选任务 ID、前一条哈希和当前 SHA-256 哈希，从而形成追加式哈希链。启动时会从头验证 sequence 和链；任何历史行被修改、删除或重排都会使 Bridge 拒绝以“可信审计”状态启动。审计 details 受大小限制，代码只写入 ID、分支、事件类型、executor 类型和错误码等元数据，不写提示词、结果正文、App Secret 或完整命令。
+
+飞书用户回复与 Agent 事件分别使用两个持久发件箱：
+
+- `pending-deliveries.json`：Codex 最终回复，按原飞书 message ID 幂等补发。
+- `pending-agent-events.json`：Bot-to-Bot 任务事件，发送前持久化，按协议 `eventId` 幂等补发并使用有界指数退避。
+
+即使发送成功后的本地确认失败，接收方仍会以 `eventId` 去重，不会重复执行任务。`/status` 和 `/metrics` 会分别显示两个发件箱的积压。
+
+协作执行还会在 `task-leases.json` 中为 `(projectId, branch)` 获取持久租约。同一分支已有其他协作任务租约时，新任务会进入 `blocked`，不会并发运行另一个 Bridge 回合；正常完成、失败或拒绝后释放，崩溃遗留租约在 `taskLeaseMs` 后失效。这补充了单进程消息队列，但不声称能阻止用户从 Codex Desktop 或其他外部进程直接操作同一 worktree。
+
+## Executor 扩展合同
+
+Codex 仍是内置 executor。注册表允许后续安装其他 Agent adapter，但 adapter 必须同时提供 `createThread`、`runTurn`，并声明以下必需 capabilities：
+
+- `persistentThreads`：任务具有可恢复的持久线程身份。
+- `projectCwd`：线程创建和运行都接受并遵守 Bridge 已验证的 Project worktree cwd。
+- `progressUpdates`：运行过程可以通过稳定接口回传公开进度。
+
+可选的 `cancellation` 只有在 adapter 同时实现 `cancelTurn` 时才允许声明。缺失 capability、实现不完整或 executor 类型未安装都会在启动时 fail closed；因此未来 Agent 不能仅凭配置名称绕过 Project、审批、审计和任务协议边界。

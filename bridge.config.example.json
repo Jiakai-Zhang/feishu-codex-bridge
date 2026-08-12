@@ -53,7 +53,8 @@
     ],
     "autoAcceptPeerTasks": false,
     "maxHops": 2,
-    "eventTtlMs": 900000
+    "eventTtlMs": 900000,
+    "taskLeaseMs": 43200000
   },
   "teamHub": {
     "enabled": false,

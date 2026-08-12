@@ -213,6 +213,10 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
         min: 60_000,
         max: 24 * 60 * 60_000,
       }),
+      taskLeaseMs: positiveNumber(raw.collaboration?.taskLeaseMs, 12 * 60 * 60_000, {
+        min: 5 * 60_000,
+        max: 24 * 60 * 60_000,
+      }),
     },
     repositories,
     teamHub: {

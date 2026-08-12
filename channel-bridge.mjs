@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { createLarkChannel } from "@larksuite/channel";
+import { AgentEventOutbox } from "./agent-event-outbox.mjs";
 import {
   createAgentEvent,
   decodeAgentEvent,
@@ -10,6 +11,7 @@ import {
   validateIncomingAgentEvent,
 } from "./agent-protocol.mjs";
 import { startCodexProjectThread } from "./codex-app-server.mjs";
+import { AuditLog } from "./audit-log.mjs";
 import {
   buildCapacityMarkdown,
   buildModelMarkdown,
@@ -24,6 +26,7 @@ import { inspectDesktopProject } from "./desktop-project-state.mjs";
 import { createExecutor } from "./executor-registry.mjs";
 import { buildKnowledgeArtifactMarkdown, buildKnowledgeListMarkdown, parseKnowledgeCommand } from "./knowledge-commands.mjs";
 import { KnowledgeHub } from "./knowledge-hub.mjs";
+import { buildAuditMarkdown, buildMetricsMarkdown, parseAuditLimit } from "./operational-commands.mjs";
 import { runProcess } from "./process-runner.mjs";
 import { createRolloutCompletionWatcher } from "./rollout-completion.mjs";
 import { streamCodexInSingleMessage } from "./stream-progress.mjs";
@@ -41,6 +44,7 @@ import { buildPeerControlReply, buildTeamMarkdown, parsePeerControlMessage } fro
 import { buildTeamTasksMarkdown, parseDelegateArgument, parseTaskActionArgument } from "./team-task-commands.mjs";
 import { loadBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
 import { TeamTaskStore } from "./team-task-store.mjs";
+import { TaskLeaseStore } from "./task-lease-store.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const config = await loadBridgeConfig(path.join(scriptDir, "bridge.config.json"));
@@ -54,7 +58,10 @@ const statePath = path.join(runtimeDir, "completed.json");
 const legacySelectionPath = path.join(runtimeDir, "selected-thread.json");
 const selectionPath = path.join(runtimeDir, `selected-thread.${config.project.id}.json`);
 const deliveryOutboxPath = path.join(runtimeDir, "pending-deliveries.json");
+const agentEventOutboxPath = path.join(runtimeDir, "pending-agent-events.json");
 const teamTaskStorePath = path.join(runtimeDir, "team-tasks.json");
+const auditLogPath = path.join(runtimeDir, "audit.jsonl");
+const taskLeaseStorePath = path.join(runtimeDir, "task-leases.json");
 const codexStateDbPath = path.join(userProfile, ".codex", "state_5.sqlite");
 const codexHome = path.join(userProfile, ".codex");
 
@@ -66,7 +73,10 @@ await fs.mkdir(runtimeDir, { recursive: true });
 await fs.rm(stopPath, { force: true });
 await fs.writeFile(pidPath, String(process.pid), "utf8");
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
+const agentEventOutbox = await AgentEventOutbox.open(agentEventOutboxPath);
 const teamTaskStore = await TeamTaskStore.open(teamTaskStorePath);
+const auditLog = await AuditLog.open(auditLogPath);
+const taskLeaseStore = await TaskLeaseStore.open(taskLeaseStorePath);
 const knowledgeHub = config.teamHub.enabled
   ? new KnowledgeHub(config.teamHub.path, {
       projectId: config.project.id,
@@ -112,6 +122,21 @@ function log(message) {
 function safeError(error) {
   if (error && typeof error === "object" && "code" in error) return `code=${String(error.code)}`;
   return error instanceof Error ? error.message : String(error);
+}
+
+function safeErrorCode(error) {
+  if (error && typeof error === "object" && "code" in error) return String(error.code).slice(0, 80);
+  return error instanceof Error ? error.name.slice(0, 80) : "unknown";
+}
+
+async function audit(type, actor, { taskId, details } = {}) {
+  return auditLog.append({
+    type,
+    actor,
+    projectId: config.project.id,
+    taskId,
+    details,
+  });
 }
 
 function withStateDb(callback) {
@@ -210,7 +235,7 @@ function commandName(content) {
 }
 
 const immediateCommands = new Set([
-  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/team", "/team-tasks", "/help",
+  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/team", "/team-tasks", "/audit", "/metrics", "/help",
 ]);
 
 function updateActiveWork(update) {
@@ -246,6 +271,9 @@ function buildStatusMarkdown(thread, snapshot, scopedThread) {
     `- 当前状态：**${activeWork ? activeWork.phase : idleState}**`,
     `- 等待队列：${queuedWorkCount} 条`,
     `- 待补发结果：${deliveryOutbox.size()} 条`,
+    `- 待补发 Agent 事件：${agentEventOutbox.size()} 条`,
+    `- 审计链：${auditLog.size()} 条 · head \`${auditLog.headHash().slice(0, 12)}\``,
+    `- 活跃分支租约：${taskLeaseStore.list().length} 条`,
     `- Project：**${config.project.name}**（\`${config.project.id}\`）`,
     `- 当前任务：${thread ? `**${compactTitle(thread.title, 80)}**` : "不存在"}`,
     `- 当前分支：${scopedThread?.worktree?.branch ? `\`${scopedThread.worktree.branch}\`` : "不在 Project 内"}`,
@@ -504,9 +532,18 @@ async function initializeProjectSelection() {
 await initializeProjectSelection();
 const executor = createExecutor(config.agent.executor, {
   codex: {
+    capabilities: {
+      persistentThreads: true,
+      projectCwd: true,
+      progressUpdates: true,
+      cancellation: false,
+    },
     createThread: createCodexThread,
     runTurn: askCodex,
   },
+});
+await audit("bridge.started", `agent:${config.agent.id}`, {
+  details: { executorType: executor.type, capabilities: executor.capabilities },
 });
 
 const channel = createLarkChannel({
@@ -581,23 +618,82 @@ function eventForTask(task, kind, payload) {
   }, { ttlMs: config.collaboration.eventTtlMs });
 }
 
-async function sendAgentEvent(peer, chatId, event) {
+async function deliverAgentEventRecord(record) {
+  const peer = trustedPeer(record.peerAgentId);
   if (!peer?.botOpenId) throw new Error("Trusted peer Bot identity is unavailable");
-  if (!config.collaboration.groupChatIds.includes(chatId)) throw new Error("Agent event target group is not allowlisted");
-  await channel.send(chatId, { markdown: encodeAgentEvent(event) }, {
+  if (!config.collaboration.groupChatIds.includes(record.chatId)) throw new Error("Agent event target group is not allowlisted");
+  await channel.send(record.chatId, { markdown: encodeAgentEvent(record.event) }, {
     mentions: [{ key: "peer", openId: peer.botOpenId, name: peer.displayName, isBot: true }],
   });
+}
+
+async function sendAgentEvent(peer, chatId, event) {
+  const record = {
+    peerAgentId: peer.agentId,
+    chatId,
+    event,
+    createdAt: Date.now(),
+  };
+  await agentEventOutbox.put(record);
+  try {
+    await deliverAgentEventRecord(record);
+    await agentEventOutbox.remove(event.eventId);
+    await audit("agent_event.delivered", `agent:${config.agent.id}`, {
+      taskId: event.taskId,
+      details: { eventId: event.eventId, kind: event.kind, peerAgentId: peer.agentId },
+    });
+    return true;
+  } catch (error) {
+    await agentEventOutbox.markFailure(event.eventId, error);
+    await audit("agent_event.queued", `agent:${config.agent.id}`, {
+      taskId: event.taskId,
+      details: { eventId: event.eventId, kind: event.kind, peerAgentId: peer.agentId, errorCode: safeErrorCode(error) },
+    });
+    log(`Agent event ${event.eventId} queued for retry: ${safeError(error)}`);
+    return false;
+  }
 }
 
 async function sendTaskEvent(task, kind, payload) {
   const peer = trustedPeer(task.peerAgentId);
   if (!peer) throw new Error(`Trusted peer ${task.peerAgentId} is unavailable for Project ${config.project.id}`);
   const event = eventForTask(task, kind, payload);
-  await sendAgentEvent(peer, task.chatId || config.collaboration.defaultGroupChatId, event);
-  return event;
+  const delivered = await sendAgentEvent(peer, task.chatId || config.collaboration.defaultGroupChatId, event);
+  return { event, delivered };
 }
 
 let deliveryRetryInFlight = false;
+let agentEventRetryInFlight = false;
+
+async function retryPendingAgentEvents() {
+  if (!channelConnected || agentEventRetryInFlight) return;
+  agentEventRetryInFlight = true;
+  try {
+    for (const record of agentEventOutbox.list({ dueAt: Date.now() })) {
+      if (Number.isFinite(record.event.expiresAt) && record.event.expiresAt <= Date.now()) {
+        await agentEventOutbox.remove(record.eventId);
+        await audit("agent_event.expired", `agent:${config.agent.id}`, {
+          taskId: record.event.taskId,
+          details: { eventId: record.eventId, kind: record.event.kind, peerAgentId: record.peerAgentId },
+        });
+        continue;
+      }
+      try {
+        await deliverAgentEventRecord(record);
+        await agentEventOutbox.remove(record.eventId);
+        await audit("agent_event.retry_delivered", `agent:${config.agent.id}`, {
+          taskId: record.event.taskId,
+          details: { eventId: record.eventId, kind: record.event.kind, peerAgentId: record.peerAgentId, attempts: record.attempts },
+        });
+      } catch (error) {
+        await agentEventOutbox.markFailure(record.eventId, error);
+        log(`Agent event retry failed for ${record.eventId}: ${safeError(error)}`);
+      }
+    }
+  } finally {
+    agentEventRetryInFlight = false;
+  }
+}
 
 async function deliverPendingRecord(record) {
   const response = await channel.rawClient.im.message.reply({
@@ -690,6 +786,37 @@ async function handleCommand(msg, content) {
     await replyCommand(msg, buildStatusMarkdown(thread, rolloutSnapshot, scopedThread));
     return true;
   }
+  if (command === "/audit") {
+    const limit = parseAuditLimit(argument);
+    await replyCommand(msg, limit
+      ? buildAuditMarkdown(auditLog.tail(limit), auditLog.headHash())
+      : "用法：`/audit [1-100]`"
+    );
+    return true;
+  }
+  if (command === "/metrics") {
+    const tasks = teamTaskStore.list({ limit: 500 });
+    const taskStates = tasks.reduce((counts, task) => ({
+      ...counts,
+      [task.state]: (counts[task.state] || 0) + 1,
+    }), {});
+    const knowledgeCount = knowledgeHub ? (await knowledgeHub.list()).length : 0;
+    await replyCommand(msg, buildMetricsMarkdown({
+      channelConnected,
+      queuedWorkCount,
+      deliveryOutboxSize: deliveryOutbox.size(),
+      agentEventOutboxSize: agentEventOutbox.size(),
+      teamTaskCount: tasks.length,
+      taskStates,
+      knowledgeCount,
+      auditCount: auditLog.size(),
+      auditHead: auditLog.headHash(),
+      taskLeaseCount: taskLeaseStore.list().length,
+      executorType: executor.type,
+      executorCapabilities: executor.capabilities,
+    }));
+    return true;
+  }
   if (command === "/model") {
     const thread = getThread(activeThreadId);
     const scopedThread = await projectContext.validateThread(thread, await projectContext.refresh());
@@ -769,6 +896,13 @@ async function handleCommand(msg, content) {
           expectedRevision: request.expectedRevision,
           authorHumanOpenId: msg.senderId,
         });
+    await audit(`knowledge.${request.action === "create" ? "created" : "updated"}`, `human:${msg.senderId}`, {
+      details: { category: metadata.category, id: metadata.id, revision: metadata.revision, repositoryIds: metadata.repositoryIds },
+    });
+    await audit("task.delegated", `human:${msg.senderId}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch },
+    });
     await replyCommand(msg, [
       `已${request.action === "create" ? "创建" : "更新"}共享知识：\`${metadata.category}/${metadata.id}\`。`,
       "",
@@ -797,6 +931,7 @@ async function handleCommand(msg, content) {
     if (!chatId) throw new Error("collaboration.defaultGroupChatId is required for delegation");
     const taskId = `task:${msg.messageId}`;
     let task = teamTaskStore.get(taskId);
+    let eventDelivered;
     if (!task) {
       const event = createAgentEvent({
         kind: "task.request",
@@ -813,17 +948,17 @@ async function handleCommand(msg, content) {
         chatId,
         requesterHumanOpenId: msg.senderId,
       });
-      await sendAgentEvent(peer, chatId, event);
+      eventDelivered = await sendAgentEvent(peer, chatId, event);
     } else {
       if (task.direction !== "outbound" || task.peerAgentId !== peer.agentId
         || task.branch !== request.branch || task.prompt !== request.prompt) {
         throw new Error(`Existing task ${taskId} does not match this delegation request`);
       }
-      await sendTaskEvent(task, "task.request", {
+      eventDelivered = (await sendTaskEvent(task, "task.request", {
         title: task.title,
         prompt: task.prompt,
         branch: task.branch,
-      });
+      })).delivered;
     }
     await replyCommand(msg, [
       `已向 **${peer.displayName}** 委派任务。`,
@@ -831,7 +966,7 @@ async function handleCommand(msg, content) {
       `- 任务：\`${task.taskId}\``,
       `- Project：\`${task.projectId}\``,
       `- 分支：\`${task.branch}\``,
-      "- 状态：等待 peer 接单",
+      `- 状态：${eventDelivered ? "已投递，等待 peer 接单" : "已进入 Agent 事件发件箱，等待自动补发"}`,
     ].join("\n"));
     return true;
   }
@@ -854,6 +989,10 @@ async function handleCommand(msg, content) {
     requireTaskApprover(msg.senderId, current);
     const task = await teamTaskStore.rejectInbound(request.taskId, request.note, msg.senderId);
     await sendTaskEvent(task, "task.rejected", { reason: request.note });
+    await audit("task.rejected", `human:${msg.senderId}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch },
+    });
     await replyCommand(msg, `已拒绝协作任务 \`${task.taskId}\`，并通知 ${task.peerAgentId}。`);
     return true;
   }
@@ -867,6 +1006,10 @@ async function handleCommand(msg, content) {
     requireTaskApprover(msg.senderId, current, { allowRequester: true });
     const task = await teamTaskStore.approveOutbound(request.taskId, request.note, msg.senderId);
     await sendTaskEvent(task, "task.approved", { note: request.note || undefined });
+    await audit("task.approved", `human:${msg.senderId}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch },
+    });
     await replyCommand(msg, `已批准 peer 返回的任务结果：\`${task.taskId}\`。`);
     return true;
   }
@@ -982,6 +1125,8 @@ async function handleCommand(msg, content) {
       "- `/team-reject <taskId> <原因>`：拒绝收到的任务",
       "- `/team-approve <taskId> [说明]`：批准 peer 返回的结果",
       "- `/knowledge [list|show|create|update]`：管理共享稳定知识、总结和参考资料",
+      "- `/audit [1-100]`：查看追加式审计链摘要",
+      "- `/metrics`：查看队列、发件箱、任务、知识、租约与 executor 指标",
       "- `/help`：显示帮助",
     ].join("\n"));
     return true;
@@ -1029,7 +1174,8 @@ async function processMessage(msg, content) {
 
   try {
     if (await handleCommand(msg, content)) return true;
-    if (!await activeProjectThread()) {
+    const scopedThread = await activeProjectThread();
+    if (!scopedThread) {
       await replyCommand(msg, [
         `当前没有选中 Project **${config.project.name}** 内的 Codex 任务。`,
         "",
@@ -1037,7 +1183,13 @@ async function processMessage(msg, content) {
       ].join("\n"));
       return true;
     }
+    await audit("turn.started", `human:${msg.senderId}`, {
+      details: { messageId: msg.messageId, threadId: scopedThread.id, branch: scopedThread.worktree.branch, executorType: executor.type },
+    });
     await streamCodex(msg, content);
+    await audit("turn.completed", `agent:${config.agent.id}`, {
+      details: { messageId: msg.messageId, threadId: scopedThread.id, branch: scopedThread.worktree.branch, executorType: executor.type },
+    });
     await deliveryOutbox.remove(msg.messageId);
     await persistCompleted(msg.messageId);
     try {
@@ -1054,6 +1206,9 @@ async function processMessage(msg, content) {
     return true;
   } catch (error) {
     log(`failed ${msg.messageId}: ${safeError(error)}`);
+    await audit("message.failed", `agent:${config.agent.id}`, {
+      details: { messageId: msg.messageId, errorCode: safeErrorCode(error) },
+    }).catch((auditError) => log(`message failure audit failed: ${safeError(auditError)}`));
     if (deliveryOutbox.has(msg.messageId)) {
       log(`result delivery deferred for ${msg.messageId}; background retry will not call Codex again`);
       void retryPendingDeliveries();
@@ -1090,6 +1245,7 @@ async function processQueuedMessage(msg, content) {
 
 async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } = {}) {
   let task = teamTaskStore.get(taskId);
+  let leaseAcquired = false;
   if (!task || task.direction !== "inbound") throw new Error(`Unknown inbound task ${taskId}`);
   if (approvedByOpenId !== "auto") requireTaskApprover(approvedByOpenId, task);
   try {
@@ -1098,6 +1254,22 @@ async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } =
     } else if (task.state !== "accepted") {
       throw new Error(`Task ${taskId} cannot be executed from ${task.state}`);
     }
+    await audit("task.accepted", approvedByOpenId === "auto" ? `agent:${config.agent.id}` : `human:${approvedByOpenId}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch, autoAccepted: approvedByOpenId === "auto" },
+    });
+    await taskLeaseStore.acquire({
+      projectId: task.projectId,
+      branch: task.branch,
+      taskId: task.taskId,
+      ownerAgentId: config.agent.id,
+      leaseMs: config.collaboration.taskLeaseMs,
+    });
+    leaseAcquired = true;
+    await audit("task.lease_acquired", `agent:${config.agent.id}`, {
+      taskId: task.taskId,
+      details: { branch: task.branch, leaseMs: config.collaboration.taskLeaseMs },
+    });
     await sendTaskEvent(task, "task.accepted", { message: "accepted by the local Bridge" });
     if (commandMessage) {
       await channel.reply(commandMessage, {
@@ -1112,6 +1284,10 @@ async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } =
       threadId: thread.id,
       worktree: worktree.path,
       branch: worktree.branch,
+    });
+    await audit("task.started", `agent:${config.agent.id}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch, executorType: executor.type },
     });
     await sendTaskEvent(task, "task.progress", { message: "Codex task started in the approved Project worktree" });
 
@@ -1130,6 +1306,10 @@ async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } =
     const answer = await executor.runTurn(prompt, (update) => updateActiveWork(update));
     const summary = String(answer || "任务完成，但 Codex 未返回文本结果。").slice(0, 12_000);
     task = await teamTaskStore.markCompleted(task.taskId, summary);
+    await audit("task.completed", `agent:${config.agent.id}`, {
+      taskId: task.taskId,
+      details: { peerAgentId: task.peerAgentId, branch: task.branch, executorType: executor.type },
+    });
     await sendTaskEvent(task, "task.result", { summary, threadId: task.localThreadId });
     const doneMarkdown = [
       `## 协作任务已完成`,
@@ -1147,6 +1327,10 @@ async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } =
     const peerReason = "本地执行未完成；请由本地审批者检查 Bridge 状态后决定是否重试。";
     if (latest && new Set(["accepted", "running"]).has(latest.state)) {
       task = await teamTaskStore.markBlocked(taskId, peerReason);
+      await audit("task.blocked", `agent:${config.agent.id}`, {
+        taskId: task.taskId,
+        details: { peerAgentId: task.peerAgentId, branch: task.branch, errorCode: safeErrorCode(error) },
+      });
       await sendTaskEvent(task, "task.blocked", { reason: peerReason }).catch((sendError) => {
         log(`failed to notify peer about blocked task ${taskId}: ${safeError(sendError)}`);
       });
@@ -1157,6 +1341,18 @@ async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } =
     }
     log(`auto-accepted team task ${taskId} failed: ${safeError(error)}`);
     return false;
+  } finally {
+    if (leaseAcquired) {
+      const released = await taskLeaseStore.release({
+        projectId: task.projectId,
+        branch: task.branch,
+        taskId: task.taskId,
+      });
+      if (released) await audit("task.lease_released", `agent:${config.agent.id}`, {
+        taskId: task.taskId,
+        details: { branch: task.branch },
+      });
+    }
   }
 }
 
@@ -1191,8 +1387,16 @@ async function processPeerControlMessage(msg, route, content) {
     });
     if (recorded.duplicate) {
       log(`duplicate Agent event ${event.eventId} ignored for ${event.taskId}`);
+      await audit("agent_event.duplicate", `peer:${route.peer.agentId}`, {
+        taskId: event.taskId,
+        details: { eventId: event.eventId, kind: event.kind },
+      });
       return true;
     }
+    await audit("agent_event.accepted", `peer:${route.peer.agentId}`, {
+      taskId: event.taskId,
+      details: { eventId: event.eventId, kind: event.kind, chatId: msg.chatId },
+    });
     if (event.kind === "task.request" && config.collaboration.autoAcceptPeerTasks) {
       await persistCompleted(msg.messageId);
       void enqueueWork(() => executeInboundTask(event.taskId, { approvedByOpenId: "auto" }));
@@ -1212,6 +1416,9 @@ async function processPeerControlMessage(msg, route, content) {
     return false;
   }
   await replyCommand(msg, buildPeerControlReply(config, route.peer, request));
+  await audit("peer_control.accepted", `peer:${route.peer.agentId}`, {
+    details: { action: request.action, requestId: request.requestId },
+  });
   log(`peer control ${request.action} accepted from ${route.peer.agentId} for ${config.project.id}`);
   return true;
 }
@@ -1223,10 +1430,18 @@ channel.on("message", async (msg) => {
   if (!content) return;
 
   if (route.kind === "peer") {
-    await processPeerControlMessage(msg, route, content).catch((error) => {
+    await processPeerControlMessage(msg, route, content).catch(async (error) => {
       log(`peer control ${msg.messageId} failed: ${safeError(error)}`);
+      await audit("agent_event.rejected", `peer:${route.peer.agentId}`, {
+        details: { messageId: msg.messageId, errorCode: safeErrorCode(error) },
+      }).catch((auditError) => log(`peer rejection audit failed: ${safeError(auditError)}`));
     });
     return;
+  }
+  if (route.kind === "ignore" && msg.senderIsBot && msg.mentionedBot) {
+    await audit("peer_route.rejected", `bot:${msg.senderId || "unknown"}`, {
+      details: { messageId: msg.messageId, reason: route.reason || "unknown", chatId: msg.chatId },
+    }).catch((error) => log(`peer route rejection audit failed: ${safeError(error)}`));
   }
   if (route.kind !== "human") return;
 
@@ -1246,6 +1461,7 @@ channel.on("reconnecting", () => {
 channel.on("reconnected", () => {
   channelConnected = true;
   log("Channel SDK reconnected");
+  void retryPendingAgentEvents();
 });
 
 let stopResolve;
@@ -1255,7 +1471,8 @@ async function requestStop(reason) {
   if (stopping) return;
   stopping = true;
   log(`stopping Channel SDK bridge (${reason})`);
-  stopResolve();
+  try { await audit("bridge.stop_requested", `agent:${config.agent.id}`, { details: { reason } }); }
+  finally { stopResolve(); }
 }
 process.on("SIGINT", () => void requestStop("SIGINT"));
 process.on("SIGTERM", () => void requestStop("SIGTERM"));
@@ -1269,6 +1486,10 @@ const deliveryRetryTimer = setInterval(
   () => void retryPendingDeliveries(),
   Math.max(15_000, Number(config.deliveryRetryMs) || 60_000),
 );
+const agentEventRetryTimer = setInterval(
+  () => void retryPendingAgentEvents(),
+  Math.max(15_000, Number(config.deliveryRetryMs) || 60_000),
+);
 
 try {
   await channel.connect();
@@ -1278,14 +1499,18 @@ try {
     throw new Error(`Configured bot open_id does not match the connected Channel identity`);
   }
   connectedBotOpenId = identity.openId;
+  await audit("channel.connected", `bot:${identity.openId}`, { details: { botName: identity.name || undefined } });
   log(`READY: Channel SDK connected as ${identity.name || identity.openId}`);
   void retryPendingDeliveries();
+  void retryPendingAgentEvents();
   await stopPromise;
 } finally {
   channelConnected = false;
   clearInterval(stopWatcher);
   clearInterval(deliveryRetryTimer);
+  clearInterval(agentEventRetryTimer);
   await channel.disconnect().catch(() => {});
+  await audit("bridge.stopped", `agent:${config.agent.id}`).catch((error) => log(`final audit append failed: ${safeError(error)}`));
   await fs.rm(pidPath, { force: true });
   await fs.rm(stopPath, { force: true });
   log("Channel SDK bridge stopped");
