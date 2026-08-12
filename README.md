@@ -88,6 +88,10 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `collaboration.defaultGroupChatId`：本 Bot 主动委派和回传 Agent 事件使用的群，必须同时位于 `groupChatIds`。
 - `collaboration.approverOpenIds`：可以接单、拒绝和审批结果的人类成员；必须是 `agent.allowedHumanOpenIds` 的子集，默认只有 owner。
 - `collaboration.autoAcceptPeerTasks`：是否跳过人工接单。建议保持 `false`；开启后仍会执行身份、Project、TTL、hop 和去重校验。
+- `teamHub.path`：共享知识根目录，可位于共享文件系统或专用 Git 仓库 checkout；Bridge 只管理其 `projects/<project.id>/` 命名空间，不自动 commit、pull 或 push。
+- `teamHub.writerOpenIds`：可创建和更新知识条目的人类成员，必须是 `agent.allowedHumanOpenIds` 的子集；其他可信成员只读。
+- `teamHub.repositoryIds`：该 Project 知识关联的一个或多个已配置 repository ID，条目和 Codex 上下文都会保留此范围。
+- `teamHub.maxContextChars`：每轮注入 Codex 的 Team Hub 上下文上限，默认 24000 字符。
 
 真实 `bridge.config.json` 已被 `.gitignore` 排除。
 
@@ -124,6 +128,10 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /team-accept task:om_xxx
 /team-reject task:om_xxx 超出当前 Project 范围
 /team-approve task:om_xxx 已审阅
+/knowledge list
+/knowledge show knowledge/project-boundary
+/knowledge create summaries/milestone-1 第一阶段已完成，测试 61/61
+/knowledge update summaries/milestone-1 <完整revision> 更新后的总结
 /help
 ```
 
@@ -154,6 +162,10 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `/team-accept <taskId>`：仅审批者可用；在任务指定分支的独立 worktree 创建 Codex 任务并执行。
 - `/team-reject <taskId> <原因>`：仅审批者可用；持久化拒绝状态并通知请求 Agent。
 - `/team-approve <taskId> [说明]`：请求该任务的成员或审批者确认 peer 返回的结果。
+- `/knowledge list`：列出稳定知识、阶段总结和参考资料及其 revision。
+- `/knowledge show <category>/<id>`：读取条目正文与完整 revision；category 为 `knowledge`、`summaries` 或 `references`。
+- `/knowledge create <category>/<id> <Markdown>`：由 Team Hub writer 创建条目。
+- `/knowledge update <category>/<id> <完整revision> <Markdown>`：以乐观锁更新；revision 已变化时拒绝覆盖。
 
 这些查询不启动 Codex，不产生模型 token。
 
@@ -189,3 +201,27 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `task.approved`：requester 在本地人类确认后批准结果。
 
 状态持久化在运行目录的 `team-tasks.json`，并按 `eventId` 去重。收到的任务默认进入 `pending`，只有 `approverOpenIds` 中的本地成员执行 `/team-accept` 后，Bridge 才会准备 Project 内的分支 worktree、创建独立 Codex 任务并运行。requester、executor 与本地审批者分别记录，状态转换不允许改变所有权。结果返回后仍需请求成员或审批者执行 `/team-approve`，从而区分“执行完成”和“结果获批”。
+
+## 共享 Team Hub
+
+Team Hub 把长期协作资料分成三个稳定类别：
+
+- `knowledge`：项目规则、架构决策、长期约定和已经验证的操作知识。
+- `summaries`：阶段总结、交接文档和里程碑结果。
+- `references`：API、论文、数据集、外部文档或仓库内参考资料的 Markdown 说明。
+
+条目物理结构为：
+
+```text
+<teamHub.path>/
+└─ projects/<project.id>/
+   ├─ knowledge/<id>.md + <id>.meta.json
+   ├─ summaries/<id>.md + <id>.meta.json
+   └─ references/<id>.md + <id>.meta.json
+```
+
+每条 metadata 记录 Project、类别、ID、标题、关联 repository IDs、作者 Agent、人类 writer、时间和 SHA-256 revision。创建使用独占锁，更新必须提交读取到的完整 revision；并发或过期写入会返回冲突，不会静默覆盖。若有人直接在 Git checkout 中编辑 `.md`，`/knowledge show` 会计算实际 revision 并标记外部修改，下一次更新必须使用实际 revision。
+
+每个 Codex 回合会实时读取当前 Project 的 Team Hub，并在 `maxContextChars` 内按 `knowledge → summaries → references` 注入，明确标注“稳定知识不是实时状态；与当前仓库或运行态冲突时以可验证事实为准”。实时队列、运行中任务、审批状态和失败重试只保存在 Bridge 运行目录，绝不会自动写入稳定知识。
+
+多个 Agent 可以把 `teamHub.path` 指向同一共享目录，或分别指向同一个专用 Git 知识仓库的 checkout。Bridge 提供文件边界、并发锁和 revision 冲突保护，但不会擅自执行 Git 同步；团队仍可使用自己的 review/PR 流程共享这些 Markdown 文件。

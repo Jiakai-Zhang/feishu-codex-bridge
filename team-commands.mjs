@@ -31,6 +31,7 @@ export function buildTeamMarkdown(config, connectedBotOpenId = config.agent.botO
     `- 协作任务审批者：${config.collaboration.approverOpenIds.length} 人`,
     `- 默认协作群：${inlineCode(config.collaboration.defaultGroupChatId || "未配置")}`,
     `- peer 自动接单：**${config.collaboration.autoAcceptPeerTasks ? "已启用" : "未启用"}**`,
+    `- Team Hub：**${config.teamHub.enabled ? "已启用" : "未启用"}**${config.teamHub.enabled ? ` · repositories ${config.teamHub.repositoryIds.map(inlineCode).join("、")}` : ""}`,
     "",
     "### 可信 peer Bot",
     "",

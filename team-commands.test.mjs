@@ -23,6 +23,7 @@ const config = {
       allowedProjectIds: ["bridge"],
     }],
   },
+  teamHub: { enabled: true, repositoryIds: ["bridge"] },
 };
 
 test("parses only bounded peer control messages", () => {
@@ -47,6 +48,7 @@ test("team status shows identities and Project scopes", () => {
   assert.match(markdown, /alice-codex/);
   assert.match(markdown, /bridge/);
   assert.match(markdown, /oc_team/);
+  assert.match(markdown, /Team Hub：\*\*已启用/);
   assert.match(markdown, /只接受 `\/peer ping\|status`/);
 });
 

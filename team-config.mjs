@@ -173,6 +173,15 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
     ? path.resolve(configDir, String(raw.teamHub.path))
     : undefined;
   if (teamHubEnabled && !teamHubPath) throw new TypeError("teamHub.path is required when teamHub is enabled");
+  const teamHubWriterOpenIds = uniqueStrings(raw.teamHub?.writerOpenIds || approverOpenIds);
+  for (const openId of teamHubWriterOpenIds) {
+    if (!allowedHumanOpenIds.includes(openId)) throw new TypeError("teamHub.writerOpenIds must be a subset of agent.allowedHumanOpenIds");
+  }
+  const knownRepositoryIds = new Set(repositories.map(({ id }) => id));
+  const teamHubRepositoryIds = uniqueStrings(raw.teamHub?.repositoryIds || [...knownRepositoryIds]);
+  if (teamHubRepositoryIds.length === 0 || teamHubRepositoryIds.some((id) => !knownRepositoryIds.has(id))) {
+    throw new TypeError("teamHub.repositoryIds must contain only configured repository ids");
+  }
 
   return {
     ...raw,
@@ -209,6 +218,8 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
     teamHub: {
       enabled: teamHubEnabled,
       path: teamHubPath,
+      writerOpenIds: teamHubWriterOpenIds,
+      repositoryIds: teamHubRepositoryIds,
       maxContextChars: positiveNumber(raw.teamHub?.maxContextChars, 24_000, {
         min: 1_000,
         max: 100_000,

@@ -22,6 +22,8 @@ import {
 import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
 import { inspectDesktopProject } from "./desktop-project-state.mjs";
 import { createExecutor } from "./executor-registry.mjs";
+import { buildKnowledgeArtifactMarkdown, buildKnowledgeListMarkdown, parseKnowledgeCommand } from "./knowledge-commands.mjs";
+import { KnowledgeHub } from "./knowledge-hub.mjs";
 import { runProcess } from "./process-runner.mjs";
 import { createRolloutCompletionWatcher } from "./rollout-completion.mjs";
 import { streamCodexInSingleMessage } from "./stream-progress.mjs";
@@ -65,6 +67,14 @@ await fs.rm(stopPath, { force: true });
 await fs.writeFile(pidPath, String(process.pid), "utf8");
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
 const teamTaskStore = await TeamTaskStore.open(teamTaskStorePath);
+const knowledgeHub = config.teamHub.enabled
+  ? new KnowledgeHub(config.teamHub.path, {
+      projectId: config.project.id,
+      agentId: config.agent.id,
+      repositoryIds: config.teamHub.repositoryIds,
+      maxContextChars: config.teamHub.maxContextChars,
+    })
+  : undefined;
 
 let completed = new Set();
 try {
@@ -401,8 +411,10 @@ async function askCodex(content, onProgress) {
     log(`completion watcher unavailable for ${activeThreadId}: ${safeError(error)}`);
   }
   let lastAgentMessage = "";
+  const sharedKnowledge = knowledgeHub ? await knowledgeHub.buildContext() : "";
   const prompt = [
     `[来自已验证的飞书消息；Project=${config.project.id}；branch=${scopedThread.worktree.branch || "detached"}]`,
+    ...(sharedKnowledge ? [sharedKnowledge, ""] : []),
     content.slice(0, config.maxInputChars),
     "",
     `请直接处理并回答这条消息。本轮运行沙箱为 ${effectiveSandbox}。只允许在当前 Project 的 worktree 内工作，不得切换 checkout 的分支。${effectiveSandbox === "read-only" ? "当前是受保护的默认分支，只能读取和分析；需要修改时请让用户用 /new --branch 创建任务 worktree。" : "当前任务分支允许按沙箱策略修改。"}`,
@@ -720,6 +732,52 @@ async function handleCommand(msg, content) {
     await replyCommand(msg, buildTeamTasksMarkdown(teamTaskStore.list()));
     return true;
   }
+  if (command === "/knowledge") {
+    if (!knowledgeHub) {
+      await replyCommand(msg, "Team Hub 尚未启用。请先配置 `teamHub.enabled=true` 与共享路径。");
+      return true;
+    }
+    const request = parseKnowledgeCommand(argument);
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    if (request.action === "list") {
+      await replyCommand(msg, buildKnowledgeListMarkdown(await knowledgeHub.list(), config));
+      return true;
+    }
+    if (request.action === "show") {
+      await replyCommand(msg, buildKnowledgeArtifactMarkdown(await knowledgeHub.get(request.category, request.id)));
+      return true;
+    }
+    if (!config.teamHub.writerOpenIds.includes(msg.senderId)) {
+      await replyCommand(msg, "该成员没有 Team Hub 写入权限；可继续使用 `/knowledge list|show` 只读查看。");
+      return true;
+    }
+    const metadata = request.action === "create"
+      ? await knowledgeHub.create({
+          category: request.category,
+          id: request.id,
+          title: request.title,
+          content: request.content,
+          authorHumanOpenId: msg.senderId,
+        })
+      : await knowledgeHub.update({
+          category: request.category,
+          id: request.id,
+          content: request.content,
+          expectedRevision: request.expectedRevision,
+          authorHumanOpenId: msg.senderId,
+        });
+    await replyCommand(msg, [
+      `已${request.action === "create" ? "创建" : "更新"}共享知识：\`${metadata.category}/${metadata.id}\`。`,
+      "",
+      `revision：\`${metadata.revision}\``,
+      "",
+      "后续 Codex 回合会在有界上下文中读取该条目；实时任务状态仍与 Team Hub 分离。",
+    ].join("\n"));
+    return true;
+  }
   if (command === "/delegate") {
     if (!config.collaboration.enabled) {
       await replyCommand(msg, "多 Bot 协作尚未启用。请先完成可信群、Bot 身份和 Project allowlist 配置。");
@@ -923,6 +981,7 @@ async function handleCommand(msg, content) {
       "- `/team-accept <taskId>`：审批并执行收到的任务",
       "- `/team-reject <taskId> <原因>`：拒绝收到的任务",
       "- `/team-approve <taskId> [说明]`：批准 peer 返回的结果",
+      "- `/knowledge [list|show|create|update]`：管理共享稳定知识、总结和参考资料",
       "- `/help`：显示帮助",
     ].join("\n"));
     return true;

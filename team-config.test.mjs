@@ -53,7 +53,12 @@ test("normalizes a Codex-first team config", () => {
       allowedWorktreeRoots: ["./bridge", "../worktrees/bridge"],
       allowedRemotes: ["origin"],
     },
-    teamHub: { enabled: true, path: "../team-agent-hub" },
+    teamHub: {
+      enabled: true,
+      path: "../team-agent-hub",
+      writerOpenIds: ["ou_owner"],
+      repositoryIds: ["bridge"],
+    },
   }, { configDir: "C:/config" });
 
   assert.equal(config.agent.id, "peiyuan-codex");
@@ -67,6 +72,8 @@ test("normalizes a Codex-first team config", () => {
   assert.equal(config.project.desktopProjectName, "Bridge Desktop");
   assert.equal(config.project.worktreeRoot, path.resolve("C:/config", "../worktrees/bridge"));
   assert.equal(config.teamHub.path, path.resolve("C:/config", "../team-agent-hub"));
+  assert.deepEqual(config.teamHub.writerOpenIds, ["ou_owner"]);
+  assert.deepEqual(config.teamHub.repositoryIds, ["bridge"]);
 });
 
 test("refuses collaboration without an explicit group", () => {
@@ -147,6 +154,19 @@ test("restricts task approvers and the default group to configured allowlists", 
       defaultGroupChatId: "oc_other",
     },
   }), /defaultGroupChatId/);
+});
+
+test("restricts Team Hub writers and repository scopes to configured identities", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    repositories: [{ id: "bridge", path: "./workspace" }],
+    teamHub: { enabled: true, path: "./hub", writerOpenIds: ["ou_unknown"] },
+  }), /writerOpenIds/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    repositories: [{ id: "bridge", path: "./workspace" }],
+    teamHub: { enabled: true, path: "./hub", repositoryIds: ["unknown"] },
+  }), /repositoryIds/);
 });
 
 test("refuses a worktree creation root outside the allowed Project roots", () => {

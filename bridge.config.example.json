@@ -56,7 +56,15 @@
     "eventTtlMs": 900000
   },
   "teamHub": {
-    "enabled": false
+    "enabled": false,
+    "path": "C:\\path\\to\\shared-team-hub",
+    "writerOpenIds": [
+      "ou_your_feishu_open_id"
+    ],
+    "repositoryIds": [
+      "cryouni-frontend"
+    ],
+    "maxContextChars": 24000
   },
   "nodeExecutable": "C:\\path\\to\\node.exe",
   "larkCliEntry": "C:\\path\\to\\node_modules\\@larksuite\\cli\\scripts\\run.js",
