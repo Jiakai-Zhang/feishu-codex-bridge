@@ -84,6 +84,18 @@ test("creates one task worktree per branch and reuses the registered path", asyn
   });
 });
 
+test("creates a task worktree at an exact fetched commit", async () => {
+  await withProject(async ({ context }) => {
+    const commit = (await context.git(["rev-parse", "HEAD"])).trim();
+    const worktree = await context.prepareWorktree("task/exact", { startPoint: commit });
+    assert.equal(worktree.head, commit);
+    await assert.rejects(
+      () => context.prepareWorktree("task/missing", { startPoint: "f".repeat(40) }),
+      /not available locally/,
+    );
+  });
+});
+
 test("refuses a writable task worktree for the protected default branch", async () => {
   await withProject(async ({ context }) => {
     await assert.rejects(() => context.prepareWorktree("main"), /protected default branch/);

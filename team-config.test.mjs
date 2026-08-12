@@ -10,9 +10,25 @@ const legacy = {
   workspace: "./workspace",
 };
 
+function collaboration(overrides = {}) {
+  return {
+    enabled: true,
+    groupChatId: "oc_team",
+    githubRepository: "Example/Bridge",
+    remote: "origin",
+    approverOpenIds: ["ou_owner"],
+    trustedPeers: [{
+      agentId: "alice-codex",
+      botOpenId: "ou_alicebot",
+      humanOpenId: "ou_alice",
+    }],
+    ...overrides,
+  };
+}
+
 test("normalizes legacy single-user config without enabling group access", () => {
   const config = normalizeBridgeConfig(legacy, { configDir: "C:/config" });
-  assert.equal(config.schemaVersion, 2);
+  assert.equal(config.schemaVersion, 3);
   assert.equal(config.agent.id, "local-codex");
   assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner"]);
   assert.equal(config.agent.executor.type, "codex");
@@ -22,29 +38,20 @@ test("normalizes legacy single-user config without enabling group access", () =>
   assert.equal(config.repositories[0].path, config.project.repoRoot);
 });
 
-test("normalizes a Codex-first team config", () => {
+test("normalizes a one-group, one-Project, one-GitHub-repository team config", () => {
   const config = normalizeBridgeConfig({
     ...legacy,
     agent: {
       id: "peiyuan-codex",
       ownerOpenId: "ou_owner",
       botOpenId: "ou_localbot",
-      allowedHumanOpenIds: ["ou_teammate", "ou_owner"],
+      allowedHumanOpenIds: ["ou_owner"],
       executor: { type: "codex" },
     },
-    collaboration: {
-      enabled: true,
-      groupChatIds: ["oc_team"],
-      approverOpenIds: ["ou_owner"],
-      trustedPeers: [{
-        agentId: "alice-codex",
-        botOpenId: "ou_alicebot",
-        allowedProjectIds: ["bridge"],
-      }],
-    },
+    collaboration: collaboration(),
     repositories: [{ id: "bridge", path: "./bridge", defaultBranch: "main" }],
     project: {
-      id: "bridge",
+      id: "bridge-local",
       name: "Bridge",
       desktopProjectId: "desktop-project-1",
       desktopProjectName: "Bridge Desktop",
@@ -62,55 +69,54 @@ test("normalizes a Codex-first team config", () => {
   }, { configDir: "C:/config" });
 
   assert.equal(config.agent.id, "peiyuan-codex");
-  assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner", "ou_teammate"]);
   assert.deepEqual(sdkGroupAllowlist(config), ["oc_team"]);
-  assert.deepEqual(config.collaboration.approverOpenIds, ["ou_owner"]);
-  assert.equal(config.collaboration.defaultGroupChatId, "oc_team");
-  assert.equal(config.collaboration.taskLeaseMs, 12 * 60 * 60_000);
-  assert.equal(config.collaboration.trustedPeers[0].allowedProjectIds[0], "bridge");
-  assert.equal(config.project.id, "bridge");
+  assert.equal(config.collaboration.groupChatId, "oc_team");
+  assert.equal(config.collaboration.githubRepository, "example/bridge");
+  assert.equal(config.collaboration.receiveMode, "recommend");
+  assert.equal(config.collaboration.groupHumanMessageMode, "owner");
+  assert.equal(config.collaboration.trustedPeers[0].humanOpenId, "ou_alice");
+  assert.equal(config.project.id, "bridge-local");
   assert.equal(config.project.desktopProjectId, "desktop-project-1");
-  assert.equal(config.project.desktopProjectName, "Bridge Desktop");
   assert.equal(config.project.worktreeRoot, path.resolve("C:/config", "../worktrees/bridge"));
   assert.equal(config.teamHub.path, path.resolve("C:/config", "../team-agent-hub"));
-  assert.deepEqual(config.teamHub.writerOpenIds, ["ou_owner"]);
-  assert.deepEqual(config.teamHub.repositoryIds, ["bridge"]);
 });
 
-test("refuses collaboration without an explicit group", () => {
+test("requires exactly one collaboration group and one GitHub repository", () => {
+  const base = { ...legacy, agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" } };
   assert.throws(() => normalizeBridgeConfig({
-    ...legacy,
-    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
-    collaboration: { enabled: true, groupChatIds: [] },
-  }), /groupChatIds/);
+    ...base,
+    collaboration: collaboration({ groupChatId: undefined }),
+  }), /groupChatId/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({ githubRepository: undefined }),
+  }), /githubRepository/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({ groupChatIds: ["oc_team", "oc_other"] }),
+  }), /exactly one/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({ githubRepository: "gitlab.example/org/repo" }),
+  }), /owner\/name/);
 });
 
-test("refuses duplicate peer bot identities", () => {
+test("requires unique peer Bot and human identities", () => {
+  const base = { ...legacy, agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" } };
   assert.throws(() => normalizeBridgeConfig({
-    ...legacy,
-    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
-    collaboration: {
-      enabled: true,
-      groupChatIds: ["oc_team"],
-      trustedPeers: [
-        { agentId: "alice", botOpenId: "ou_same", allowedProjectIds: ["local-codex"] },
-        { agentId: "bob", botOpenId: "ou_same", allowedProjectIds: ["local-codex"] },
-      ],
-    },
+    ...base,
+    collaboration: collaboration({ trustedPeers: [
+      { agentId: "alice", botOpenId: "ou_same", humanOpenId: "ou_alice" },
+      { agentId: "bob", botOpenId: "ou_same", humanOpenId: "ou_bob" },
+    ] }),
   }), /bot open_ids must be unique/);
-});
-
-test("requires an explicit Project allowlist for every enabled peer", () => {
   assert.throws(() => normalizeBridgeConfig({
-    ...legacy,
-    agent: { id: "local", ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
-    project: { id: "bridge", repoRoot: "./workspace" },
-    collaboration: {
-      enabled: true,
-      groupChatIds: ["oc_team"],
-      trustedPeers: [{ agentId: "alice", botOpenId: "ou_alice" }],
-    },
-  }), /allowedProjectIds/);
+    ...base,
+    collaboration: collaboration({ trustedPeers: [
+      { agentId: "alice", botOpenId: "ou_alice_bot", humanOpenId: "ou_same" },
+      { agentId: "bob", botOpenId: "ou_bob_bot", humanOpenId: "ou_same" },
+    ] }),
+  }), /human open_ids must be unique/);
 });
 
 test("refuses local identities in the trusted peer roster", () => {
@@ -118,46 +124,45 @@ test("refuses local identities in the trusted peer roster", () => {
     ...legacy,
     agent: { id: "local", ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
     project: { id: "bridge", repoRoot: "./workspace" },
-    collaboration: { enabled: true, groupChatIds: ["oc_team"] },
   };
   assert.throws(() => normalizeBridgeConfig({
     ...base,
-    collaboration: {
-      ...base.collaboration,
-      trustedPeers: [{ agentId: "local", botOpenId: "ou_peer", allowedProjectIds: ["bridge"] }],
-    },
+    collaboration: collaboration({
+      trustedPeers: [{ agentId: "local", botOpenId: "ou_peer", humanOpenId: "ou_peer_human" }],
+    }),
   }), /local agent id/);
   assert.throws(() => normalizeBridgeConfig({
     ...base,
-    collaboration: {
-      ...base.collaboration,
-      trustedPeers: [{ agentId: "alice", botOpenId: "ou_bot", allowedProjectIds: ["bridge"] }],
-    },
+    collaboration: collaboration({
+      trustedPeers: [{ agentId: "alice", botOpenId: "ou_bot", humanOpenId: "ou_alice" }],
+    }),
   }), /local bot open_id/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({
+      trustedPeers: [{ agentId: "alice", botOpenId: "ou_alice_bot", humanOpenId: "ou_owner" }],
+    }),
+  }), /local owner open_id/);
 });
 
-test("restricts task approvers and the default group to configured allowlists", () => {
+test("restricts receive and group-human routing modes", () => {
+  const base = { ...legacy, agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" } };
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({ receiveMode: "guess" }),
+  }), /receiveMode/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: collaboration({ groupHumanMessageMode: "everyone" }),
+  }), /groupHumanMessageMode/);
+});
+
+test("restricts approvers, Team Hub writers, and repository scopes", () => {
   assert.throws(() => normalizeBridgeConfig({
     ...legacy,
     agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
-    collaboration: {
-      enabled: true,
-      groupChatIds: ["oc_team"],
-      approverOpenIds: ["ou_unknown"],
-    },
+    collaboration: collaboration({ approverOpenIds: ["ou_unknown"] }),
   }), /subset/);
-  assert.throws(() => normalizeBridgeConfig({
-    ...legacy,
-    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
-    collaboration: {
-      enabled: true,
-      groupChatIds: ["oc_team"],
-      defaultGroupChatId: "oc_other",
-    },
-  }), /defaultGroupChatId/);
-});
-
-test("restricts Team Hub writers and repository scopes to configured identities", () => {
   assert.throws(() => normalizeBridgeConfig({
     ...legacy,
     repositories: [{ id: "bridge", path: "./workspace" }],
@@ -170,7 +175,7 @@ test("restricts Team Hub writers and repository scopes to configured identities"
   }), /repositoryIds/);
 });
 
-test("refuses a worktree creation root outside the allowed Project roots", () => {
+test("refuses a worktree root or collaboration remote outside Project allowlists", () => {
   assert.throws(() => normalizeBridgeConfig({
     ...legacy,
     project: {
@@ -180,4 +185,10 @@ test("refuses a worktree creation root outside the allowed Project roots", () =>
       allowedWorktreeRoots: ["./bridge"],
     },
   }, { configDir: "C:/config" }), /worktreeRoot must be inside/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    project: { allowedRemotes: ["origin"] },
+    collaboration: collaboration({ remote: "upstream" }),
+  }), /collaboration.remote/);
 });

@@ -14,13 +14,13 @@ export function classifyInboundMessage(msg, config, localBotOpenId = config.agen
     return { kind: "ignore", reason: "unsupported_chat" };
   }
   if (!config.collaboration.enabled) return { kind: "ignore", reason: "collaboration_disabled" };
-  if (!config.collaboration.groupChatIds.includes(msg.chatId)) {
+  if (config.collaboration.groupChatId !== msg.chatId) {
     return { kind: "ignore", reason: "untrusted_group" };
   }
   if (msg.mentionAll) return { kind: "ignore", reason: "mention_all" };
-  if (!msg.mentionedBot) return { kind: "ignore", reason: "not_mentioned" };
 
   if (senderIsBot) {
+    if (!msg.mentionedBot) return { kind: "ignore", reason: "not_mentioned" };
     if (localBotOpenId && msg.senderId === localBotOpenId) {
       return { kind: "ignore", reason: "self_message" };
     }
@@ -28,14 +28,15 @@ export function classifyInboundMessage(msg, config, localBotOpenId = config.agen
       (candidate) => candidate.enabled && candidate.botOpenId === msg.senderId,
     );
     if (!peer) return { kind: "ignore", reason: "untrusted_peer" };
-    if (!peer.allowedProjectIds.includes(config.project.id)) {
-      return { kind: "ignore", reason: "peer_project_denied", peer };
-    }
     return { kind: "peer", scope: "group", peer };
   }
 
   if (!config.agent.allowedHumanOpenIds.includes(msg.senderId)) {
     return { kind: "ignore", reason: "untrusted_human" };
   }
-  return { kind: "human", scope: "group" };
+  if (msg.mentionedBot) return { kind: "human", scope: "group", addressedBy: "mention" };
+  if (config.collaboration.groupHumanMessageMode === "owner" && msg.senderId === config.agent.ownerOpenId) {
+    return { kind: "human", scope: "group", addressedBy: "owner-message" };
+  }
+  return { kind: "ignore", reason: "not_mentioned" };
 }

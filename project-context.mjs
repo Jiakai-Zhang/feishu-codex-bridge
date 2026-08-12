@@ -158,11 +158,19 @@ export class ProjectContext {
       : configuredSandbox;
   }
 
-  async prepareWorktree(branch) {
+  async prepareWorktree(branch, { startPoint } = {}) {
     const requestedBranch = String(branch || "").trim();
     if (!requestedBranch) throw new TypeError("A branch name is required");
     try { await this.git(["check-ref-format", "--branch", requestedBranch]); }
     catch { throw new TypeError(`Invalid branch name: ${requestedBranch}`); }
+    const requestedStartPoint = startPoint ? String(startPoint).trim().toLowerCase() : undefined;
+    if (requestedStartPoint && !/^[0-9a-f]{40}$/.test(requestedStartPoint)) {
+      throw new TypeError("Worktree startPoint must be a full Git commit SHA");
+    }
+    if (requestedStartPoint) {
+      try { await this.git(["cat-file", "-e", `${requestedStartPoint}^{commit}`]); }
+      catch { throw new Error(`Worktree startPoint is not available locally: ${requestedStartPoint}`); }
+    }
     if (this.project.protectDefaultBranch && requestedBranch === this.project.defaultBranch) {
       throw new Error(`The protected default branch ${requestedBranch} cannot be prepared as a writable task worktree`);
     }
@@ -212,7 +220,7 @@ export class ProjectContext {
       const localDefault = snapshot.branches.some(
         ({ kind, name }) => kind === "local" && name === this.project.defaultBranch,
       ) ? this.project.defaultBranch : undefined;
-      const baseRef = remoteCandidate?.name || defaultRemoteRef || localDefault;
+      const baseRef = requestedStartPoint || remoteCandidate?.name || defaultRemoteRef || localDefault;
       if (!baseRef) throw new Error(`No allowed base ref was found for ${requestedBranch}`);
       await this.git(["worktree", "add", "-b", requestedBranch, target, baseRef]);
     }

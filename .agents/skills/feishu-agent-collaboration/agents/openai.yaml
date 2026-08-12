@@ -1,0 +1,6 @@
+interface:
+  display_name: "Feishu Agent Collaboration"
+  short_description: "Delegate Git-backed work to a trusted teammate Agent"
+  default_prompt: "Use $feishu-agent-collaboration to hand this work to a trusted teammate Agent."
+policy:
+  allow_implicit_invocation: true

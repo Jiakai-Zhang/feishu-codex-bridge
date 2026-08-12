@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "appId": "cli_your_feishu_app_id",
   "threadId": "",
   "workspace": "C:\\path\\to\\bridge-runtime-root",
@@ -34,10 +34,11 @@
   },
   "collaboration": {
     "enabled": false,
-    "groupChatIds": [
-      "oc_your_team_group_chat_id"
-    ],
-    "defaultGroupChatId": "oc_your_team_group_chat_id",
+    "groupChatId": "oc_your_team_group_chat_id",
+    "githubRepository": "your-github-org/your-shared-repository",
+    "remote": "origin",
+    "groupHumanMessageMode": "owner",
+    "receiveMode": "recommend",
     "approverOpenIds": [
       "ou_your_feishu_open_id"
     ],
@@ -45,13 +46,12 @@
       {
         "agentId": "teammate-codex",
         "displayName": "Teammate Codex",
+        "humanOpenId": "ou_teammate_human_open_id",
+        "humanDisplayName": "Teammate",
         "botOpenId": "ou_teammate_bot_open_id",
-        "allowedProjectIds": [
-          "cryouni-frontend"
-        ]
+        "enabled": true
       }
     ],
-    "autoAcceptPeerTasks": false,
     "maxHops": 2,
     "eventTtlMs": 900000,
     "taskLeaseMs": 43200000

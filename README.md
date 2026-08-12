@@ -1,33 +1,76 @@
 # Feishu ↔ Codex Project Bridge
 
-这个本地桥接不使用 OpenAI API Key。它复用当前电脑上的 ChatGPT 登录态，通过 Codex CLI 继续本机 Codex 任务，再由飞书 Channel SDK 接收消息和回传结果。
+这个 Windows 本地桥接不使用 OpenAI API Key。它复用当前电脑的 ChatGPT/Codex 登录态，通过飞书 Channel SDK 把成员消息送入本机 Codex，并把结果发回飞书。
 
-当前版本把一个飞书机器人定义为一个 **Project Agent**：
+## 协作模型
+
+每位成员运行自己的飞书应用 Bot、Bridge 和 Codex；一个协作群严格绑定一个共同 GitHub 仓库，而每位成员只能把该群绑定到自己机器上的一个 Bridge Project：
 
 ```text
-1 个飞书机器人
-└─ 1 个受控 Codex Project
-   ├─ 1 个 Git 仓库
-   ├─ 多个独立 Git worktree / branch
-   └─ 每个 worktree 下多个 Codex 任务（thread）
+1 个飞书协作群
+├─ 1 个规范化 GitHub 仓库（所有成员必须相同）
+├─ 成员 A + Bot A + 本机 Bridge Project A
+│  ├─ 多个 Git worktree / branch
+│  └─ 每个 worktree 下多个 Codex 任务（对话）
+└─ 成员 B + Bot B + 本机 Bridge Project B
+   ├─ 多个 Git worktree / branch
+   └─ 每个 worktree 下多个 Codex 任务（对话）
 ```
 
-当前执行后端是 Codex。配置保留 `agent.executor.type` 边界，后续可以增加其他 Agent 执行器，但 Project、Git 和飞书权限策略不依赖具体模型后端。
+本机 `project.id`、绝对路径和 Codex task ID 可以不同，也不会作为跨机器身份。跨 Agent 授权只认同一个飞书群、规范化 GitHub `owner/repository`、受信成员/Bot 身份和经过验证的 Git 提交。
 
-这里的 **Bridge Project** 与 Codex Desktop 侧边栏里的 **Desktop Project** 是两个对象：前者负责仓库、worktree、分支和写入权限边界，后者只负责 Desktop 中的目录与任务分组。Bridge 可以验证本机 Desktop 是否已注册同一仓库，但当前 Codex 独立 App Server 的 `thread/start` 没有 `projectId` 参数，所以 `/new` 创建的任务不会自动进入 Desktop Project 分组；任务仍会按真实 `cwd` 写入本机 Codex 状态并受 Bridge Project 校验。
+若要协作另一个 Project 或仓库，请创建另一个群，或先显式停用并重新绑定；同一 Bridge Project 不能同时加入多个协作群。
 
-## Project 安全边界
+当前 executor 是 Codex。`agent.executor.type` 保留了以后接入其他 Agent 的边界，但任何 executor 都必须继续遵守 Project、Git、飞书身份和审批策略。
 
-- `/threads` 只显示 `cwd` 位于当前 Project 已注册 Git worktree 内、且任务记录分支与 worktree 当前分支一致的 Codex 任务。
-- `/use` 会再次验证目标任务的 `cwd`、真实路径和分支绑定；不能切换到本机其他项目或已被外部切换分支的旧任务。
-- 切换 Codex 任务不会执行 `git checkout`，也不会改变任何 worktree 的分支。
-- `/new` 在当前 worktree 创建任务；没有当前任务时使用默认分支所在 worktree。
-- `/new --branch <branch>` 创建或复用该分支的独立 worktree，再在其中创建 Codex 任务。
-- `project.defaultBranch` 在 `protectDefaultBranch=true` 时强制使用 `read-only` 沙箱；要修改代码必须进入任务分支 worktree。
-- 普通任务分支使用 `sandboxMode`。新安装建议使用 `workspace-write`；`danger-full-access` 仅适合明确需要访问 Project 外资源的受信环境。
-- bridge 内的写入型消息目前全局串行，因此自然满足“同一 worktree 同时最多一个 bridge 回合”，但这不能阻止用户从桌面端另行并发启动同一目录的任务。
-- bridge 不自动 force push、reset、clean、merge 或删除 worktree；`/branches` 也不会自动 fetch。
-- 递归删除、覆盖重要数据、重置凭据或权限、强制推送、清空数据库等难以恢复的操作仍需再次确认。
+## 群里的自然语言如何到达 Agent
+
+`collaboration.groupHumanMessageMode` 有两种模式：
+
+- `owner`（推荐）：群里 owner 的普通文本即使没有 @Bot，也会进入 owner 自己的 Agent。Agent 根据自然语言和当前对话判断它是讨论、本地指令还是协作请求。
+- `mention`：只有真实 @本 Bot 的群消息才进入 Agent。
+
+其他成员未 @ 时不会调用这个 Bot；每个成员的 Bridge 都只把自己 owner 的普通消息送给自己的 Agent。`@所有人` 不触发。peer Bot 发出的协议事件必须真实 @本 Bot，并以飞书事件中的 Bot open_id 通过 `trustedPeers` 校验。
+
+`owner` 模式要求飞书应用能够接收群内普通消息，而不只是“群内 @Bot 消息”。Bot-to-Bot 还需开启 Channel SDK 文档所述的 `im:message.group_at_msg` / `include_bot` 能力；权限不足时平台可能静默不投递。
+
+## 自然语言协作流程
+
+仓库根目录跟踪 Project 级 Skill：
+
+```text
+.agents/skills/feishu-agent-collaboration/
+├─ SKILL.md
+├─ agents/openai.yaml
+└─ scripts/delegate.mjs
+```
+
+Codex 会从仓库范围加载它。不要把这项能力装成用户全局 Skill，也不要放进单数 `.agent/`；否则其他 Project 可能误用这个群绑定。
+
+当用户在自己的 Agent 对话里说“把这部分交给 Alice 的 Agent 继续”“让 Bob 审查并把结果接回当前对话”时：
+
+1. Agent 判断请求确实需要协作，并按 Skill 检查当前 branch 与 `git status`。
+2. 只有用户已授权交接且改动范围明确时，Agent才创建聚焦提交；工作树仍脏时拒绝伪装成已 Git 同步。
+3. Skill 将请求写入本机 Bridge 的持久收件箱。机器绑定保存在 Git common dir 的 `feishu-codex-bridge/collaboration.json`，所有 worktree 可见，但不进入 Git 提交。
+4. Bridge 再次验证本机 Agent/Project、群、GitHub 仓库、remote、cwd、branch、完整 SHA、TTL 和 peer；随后使用非 force push 发布精确提交。
+5. Bridge 在绑定群里同时 @对方成员和对方 Bot。人类可见消息包含任务摘要与 `branch@commit`，另有经过身份验证的机器事件供 Bot 消费。
+6. 接收端只 fetch 指定 remote/branch，并要求 `FETCH_HEAD` 与事件中的完整 SHA 相同。已有干净分支只允许 fast-forward；脏工作树或分叉直接进入 blocked。
+7. 接收端按 `manual`、`recommend` 或 `auto` 选择：继续已有对话、在已有 worktree 新建对话，或创建该分支 worktree 与新对话。
+8. 执行 Agent 完成验证并提交聚焦改动。Bridge 要求 worktree 干净，再以非 force push 发布结果提交；协议只返回摘要和 Git，不返回对方本机路径/Project/task ID。
+9. `resultMode=notify` 只通知请求方；`resultMode=resume` 会先安全 fast-forward 请求方的干净 worktree，再把结果送回原 Codex 对话继续判断。
+
+默认使用 `receiveMode=recommend`、`resultMode=notify`。只有用户明确希望对方完全接管时才用 `auto`；只有明确希望原对话自动续接结果时才用 `resume`。
+
+## 创建协作群
+
+1. 每位成员创建一个专用于该 Codex 的飞书自建应用，启用 Bot 与长连接事件接收，并分别用 DPAPI 安全启动器保存 App Secret。
+2. 创建一个飞书群，把所有协作成员及其 Bot 加入同一个群。
+3. 获取群 `chat_id`、每个人类成员的 `open_id` 和每个 Bot 的 `open_id`。
+4. 每位成员把同一个 `groupChatId` 和同一个 `githubRepository` 写入自己的本地 `bridge.config.json`；`project.*` 指向各自本机的 checkout/worktree 根。
+5. 先保持 `collaboration.enabled=false`，运行配置测试并核对 remote；确认每个 Bot 的成员/Bot 对以后再启用并重启 Bridge。
+6. 在群内分别测试 owner 普通消息、owner @Bot、Bot-to-Bot @ 和 `/peer ping owner/repository`。
+
+不要把 App Secret、GitHub token 或 DPAPI 密文复制到群、Skill、配置示例或仓库。真实 `bridge.config.json`、`.agent/` 与运行收件箱均被 `.gitignore` 排除。
 
 ## 安装与配置
 
@@ -38,65 +81,76 @@ npm install
 Copy-Item .\bridge.config.example.json .\bridge.config.json
 ```
 
-核心配置示例：
+协作配置核心示例：
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "appId": "cli_xxx",
-  "threadId": "",
   "workspace": "C:\\CodexBridgeRuntime",
   "agent": {
-    "id": "cryouni-frontend-codex",
-    "ownerOpenId": "ou_human",
-    "botOpenId": "ou_bot",
-    "allowedHumanOpenIds": ["ou_human"],
+    "id": "alice-codex",
+    "displayName": "Alice Codex",
+    "ownerOpenId": "ou_alice",
+    "botOpenId": "ou_alice_bot",
+    "allowedHumanOpenIds": ["ou_alice"],
     "executor": { "type": "codex" }
   },
   "project": {
-    "id": "cryouni-frontend",
-    "name": "CryoUNI Frontend",
-    "desktopProjectId": "paste-the-id-reported-by-codex-desktop",
-    "desktopProjectName": "CryoUNI Frontend",
-    "repoRoot": "G:\\Projects\\CryoUNI\\frontend",
-    "worktreeRoot": "G:\\Worktrees\\cryouni-frontend",
+    "id": "alice-local-project",
+    "name": "Shared Repository",
+    "repoRoot": "G:\\Projects\\shared-repository",
+    "worktreeRoot": "G:\\Worktrees\\shared-repository",
     "allowedWorktreeRoots": [
-      "G:\\Projects\\CryoUNI\\frontend",
-      "G:\\Worktrees\\cryouni-frontend"
+      "G:\\Projects\\shared-repository",
+      "G:\\Worktrees\\shared-repository"
     ],
     "defaultBranch": "main",
     "protectDefaultBranch": true,
     "allowedRemotes": ["origin"]
   },
+  "collaboration": {
+    "enabled": true,
+    "groupChatId": "oc_shared_group",
+    "githubRepository": "example/shared-repository",
+    "remote": "origin",
+    "groupHumanMessageMode": "owner",
+    "receiveMode": "recommend",
+    "approverOpenIds": ["ou_alice"],
+    "trustedPeers": [
+      {
+        "agentId": "bob-codex",
+        "displayName": "Bob Codex",
+        "humanOpenId": "ou_bob",
+        "humanDisplayName": "Bob",
+        "botOpenId": "ou_bob_bot",
+        "enabled": true
+      }
+    ],
+    "maxHops": 2,
+    "eventTtlMs": 900000,
+    "taskLeaseMs": 43200000
+  },
   "sandboxMode": "workspace-write"
 }
 ```
 
-字段含义：
+关键字段：
 
-- `workspace`：bridge 日志、去重记录和临时文件的本机运行根目录，不等于代码仓库。
-- `project.repoRoot`：必须是 `git rev-parse --show-toplevel` 返回的仓库根目录。
-- `project.worktreeRoot`：bridge 新建任务 worktree 的父目录。
-- `project.allowedWorktreeRoots`：允许桥接访问的 worktree 路径边界；必须包含 `repoRoot` 和 `worktreeRoot`。
-- `project.allowedRemotes`：允许用作新分支基线和显示远端 refs 的远端名称。
-- `project.desktopProjectId`：可选；Codex Desktop 为已注册目录生成的 Project ID。配置后 `/project` 会读取 `~/.codex/.codex-global-state.json`，只读验证 ID 与 `repoRoot` 是否匹配。
-- `project.desktopProjectName`：可选；Desktop 侧显示名称，仅用于状态回退，真实名称优先从本机 Desktop 状态读取。
-- `threadId`：可留空。若填写或从旧选择文件迁移，启动时仍会校验该任务是否属于 Project；不属于时会改选最近的 Project 任务或等待 `/new`。
-- `collaboration.enabled`：是否开放配置群中的多 Bot 路由。新安装应先保持 `false`，完成 Bot open_id、群 chat_id 和 Project allowlist 核对后再开启。
-- `collaboration.groupChatIds`：可信协作群的精确 `chat_id` allowlist。群消息还必须真实提及本 Bot，`@所有人` 不会触发。
-- `collaboration.trustedPeers`：可信 peer Bot 清单。每个启用的 peer 都必须配置唯一的 `agentId`、`botOpenId` 和非空 `allowedProjectIds`；peer 未获当前 `project.id` 授权时会被拒绝。
-- `collaboration.defaultGroupChatId`：本 Bot 主动委派和回传 Agent 事件使用的群，必须同时位于 `groupChatIds`。
-- `collaboration.approverOpenIds`：可以接单、拒绝和审批结果的人类成员；必须是 `agent.allowedHumanOpenIds` 的子集，默认只有 owner。
-- `collaboration.autoAcceptPeerTasks`：是否跳过人工接单。建议保持 `false`；开启后仍会执行身份、Project、TTL、hop 和去重校验。
-- `collaboration.taskLeaseMs`：协作任务占用 Project 分支的持久租约时长，默认 12 小时、最大 24 小时；进程异常退出后租约会在到期时自动失效。
-- `teamHub.path`：共享知识根目录，可位于共享文件系统或专用 Git 仓库 checkout；Bridge 只管理其 `projects/<project.id>/` 命名空间，不自动 commit、pull 或 push。
-- `teamHub.writerOpenIds`：可创建和更新知识条目的人类成员，必须是 `agent.allowedHumanOpenIds` 的子集；其他可信成员只读。
-- `teamHub.repositoryIds`：该 Project 知识关联的一个或多个已配置 repository ID，条目和 Codex 上下文都会保留此范围。
-- `teamHub.maxContextChars`：每轮注入 Codex 的 Team Hub 上下文上限，默认 24000 字符。
+- `workspace`：日志、去重、发件箱和临时文件的本机运行根；不是代码仓库。
+- `project.repoRoot`：必须等于 `git rev-parse --show-toplevel`。
+- `project.worktreeRoot`：新任务 worktree 的父目录。
+- `project.allowedWorktreeRoots`：允许访问的 worktree 路径边界；包含 `repoRoot` 和 `worktreeRoot`。
+- `project.allowedRemotes`：Project 允许的 Git remote；`collaboration.remote` 必须是其成员。
+- `project.desktopProjectId`：可选，只读核对 Codex Desktop 的侧边栏分组。Bridge Project 才是执行/安全边界。
+- `collaboration.groupChatId`：唯一绑定群。启用时必填，不能配置第二个群。
+- `collaboration.githubRepository`：唯一共享 GitHub `owner/repository`；HTTPS/SSH remote 都会规范化后比较。
+- `collaboration.trustedPeers`：每个 peer 必须有唯一的 `agentId`、`humanOpenId` 和 `botOpenId`。
+- `collaboration.receiveMode`：本机最高自动化级别。发送方不能强迫接收方比本机策略更自动；`manual > recommend > auto` 取更严格者。
+- `collaboration.approverOpenIds`：可选择落点、接单、拒绝和审批结果的人类；必须是 `agent.allowedHumanOpenIds` 的子集。
+- `collaboration.taskLeaseMs`：本机 `(project.id, branch)` 协作租约，防止 Bridge 同时执行同一分支。
 
-真实 `bridge.config.json` 已被 `.gitignore` 排除。
-
-随后运行 `setup-channel-secret.ps1`，隐藏输入 App Secret。脚本使用 Windows DPAPI 加密保存；明文不会写入配置、日志或仓库，启动器只在内存中解密并传给 Channel SDK 子进程。
+随后运行 `setup-channel-secret.ps1` 隐藏输入 App Secret。脚本使用 Windows DPAPI 加密保存；明文不会写入配置、日志或仓库，启动器只在内存中解密并传给子进程。
 
 ## 启动与停止
 
@@ -106,7 +160,7 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 & .\stop-bridge.ps1
 ```
 
-运行日志、投递发件箱和去重状态位于 `<workspace>\work\feishu-codex-bridge`。
+运行状态位于 `<workspace>\work\feishu-codex-bridge`。启动时 Bridge 会核对真实 Git remote；启用协作但 remote 不是绑定 GitHub 仓库时 fail closed。
 
 ## 飞书命令
 
@@ -117,139 +171,76 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /threads
 /threads branch task/LOGIN-123
 /use 2
-/current
-/new 修复登录问题
 /new --branch task/LOGIN-123 修复登录问题
+/current
 /status
 /model
 /capacity
 /team
 /team-tasks
-/delegate teammate-codex task/LOGIN-123 修复登录问题并运行测试
-/team-accept task:om_xxx
-/team-reject task:om_xxx 超出当前 Project 范围
-/team-approve task:om_xxx 已审阅
+/delegate bob-codex task/LOGIN-123 修复登录问题并运行测试
+/team-options task:...
+/team-accept task:... auto
+/team-accept task:... thread:<本机Codex任务ID>
+/team-accept task:... new-thread
+/team-accept task:... new-worktree
+/team-reject task:... 超出范围
+/team-approve task:... 已审阅
 /knowledge list
-/knowledge show knowledge/project-boundary
-/knowledge create summaries/milestone-1 第一阶段已完成，测试 61/61
-/knowledge update summaries/milestone-1 <完整revision> 更新后的总结
 /audit 20
 /metrics
 /help
 ```
 
-### Project 与 Git
+自然语言 + Project Skill 是主要协作入口；`/delegate` 是显式备用入口，而且要求命令分支与当前选中的 Codex 任务分支一致、worktree 干净并可安全推送。
 
-- `/project`：分别显示 Bridge Project 的执行边界和 Codex Desktop Project 的只读注册状态，避免把二者混为一个对象。
-- `/branches`：列出本地分支与允许远端中的本地 refs 快照，并标出哪个分支已有 worktree。该命令不联网、不 fetch。
-- `/worktrees`：列出允许范围内的 Git worktree、HEAD、分支和其中的 Codex 任务数；范围外 worktree 只显示数量，不允许访问。
+- `/team-options`：列出当前机器上该分支可继续的对话、已有 worktree 新对话和新 worktree 选项。
+- `/team-accept ... auto`：使用当前推荐；`thread:<id>` 只接受本机 Project 中同一分支的任务。
+- `/team-tasks`：显示方向、requester/executor、仓库、分支、提交和状态，不显示完整提示词。
+- `/peer ping <owner/repository> [requestId]`、`/peer status ...`：无模型、无写入的仓库绑定控制面。
+- `/team-approve`：将“执行完成”和“请求方确认”分开。
 
-### Codex 任务
+## Project 与 Git 安全边界
 
-- `/threads`：只列出当前 Project 最近 20 个任务。
-- `/threads branch <branch>`：按 worktree 当前真实分支过滤，而不是只信任任务数据库里可能过期的 `git_branch` 字段。
-- `/use 2`：切换到最近一次 `/threads` 返回列表中的第 2 项；列表缓存 30 分钟。完整任务 ID 同样必须通过 Project 校验。
-- `/new <主题>`：通过 Codex App Server 在当前 worktree 中创建并命名空白任务，不启动模型回合、不消耗 token；若当前是受保护默认分支，新任务只能读和分析。
-- 当前 Desktop 版本不会自动把独立 App Server 创建的任务归入 Desktop Project；`/new` 的回复会明确提示这一点。这不影响 `/threads`、`/use` 或 cwd/worktree 安全校验。
-- `/new --branch <branch> <主题>`：若分支已有允许范围内 worktree，则复用；否则在 `worktreeRoot` 下创建新 worktree。新本地分支优先基于同名允许远端分支，其次基于 `<allowedRemote>/<defaultBranch>`，最后基于本地默认分支。
-- `/current`：显示当前任务、Project、worktree、分支、实际沙箱、模型与容量摘要。
+- `/threads` 和 `/use` 验证任务 cwd、真实路径、注册 worktree 与记录分支；不能跳到本机其他 Project。
+- 切换 Codex 任务不会执行 `git checkout`。
+- `/new --branch` 一条可写分支对应一个独立 worktree；受保护默认分支强制 `read-only`。
+- 协作发出前要求完整 SHA 和干净 worktree。Bridge 不会替 Agent提交脏改动。
+- push 永不使用 `--force`；接收端只接受精确 fetch 和 fast-forward。分叉、脏工作树、范围外 worktree、锁定/游离 HEAD、错误 remote 或默认分支写入均阻塞。
+- 协议不传递本机绝对路径、远端 Project ID 或远端 Codex task ID。
+- 递归删除、重置、clean、force push、覆盖重要数据、修改凭据/权限等难以恢复的操作不属于自动协作合同。
 
-### 本地状态查询
+Bridge Project 与 Codex Desktop Project 是两个对象：前者负责执行和安全，后者只负责 Desktop 目录/任务分组。当前独立 Codex App Server 的 `thread/start` 不接受 `projectId`，所以 `/new` 不会自动进入 Desktop Project 分组，但仍按真实 cwd 保存在本机并受 Bridge Project 校验。
 
-- `/status`：查看 Channel 连接、Project、当前分支、实际沙箱、运行阶段、队列和待补发结果。
-- `/model`：读取本机 Codex 状态数据库中的模型、推理强度、提供方和 CLI 版本。
-- `/capacity`（别名 `/quota`）：读取当前任务 rollout 中最新的 token 与账户周期快照。
-- `/team`：显示本地 Agent/Bot、可信群、可调用成员、peer Bot 及其 Project allowlist；不会调用 Codex。
-- `/team-tasks`：列出最近的 Agent 协作任务、方向、requester、executor、分支和状态，不展示完整任务提示词。
-- `/delegate <peer> <branch> <任务>`：由当前成员作为请求方，通过默认协作群向可信 peer 发送任务。
-- `/team-accept <taskId>`：仅审批者可用；在任务指定分支的独立 worktree 创建 Codex 任务并执行。
-- `/team-reject <taskId> <原因>`：仅审批者可用；持久化拒绝状态并通知请求 Agent。
-- `/team-approve <taskId> [说明]`：请求该任务的成员或审批者确认 peer 返回的结果。
-- `/knowledge list`：列出稳定知识、阶段总结和参考资料及其 revision。
-- `/knowledge show <category>/<id>`：读取条目正文与完整 revision；category 为 `knowledge`、`summaries` 或 `references`。
-- `/knowledge create <category>/<id> <Markdown>`：由 Team Hub writer 创建条目。
-- `/knowledge update <category>/<id> <完整revision> <Markdown>`：以乐观锁更新；revision 已变化时拒绝覆盖。
-- `/audit [1-100]`：显示最近的安全和协作事件、actor、任务 ID、时间与哈希摘要，不显示提示词、结果、凭据或完整路径。
-- `/metrics`：显示等待队列、两个可靠投递发件箱、任务状态、知识条目、分支租约、审计 head 与 executor capabilities。
+## Agent 事件与可靠性
 
-这些查询不启动 Codex，不产生模型 token。
+Agent 协议 v2 包含事件/任务 ID、唯一群、规范化 GitHub 仓库、发送/接收 Agent、requester/executor、TTL、hop 和有界 payload：
 
-## 长任务与投递可靠性
+- `task.request`：标题、提示词、接收模式、结果模式和 `{remote, branch, commit}`。
+- `task.accepted` / `task.progress`：接收端本地落点类型和进度；不暴露 task ID/path。
+- `task.result`：摘要和结果 Git；没有远端 thread ID。
+- `task.blocked` / `task.rejected` / `task.approved`：阻塞、拒绝和请求方确认。
 
-- 普通消息使用飞书动态卡片展示 Codex 主动写给用户的公开过程说明，以及经过脱敏的活动事件；不会传输隐藏思维链、完整命令或敏感路径。
-- 前 8 分钟使用飞书原生流式卡片，之后更新同一条普通卡片；每 30 秒刷新耗时心跳。
-- bridge 增量读取本地 rollout。发现稳定完成后，即使 Windows 上的 `codex exec resume` 未退出，也会回收最终答案并结束残留辅助进程。
-- 最终答案在飞书投递前写入 `pending-deliveries.json`。网络失败会按指数退避补发，使用稳定幂等键，不会重新运行 Codex。
-- 最近 1000 条已完成飞书消息 ID 会持久化，避免重复执行。
-
-## 多 Bot 群路由
-
-启用 `collaboration.enabled` 后，每个成员仍由自己的 Bot 和本机 Codex 服务。Bridge 对群消息按以下顺序 fail closed：
-
-1. 群 `chat_id` 必须在 `groupChatIds` 中，并且消息真实提及当前 Bot；`@所有人` 不触发。
-2. 人类发送者必须位于当前 Bot 的 `agent.allowedHumanOpenIds` 中。这样同一个群里的不同成员只调用被分配给自己的 Bot。
-3. Bot 发送者必须以飞书事件中的真实 open_id 命中 `trustedPeers`，不能是本 Bot，也不能是未知或已禁用 Bot。
-4. peer 的 `allowedProjectIds` 必须包含当前 `project.id`，否则即使 Bot 身份可信也不能跨 Project 调用。
-5. SDK loop guard 会限制短时间内的 Bot 提及；Bridge 的控制面回复不包含 Bot mention，因此不会形成回复回声。
-
-`/peer ping <projectId> [requestId]` 与 `/peer status <projectId> [requestId]` 仍是无模型、无写入的控制面。真正的任务协作使用 `/agent-event <base64url-json>` wire 格式，普通 peer 文本永远不会进入 Codex。
-
-## Agent 任务协议
-
-每个 Agent 事件都包含 schema 版本、事件 ID、任务 ID、事件类型、`projectId`、发送/接收 Agent、requester、executor、创建/过期时间、hop 和有界 payload。Bridge 会先使用飞书事件的 Bot open_id 认证 peer，再验证事件声明；peer 不能通过修改 JSON 冒充其他 Agent、切换 Project 或改变任务所有权。
-
-支持的事件为：
-
-- `task.request`：requester 向 executor 发起任务，包含标题、提示词和分支。
-- `task.accepted` / `task.progress`：executor 报告接单与进度。
-- `task.result` / `task.blocked` / `task.rejected`：executor 返回结果、阻塞或拒绝。
-- `task.approved`：requester 在本地人类确认后批准结果。
-
-状态持久化在运行目录的 `team-tasks.json`，并按 `eventId` 去重。收到的任务默认进入 `pending`，只有 `approverOpenIds` 中的本地成员执行 `/team-accept` 后，Bridge 才会准备 Project 内的分支 worktree、创建独立 Codex 任务并运行。requester、executor 与本地审批者分别记录，状态转换不允许改变所有权。结果返回后仍需请求成员或审批者执行 `/team-approve`，从而区分“执行完成”和“结果获批”。
+`team-tasks.json` 持久化状态并按 `eventId` 去重。Bot-to-Bot 事件在发送前写入 `pending-agent-events.json`，失败后指数退避；Codex 最终回复先写入 `pending-deliveries.json`，网络失败不会重新运行 Codex。`audit.jsonl` 使用递增序号和 SHA-256 前向哈希链，记录 ID、分支、提交和错误码等元数据，不记录提示词正文、结果正文、凭据或完整路径。
 
 ## 共享 Team Hub
 
-Team Hub 把长期协作资料分成三个稳定类别：
-
-- `knowledge`：项目规则、架构决策、长期约定和已经验证的操作知识。
-- `summaries`：阶段总结、交接文档和里程碑结果。
-- `references`：API、论文、数据集、外部文档或仓库内参考资料的 Markdown 说明。
-
-条目物理结构为：
+可选 Team Hub 保存稳定知识，不保存实时任务状态：
 
 ```text
-<teamHub.path>/
-└─ projects/<project.id>/
-   ├─ knowledge/<id>.md + <id>.meta.json
-   ├─ summaries/<id>.md + <id>.meta.json
-   └─ references/<id>.md + <id>.meta.json
+<teamHub.path>/projects/<project.id>/
+├─ knowledge/<id>.md + <id>.meta.json
+├─ summaries/<id>.md + <id>.meta.json
+└─ references/<id>.md + <id>.meta.json
 ```
 
-每条 metadata 记录 Project、类别、ID、标题、关联 repository IDs、作者 Agent、人类 writer、时间和 SHA-256 revision。创建使用独占锁，更新必须提交读取到的完整 revision；并发或过期写入会返回冲突，不会静默覆盖。若有人直接在 Git checkout 中编辑 `.md`，`/knowledge show` 会计算实际 revision 并标记外部修改，下一次更新必须使用实际 revision。
+metadata 保存类别、ID、标题、repository IDs、作者、时间和 SHA-256 revision。更新使用乐观锁，外部或并发修改不会被静默覆盖。每个 Codex 回合在 `maxContextChars` 内按 `knowledge → summaries → references` 注入，并明确以当前仓库/运行态的可验证事实为准。Bridge 不自动为 Team Hub commit、pull 或 push。
 
-每个 Codex 回合会实时读取当前 Project 的 Team Hub，并在 `maxContextChars` 内按 `knowledge → summaries → references` 注入，明确标注“稳定知识不是实时状态；与当前仓库或运行态冲突时以可验证事实为准”。实时队列、运行中任务、审批状态和失败重试只保存在 Bridge 运行目录，绝不会自动写入稳定知识。
+## 测试
 
-多个 Agent 可以把 `teamHub.path` 指向同一共享目录，或分别指向同一个专用 Git 知识仓库的 checkout。Bridge 提供文件边界、并发锁和 revision 冲突保护，但不会擅自执行 Git 同步；团队仍可使用自己的 review/PR 流程共享这些 Markdown 文件。
+```powershell
+npm test
+node --check .\channel-bridge.mjs
+```
 
-## 审计、可靠投递与编排互斥
-
-Bridge 在运行目录维护 `audit.jsonl`。每条 JSONL 记录包含递增 sequence、时间、事件类型、actor、Project、可选任务 ID、前一条哈希和当前 SHA-256 哈希，从而形成追加式哈希链。启动时会从头验证 sequence 和链；任何历史行被修改、删除或重排都会使 Bridge 拒绝以“可信审计”状态启动。审计 details 受大小限制，代码只写入 ID、分支、事件类型、executor 类型和错误码等元数据，不写提示词、结果正文、App Secret 或完整命令。
-
-飞书用户回复与 Agent 事件分别使用两个持久发件箱：
-
-- `pending-deliveries.json`：Codex 最终回复，按原飞书 message ID 幂等补发。
-- `pending-agent-events.json`：Bot-to-Bot 任务事件，发送前持久化，按协议 `eventId` 幂等补发并使用有界指数退避。
-
-即使发送成功后的本地确认失败，接收方仍会以 `eventId` 去重，不会重复执行任务。`/status` 和 `/metrics` 会分别显示两个发件箱的积压。
-
-协作执行还会在 `task-leases.json` 中为 `(projectId, branch)` 获取持久租约。同一分支已有其他协作任务租约时，新任务会进入 `blocked`，不会并发运行另一个 Bridge 回合；正常完成、失败或拒绝后释放，崩溃遗留租约在 `taskLeaseMs` 后失效。这补充了单进程消息队列，但不声称能阻止用户从 Codex Desktop 或其他外部进程直接操作同一 worktree。
-
-## Executor 扩展合同
-
-Codex 仍是内置 executor。注册表允许后续安装其他 Agent adapter，但 adapter 必须同时提供 `createThread`、`runTurn`，并声明以下必需 capabilities：
-
-- `persistentThreads`：任务具有可恢复的持久线程身份。
-- `projectCwd`：线程创建和运行都接受并遵守 Bridge 已验证的 Project worktree cwd。
-- `progressUpdates`：运行过程可以通过稳定接口回传公开进度。
-
-可选的 `cancellation` 只有在 adapter 同时实现 `cancelTurn` 时才允许声明。缺失 capability、实现不完整或 executor 类型未安装都会在启动时 fail closed；因此未来 Agent 不能仅凭配置名称绕过 Project、审批、审计和任务协议边界。
+测试覆盖配置边界、群路由、协议身份、任务状态机、Skill 收件箱、精确 Git push/fetch/fast-forward、落点选择、审计链、可靠发件箱和 Project/worktree 校验。

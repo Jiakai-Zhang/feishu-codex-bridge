@@ -18,3 +18,5 @@ selected-thread.*.json
 team-tasks.json
 turn-*/
 new-thread-*/
+.agent/
+collaboration-inbox/

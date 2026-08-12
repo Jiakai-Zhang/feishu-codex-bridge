@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { canonicalGitHubRepository } from "./collaboration-request-inbox.mjs";
 
 const AGENT_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const OPEN_ID = /^ou_[A-Za-z0-9_-]+$/;
@@ -81,16 +82,15 @@ function normalizePeer(peer) {
   if (!AGENT_ID.test(agentId)) throw new TypeError(`Invalid peer agent id: ${agentId}`);
   const botOpenId = requiredString(peer?.botOpenId, `trusted peer ${agentId} botOpenId`);
   if (!OPEN_ID.test(botOpenId)) throw new TypeError(`Invalid peer bot open_id: ${botOpenId}`);
-  const allowedProjectIds = uniqueStrings(peer.allowedProjectIds || peer.allowedRepoIds);
-  for (const projectId of allowedProjectIds) {
-    if (!AGENT_ID.test(projectId)) throw new TypeError(`Invalid allowed project id for peer ${agentId}: ${projectId}`);
-  }
+  const humanOpenId = requiredString(peer?.humanOpenId, `trusted peer ${agentId} humanOpenId`);
+  if (!OPEN_ID.test(humanOpenId)) throw new TypeError(`Invalid peer human open_id: ${humanOpenId}`);
   return {
     agentId,
     botOpenId,
+    humanOpenId,
     displayName: String(peer.displayName || agentId).trim(),
+    humanDisplayName: String(peer.humanDisplayName || peer.displayName || agentId).trim(),
     enabled: peer.enabled !== false,
-    allowedProjectIds,
   };
 }
 
@@ -126,10 +126,18 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   }
 
   const collaborationEnabled = raw.collaboration?.enabled === true;
-  const groupChatIds = uniqueStrings(raw.collaboration?.groupChatIds);
+  const groupChatIds = uniqueStrings([
+    raw.collaboration?.groupChatId,
+    raw.collaboration?.defaultGroupChatId,
+    ...(raw.collaboration?.groupChatIds || []),
+  ]);
   for (const chatId of groupChatIds) {
     if (!CHAT_ID.test(chatId)) throw new TypeError(`Invalid collaboration group chat_id: ${chatId}`);
   }
+  if (groupChatIds.length > 1) {
+    throw new TypeError("Each Bridge Project can bind exactly one collaboration groupChatId");
+  }
+  const groupChatId = groupChatIds[0];
   const trustedPeers = (raw.collaboration?.trustedPeers || []).map(normalizePeer);
   if (new Set(trustedPeers.map(({ agentId }) => agentId)).size !== trustedPeers.length) {
     throw new TypeError("Trusted peer agent ids must be unique");
@@ -137,17 +145,17 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   if (new Set(trustedPeers.map(({ botOpenId }) => botOpenId)).size !== trustedPeers.length) {
     throw new TypeError("Trusted peer bot open_ids must be unique");
   }
+  if (new Set(trustedPeers.map(({ humanOpenId }) => humanOpenId)).size !== trustedPeers.length) {
+    throw new TypeError("Trusted peer human open_ids must be unique");
+  }
 
   const botOpenId = raw.agent?.botOpenId ? String(raw.agent.botOpenId).trim() : undefined;
   if (botOpenId && !OPEN_ID.test(botOpenId)) throw new TypeError(`Invalid agent bot open_id: ${botOpenId}`);
   if (collaborationEnabled && !botOpenId) {
     throw new TypeError("agent.botOpenId is required when collaboration is enabled");
   }
-  if (collaborationEnabled && groupChatIds.length === 0) {
-    throw new TypeError("At least one collaboration.groupChatIds entry is required when collaboration is enabled");
-  }
-  if (collaborationEnabled && trustedPeers.some((peer) => peer.enabled && peer.allowedProjectIds.length === 0)) {
-    throw new TypeError("Every enabled trusted peer must declare collaboration.trustedPeers[].allowedProjectIds");
+  if (collaborationEnabled && !groupChatId) {
+    throw new TypeError("collaboration.groupChatId is required when collaboration is enabled");
   }
   if (trustedPeers.some((peer) => peer.agentId === agentId)) {
     throw new TypeError("A trusted peer cannot reuse the local agent id");
@@ -155,17 +163,34 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   if (botOpenId && trustedPeers.some((peer) => peer.botOpenId === botOpenId)) {
     throw new TypeError("A trusted peer cannot reuse the local bot open_id");
   }
+  if (trustedPeers.some((peer) => peer.humanOpenId === ownerOpenId)) {
+    throw new TypeError("A trusted peer cannot reuse the local owner open_id");
+  }
   const approverOpenIds = uniqueStrings(raw.collaboration?.approverOpenIds || [ownerOpenId]);
   for (const openId of approverOpenIds) {
     if (!allowedHumanOpenIds.includes(openId)) {
       throw new TypeError("collaboration.approverOpenIds must be a subset of agent.allowedHumanOpenIds");
     }
   }
-  const defaultGroupChatId = raw.collaboration?.defaultGroupChatId
-    ? requiredString(raw.collaboration.defaultGroupChatId, "collaboration.defaultGroupChatId")
-    : groupChatIds[0];
-  if (defaultGroupChatId && !groupChatIds.includes(defaultGroupChatId)) {
-    throw new TypeError("collaboration.defaultGroupChatId must be listed in collaboration.groupChatIds");
+  const githubRepository = raw.collaboration?.githubRepository
+    ? canonicalGitHubRepository(raw.collaboration.githubRepository)
+    : undefined;
+  if (collaborationEnabled && !githubRepository) {
+    throw new TypeError("collaboration.githubRepository is required when collaboration is enabled");
+  }
+  const collaborationRemote = String(raw.collaboration?.remote || project.allowedRemotes[0] || "origin").trim();
+  if (!project.allowedRemotes.includes(collaborationRemote)) {
+    throw new TypeError("collaboration.remote must be listed in project.allowedRemotes");
+  }
+  const receiveMode = raw.collaboration?.autoAcceptPeerTasks === true
+    ? "auto"
+    : String(raw.collaboration?.receiveMode || "recommend").trim();
+  if (!new Set(["manual", "recommend", "auto"]).has(receiveMode)) {
+    throw new TypeError("collaboration.receiveMode must be manual, recommend, or auto");
+  }
+  const groupHumanMessageMode = String(raw.collaboration?.groupHumanMessageMode || "owner").trim();
+  if (!new Set(["mention", "owner"]).has(groupHumanMessageMode)) {
+    throw new TypeError("collaboration.groupHumanMessageMode must be mention or owner");
   }
 
   const teamHubEnabled = raw.teamHub?.enabled === true;
@@ -185,7 +210,7 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
 
   return {
     ...raw,
-    schemaVersion: 2,
+    schemaVersion: 3,
     appId: requiredString(raw.appId, "appId"),
     threadId: raw.threadId ? requiredString(raw.threadId, "threadId") : undefined,
     workspace,
@@ -203,11 +228,16 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
     project,
     collaboration: {
       enabled: collaborationEnabled,
-      groupChatIds,
-      defaultGroupChatId,
+      groupChatId,
+      groupChatIds: groupChatId ? [groupChatId] : [],
+      defaultGroupChatId: groupChatId,
+      githubRepository,
+      remote: collaborationRemote,
+      receiveMode,
+      groupHumanMessageMode,
       trustedPeers,
       approverOpenIds,
-      autoAcceptPeerTasks: raw.collaboration?.autoAcceptPeerTasks === true,
+      autoAcceptPeerTasks: receiveMode === "auto",
       maxHops: positiveNumber(raw.collaboration?.maxHops, 2, { min: 1, max: 8 }),
       eventTtlMs: positiveNumber(raw.collaboration?.eventTtlMs, 15 * 60_000, {
         min: 60_000,
@@ -239,6 +269,6 @@ export async function loadBridgeConfig(filePath) {
 
 export function sdkGroupAllowlist(config) {
   return config.collaboration.enabled
-    ? [...config.collaboration.groupChatIds]
+    ? [config.collaboration.groupChatId]
     : ["oc_collaboration_disabled"];
 }
