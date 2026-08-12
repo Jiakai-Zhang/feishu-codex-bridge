@@ -38,7 +38,7 @@ test("normalizes a Codex-first team config", () => {
       trustedPeers: [{
         agentId: "alice-codex",
         botOpenId: "ou_alicebot",
-        allowedRepoIds: ["bridge"],
+        allowedProjectIds: ["bridge"],
       }],
     },
     repositories: [{ id: "bridge", path: "./bridge", defaultBranch: "main" }],
@@ -58,7 +58,7 @@ test("normalizes a Codex-first team config", () => {
   assert.equal(config.agent.id, "peiyuan-codex");
   assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner", "ou_teammate"]);
   assert.deepEqual(sdkGroupAllowlist(config), ["oc_team"]);
-  assert.equal(config.collaboration.trustedPeers[0].allowedRepoIds[0], "bridge");
+  assert.equal(config.collaboration.trustedPeers[0].allowedProjectIds[0], "bridge");
   assert.equal(config.project.id, "bridge");
   assert.equal(config.project.desktopProjectId, "desktop-project-1");
   assert.equal(config.project.desktopProjectName, "Bridge Desktop");
@@ -82,11 +82,47 @@ test("refuses duplicate peer bot identities", () => {
       enabled: true,
       groupChatIds: ["oc_team"],
       trustedPeers: [
-        { agentId: "alice", botOpenId: "ou_same" },
-        { agentId: "bob", botOpenId: "ou_same" },
+        { agentId: "alice", botOpenId: "ou_same", allowedProjectIds: ["local-codex"] },
+        { agentId: "bob", botOpenId: "ou_same", allowedProjectIds: ["local-codex"] },
       ],
     },
   }), /bot open_ids must be unique/);
+});
+
+test("requires an explicit Project allowlist for every enabled peer", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { id: "local", ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    project: { id: "bridge", repoRoot: "./workspace" },
+    collaboration: {
+      enabled: true,
+      groupChatIds: ["oc_team"],
+      trustedPeers: [{ agentId: "alice", botOpenId: "ou_alice" }],
+    },
+  }), /allowedProjectIds/);
+});
+
+test("refuses local identities in the trusted peer roster", () => {
+  const base = {
+    ...legacy,
+    agent: { id: "local", ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    project: { id: "bridge", repoRoot: "./workspace" },
+    collaboration: { enabled: true, groupChatIds: ["oc_team"] },
+  };
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: {
+      ...base.collaboration,
+      trustedPeers: [{ agentId: "local", botOpenId: "ou_peer", allowedProjectIds: ["bridge"] }],
+    },
+  }), /local agent id/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...base,
+    collaboration: {
+      ...base.collaboration,
+      trustedPeers: [{ agentId: "alice", botOpenId: "ou_bot", allowedProjectIds: ["bridge"] }],
+    },
+  }), /local bot open_id/);
 });
 
 test("refuses a worktree creation root outside the allowed Project roots", () => {

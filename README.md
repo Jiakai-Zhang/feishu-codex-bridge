@@ -82,7 +82,10 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `project.desktopProjectId`：可选；Codex Desktop 为已注册目录生成的 Project ID。配置后 `/project` 会读取 `~/.codex/.codex-global-state.json`，只读验证 ID 与 `repoRoot` 是否匹配。
 - `project.desktopProjectName`：可选；Desktop 侧显示名称，仅用于状态回退，真实名称优先从本机 Desktop 状态读取。
 - `threadId`：可留空。若填写或从旧选择文件迁移，启动时仍会校验该任务是否属于 Project；不属于时会改选最近的 Project 任务或等待 `/new`。
-- `collaboration.enabled` 当前保持 `false`；多 Bot 群协作在 Project 边界稳定后接入。
+- `collaboration.enabled`：是否开放配置群中的多 Bot 路由。新安装应先保持 `false`，完成 Bot open_id、群 chat_id 和 Project allowlist 核对后再开启。
+- `collaboration.groupChatIds`：可信协作群的精确 `chat_id` allowlist。群消息还必须真实提及本 Bot，`@所有人` 不会触发。
+- `collaboration.trustedPeers`：可信 peer Bot 清单。每个启用的 peer 都必须配置唯一的 `agentId`、`botOpenId` 和非空 `allowedProjectIds`；peer 未获当前 `project.id` 授权时会被拒绝。
+- `collaboration.autoAcceptPeerTasks` 当前保持 `false`；步骤 3 只开放 `/peer ping|status` 控制面，普通 peer 文本绝不会进入 Codex。
 
 真实 `bridge.config.json` 已被 `.gitignore` 排除。
 
@@ -113,6 +116,7 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /status
 /model
 /capacity
+/team
 /help
 ```
 
@@ -137,6 +141,7 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `/status`：查看 Channel 连接、Project、当前分支、实际沙箱、运行阶段、队列和待补发结果。
 - `/model`：读取本机 Codex 状态数据库中的模型、推理强度、提供方和 CLI 版本。
 - `/capacity`（别名 `/quota`）：读取当前任务 rollout 中最新的 token 与账户周期快照。
+- `/team`：显示本地 Agent/Bot、可信群、可调用成员、peer Bot 及其 Project allowlist；不会调用 Codex。
 
 这些查询不启动 Codex，不产生模型 token。
 
@@ -148,6 +153,14 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - 最终答案在飞书投递前写入 `pending-deliveries.json`。网络失败会按指数退避补发，使用稳定幂等键，不会重新运行 Codex。
 - 最近 1000 条已完成飞书消息 ID 会持久化，避免重复执行。
 
-## 当前阶段
+## 多 Bot 群路由
 
-Project 边界和单 Bot 工作流是第一阶段。下一阶段才会启用飞书群内 Bot-to-Bot 协作，并要求每个协作事件同时携带可信 Bot 身份、`projectId`、任务分支/worktree、TTL、去重 ID 和人工接单状态。
+启用 `collaboration.enabled` 后，每个成员仍由自己的 Bot 和本机 Codex 服务。Bridge 对群消息按以下顺序 fail closed：
+
+1. 群 `chat_id` 必须在 `groupChatIds` 中，并且消息真实提及当前 Bot；`@所有人` 不触发。
+2. 人类发送者必须位于当前 Bot 的 `agent.allowedHumanOpenIds` 中。这样同一个群里的不同成员只调用被分配给自己的 Bot。
+3. Bot 发送者必须以飞书事件中的真实 open_id 命中 `trustedPeers`，不能是本 Bot，也不能是未知或已禁用 Bot。
+4. peer 的 `allowedProjectIds` 必须包含当前 `project.id`，否则即使 Bot 身份可信也不能跨 Project 调用。
+5. SDK loop guard 会限制短时间内的 Bot 提及；Bridge 的控制面回复不包含 Bot mention，因此不会形成回复回声。
+
+本阶段 peer 只能发送 `/peer ping <projectId> [requestId]` 或 `/peer status <projectId> [requestId]`。响应是确定性的本地状态，不调用模型、不写仓库，也不自动接单。后续 Agent 任务协议会在此身份和 Project 路由边界之上增加 TTL、事件去重、人工接单和任务状态机。

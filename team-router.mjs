@@ -27,9 +27,11 @@ export function classifyInboundMessage(msg, config, localBotOpenId = config.agen
     const peer = config.collaboration.trustedPeers.find(
       (candidate) => candidate.enabled && candidate.botOpenId === msg.senderId,
     );
-    return peer
-      ? { kind: "peer", scope: "group", peer }
-      : { kind: "ignore", reason: "untrusted_peer" };
+    if (!peer) return { kind: "ignore", reason: "untrusted_peer" };
+    if (!peer.allowedProjectIds.includes(config.project.id)) {
+      return { kind: "ignore", reason: "peer_project_denied", peer };
+    }
+    return { kind: "peer", scope: "group", peer };
   }
 
   if (!config.agent.allowedHumanOpenIds.includes(msg.senderId)) {

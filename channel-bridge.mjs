@@ -29,6 +29,7 @@ import {
 } from "./project-commands.mjs";
 import { ProjectContext } from "./project-context.mjs";
 import { classifyInboundMessage } from "./team-router.mjs";
+import { buildPeerControlReply, buildTeamMarkdown, parsePeerControlMessage } from "./team-commands.mjs";
 import { loadBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -189,7 +190,7 @@ function commandName(content) {
 }
 
 const immediateCommands = new Set([
-  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/help",
+  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/team", "/help",
 ]);
 
 function updateActiveWork(update) {
@@ -658,6 +659,10 @@ async function handleCommand(msg, content) {
     await replyCommand(msg, buildProjectMarkdown(config, snapshot, selectedThread, desktopStatus));
     return true;
   }
+  if (command === "/team") {
+    await replyCommand(msg, buildTeamMarkdown(config, connectedBotOpenId));
+    return true;
+  }
   if (command === "/branches") {
     await replyCommand(msg, buildBranchesMarkdown(config, await projectContext.refresh()));
     return true;
@@ -763,6 +768,7 @@ async function handleCommand(msg, content) {
       "- `/threads branch task/LOGIN-123`：按分支过滤任务",
       "- `/use 2`：切换到列表中的第 2 个任务",
       "- `/current`：查看当前任务",
+      "- `/team`：查看多 Bot 身份、群和 Project 授权状态",
       "- `/help`：显示帮助",
     ].join("\n"));
     return true;
@@ -869,15 +875,34 @@ async function processQueuedMessage(msg, content) {
   }
 }
 
+async function processPeerControlMessage(msg, route, content) {
+  const request = parsePeerControlMessage(content);
+  if (request.error) {
+    log(`peer control ${msg.messageId} rejected: ${request.error}`);
+    return false;
+  }
+  if (request.projectId !== config.project.id) {
+    log(`peer control ${msg.messageId} rejected: payload_project_mismatch`);
+    return false;
+  }
+  await replyCommand(msg, buildPeerControlReply(config, route.peer, request));
+  log(`peer control ${request.action} accepted from ${route.peer.agentId} for ${config.project.id}`);
+  return true;
+}
+
 channel.on("message", async (msg) => {
   const route = classifyInboundMessage(msg, config, connectedBotOpenId);
-  if (route.kind !== "human") {
-    if (route.kind === "peer") log(`peer message ${msg.messageId} ignored until team task routing is enabled`);
-    return;
-  }
   if (completed.has(msg.messageId)) return;
   const content = String(msg.content || "").trim();
   if (!content) return;
+
+  if (route.kind === "peer") {
+    await processPeerControlMessage(msg, route, content).catch((error) => {
+      log(`peer control ${msg.messageId} failed: ${safeError(error)}`);
+    });
+    return;
+  }
+  if (route.kind !== "human") return;
 
   if (immediateCommands.has(commandName(content))) {
     await processMessage(msg, content);

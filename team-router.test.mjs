@@ -7,10 +7,16 @@ const config = {
     botOpenId: "ou_localbot",
     allowedHumanOpenIds: ["ou_owner"],
   },
+  project: { id: "bridge" },
   collaboration: {
     enabled: true,
     groupChatIds: ["oc_team"],
-    trustedPeers: [{ agentId: "alice", botOpenId: "ou_alicebot", enabled: true }],
+    trustedPeers: [{
+      agentId: "alice",
+      botOpenId: "ou_alicebot",
+      enabled: true,
+      allowedProjectIds: ["bridge"],
+    }],
   },
 };
 
@@ -61,4 +67,8 @@ test("accepts configured peer bots and rejects self or unknown bots", () => {
   assert.equal(classifyInboundMessage(peerMessage, config).kind, "peer");
   assert.equal(classifyInboundMessage({ ...peerMessage, senderId: "ou_localbot" }, config).reason, "self_message");
   assert.equal(classifyInboundMessage({ ...peerMessage, senderId: "ou_unknown" }, config).reason, "untrusted_peer");
+  assert.equal(classifyInboundMessage(peerMessage, {
+    ...config,
+    project: { id: "other-project" },
+  }).reason, "peer_project_denied");
 });

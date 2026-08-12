@@ -34,9 +34,22 @@
   },
   "collaboration": {
     "enabled": false,
-    "groupChatIds": [],
-    "trustedPeers": [],
-    "autoAcceptPeerTasks": false
+    "groupChatIds": [
+      "oc_your_team_group_chat_id"
+    ],
+    "trustedPeers": [
+      {
+        "agentId": "teammate-codex",
+        "displayName": "Teammate Codex",
+        "botOpenId": "ou_teammate_bot_open_id",
+        "allowedProjectIds": [
+          "cryouni-frontend"
+        ]
+      }
+    ],
+    "autoAcceptPeerTasks": false,
+    "maxHops": 2,
+    "eventTtlMs": 900000
   },
   "teamHub": {
     "enabled": false

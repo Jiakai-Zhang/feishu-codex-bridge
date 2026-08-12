@@ -81,12 +81,16 @@ function normalizePeer(peer) {
   if (!AGENT_ID.test(agentId)) throw new TypeError(`Invalid peer agent id: ${agentId}`);
   const botOpenId = requiredString(peer?.botOpenId, `trusted peer ${agentId} botOpenId`);
   if (!OPEN_ID.test(botOpenId)) throw new TypeError(`Invalid peer bot open_id: ${botOpenId}`);
+  const allowedProjectIds = uniqueStrings(peer.allowedProjectIds || peer.allowedRepoIds);
+  for (const projectId of allowedProjectIds) {
+    if (!AGENT_ID.test(projectId)) throw new TypeError(`Invalid allowed project id for peer ${agentId}: ${projectId}`);
+  }
   return {
     agentId,
     botOpenId,
     displayName: String(peer.displayName || agentId).trim(),
     enabled: peer.enabled !== false,
-    allowedRepoIds: uniqueStrings(peer.allowedRepoIds),
+    allowedProjectIds,
   };
 }
 
@@ -141,6 +145,15 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   }
   if (collaborationEnabled && groupChatIds.length === 0) {
     throw new TypeError("At least one collaboration.groupChatIds entry is required when collaboration is enabled");
+  }
+  if (collaborationEnabled && trustedPeers.some((peer) => peer.enabled && peer.allowedProjectIds.length === 0)) {
+    throw new TypeError("Every enabled trusted peer must declare collaboration.trustedPeers[].allowedProjectIds");
+  }
+  if (trustedPeers.some((peer) => peer.agentId === agentId)) {
+    throw new TypeError("A trusted peer cannot reuse the local agent id");
+  }
+  if (botOpenId && trustedPeers.some((peer) => peer.botOpenId === botOpenId)) {
+    throw new TypeError("A trusted peer cannot reuse the local bot open_id");
   }
 
   const teamHubEnabled = raw.teamHub?.enabled === true;
