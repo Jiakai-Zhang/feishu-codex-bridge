@@ -13,15 +13,22 @@ $stderrPath = Join-Path $runtimeDir 'bridge.stderr.log'
 $secretPath = Join-Path $runtimeDir 'channel-secret.dpapi'
 $node = [string]$config.nodeExecutable
 $bridge = Join-Path $PSScriptRoot 'channel-bridge.mjs'
+$expectedBridge = [System.IO.Path]::GetFullPath($bridge)
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 
 if (Test-Path -LiteralPath $pidPath) {
     $existingPid = [int](Get-Content -Raw -LiteralPath $pidPath)
-    if (Get-Process -Id $existingPid -ErrorAction SilentlyContinue) {
+    $existingProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$existingPid" -ErrorAction SilentlyContinue
+    $isBridge = $existingProcess -and
+        $existingProcess.Name -eq 'node.exe' -and
+        [string]$existingProcess.CommandLine -like "*$expectedBridge*"
+    if ($isBridge) {
         Write-Output "Bridge is already running (PID $existingPid)."
         exit 0
     }
+    # A PID can be reused after Windows restarts. Never treat an unrelated
+    # process as the bridge and never terminate it during stale-file cleanup.
     Remove-Item -LiteralPath $pidPath -Force
 }
 

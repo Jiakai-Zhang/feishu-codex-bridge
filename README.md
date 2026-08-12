@@ -53,6 +53,9 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 ```text
 /new
 /new 项目规划
+/chat
+/chat 临时问题
+/endchat
 /threads
 /use 2
 /current
@@ -80,6 +83,14 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `/status` 的“待补发结果”会显示当前发件箱数量。投递成功后才会移除记录并写入完成去重状态。
 
 `/new` 会创建并自动切换到一个新的 Codex 任务；也可以使用 `/new 主题` 指定任务主题。创建过程只进行只读初始化，不会执行命令或修改文件。旧任务仍会保留，可通过 `/threads` 找回。
+
+### 临时异步 Chat
+
+- `/chat` 或 `/chat 主题`：创建临时 Codex Chat，并记住当前原任务。
+- 临时 Chat 与原任务使用不同的执行队列，因此原任务正在运行时也可以创建 Chat、继续提问；同一个任务中的多条消息仍按顺序处理。
+- `/endchat`（别名 `/end`）：立即把后续消息路由回原任务及其完整历史，不会取消已经提交到临时 Chat 的回合；这些回合完成后仍会更新自己的飞书卡片。
+- 临时 Chat 会保留在 Codex 任务列表中，但 `/new` 和 `/use` 在临时模式中会要求先执行 `/endchat`，避免意外覆盖返回位置。
+- 临时 Chat 的返回位置会持久化；桥接重启后仍可使用 `/endchat` 回到原任务。
 
 `/threads` 会列出最近 10 个本地 Codex 任务；`/use 2` 会把后续飞书消息切换到列表中的第 2 个任务。切换后，Codex 会继续该任务已有的完整聊天历史。这里只能选择本地 Codex 任务，不能切换到普通 ChatGPT 聊天。
 

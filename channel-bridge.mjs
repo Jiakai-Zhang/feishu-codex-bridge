@@ -16,6 +16,7 @@ import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
 import { runProcess } from "./process-runner.mjs";
 import { createRolloutCompletionWatcher } from "./rollout-completion.mjs";
 import { streamCodexInSingleMessage } from "./stream-progress.mjs";
+import { ThreadWorkQueue } from "./thread-work-queue.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const config = JSON.parse(await fs.readFile(path.join(scriptDir, "bridge.config.json"), "utf8"));
@@ -27,6 +28,7 @@ const stopPath = path.join(runtimeDir, "stop.request");
 const statePath = path.join(runtimeDir, "completed.json");
 const selectionPath = path.join(runtimeDir, "selected-thread.json");
 const deliveryOutboxPath = path.join(runtimeDir, "pending-deliveries.json");
+const temporaryChatPath = path.join(runtimeDir, "temporary-chat.json");
 const codexStateDbPath = path.join(userProfile, ".codex", "state_5.sqlite");
 
 const appSecret = process.env.LARK_APP_SECRET;
@@ -54,13 +56,24 @@ try {
   if (error?.code !== "ENOENT") log("thread selection file was unreadable; using the configured task");
 }
 
+let temporaryChat;
+try {
+  const saved = JSON.parse(await fs.readFile(temporaryChatPath, "utf8"));
+  if (typeof saved.baseThreadId === "string" && typeof saved.threadId === "string") {
+    temporaryChat = saved;
+    activeThreadId = saved.threadId;
+  }
+} catch (error) {
+  if (error?.code !== "ENOENT") log("temporary Chat state was unreadable; continuing without it");
+}
+
 const bridgeStartedAt = Date.now();
 let channelConnected = false;
-let activeWork;
+const activeWorks = new Map();
 let lastWork;
-let queuedWorkCount = 0;
-let workTail = Promise.resolve();
+const workQueue = new ThreadWorkQueue();
 let completedWriteTail = Promise.resolve();
+let temporaryChatReady;
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -149,27 +162,18 @@ function commandName(content) {
 
 const immediateCommands = new Set([
   "/status", "/model", "/capacity", "/quota", "/current", "/threads", "/help",
+  "/chat", "/endchat", "/end",
 ]);
 
-function updateActiveWork(update) {
-  if (!activeWork || !update?.text) return;
-  activeWork.phase = update.kind === "note" ? "Codex 正在处理" : update.text;
-  activeWork.lastUpdate = update.text;
-  activeWork.lastUpdateAt = Date.now();
-}
-
-function enqueueWork(task) {
-  queuedWorkCount += 1;
-  const runTask = async () => {
-    queuedWorkCount -= 1;
-    return task();
-  };
-  const result = workTail.then(runTask, runTask);
-  workTail = result.then(() => undefined, () => undefined);
-  return result;
+function updateActiveWork(work, update) {
+  if (!work || !update?.text) return;
+  work.phase = update.kind === "note" ? "Codex 正在处理" : update.text;
+  work.lastUpdate = update.text;
+  work.lastUpdateAt = Date.now();
 }
 
 function buildStatusMarkdown(thread, snapshot) {
+  const currentWork = activeWorks.get(activeThreadId);
   const lifecycle = snapshot?.lifecycle?.type;
   const idleState = lifecycle === "task_complete"
     ? "空闲（最近一轮已完成）"
@@ -181,17 +185,21 @@ function buildStatusMarkdown(thread, snapshot) {
     "",
     `- Channel SDK：**${channelConnected ? "已连接" : "正在重连"}**`,
     `- 桥接运行时间：${formatDuration(Date.now() - bridgeStartedAt)}`,
-    `- 当前状态：**${activeWork ? activeWork.phase : idleState}**`,
-    `- 等待队列：${queuedWorkCount} 条`,
+    `- 当前状态：**${currentWork ? currentWork.phase : idleState}**`,
+    `- 并行运行：${activeWorks.size} 个任务`,
+    `- 等待队列：${workQueue.queuedCount} 条`,
     `- 待补发结果：${deliveryOutbox.size()} 条`,
     `- 当前任务：${thread ? `**${compactTitle(thread.title, 80)}**` : "不存在"}`,
     `- 模型：\`${thread?.model || "不可用"}\`（推理强度 \`${thread?.reasoning_effort || "不可用"}\`）`,
   ];
-  if (activeWork) {
+  if (temporaryChat) {
+    lines.push(`- 临时 Chat：**${temporaryChat.status === "creating" ? "正在创建" : "已启用"}**`);
+  }
+  if (currentWork) {
     lines.push(
-      `- 本轮已运行：${formatDuration(Date.now() - activeWork.startedAt)}`,
-      `- 最近进展：${activeWork.lastUpdate || "正在启动"}`,
-      `- 进展更新时间：${formatTimestamp(activeWork.lastUpdateAt)}`,
+      `- 本轮已运行：${formatDuration(Date.now() - currentWork.startedAt)}`,
+      `- 最近进展：${currentWork.lastUpdate || "正在启动"}`,
+      `- 进展更新时间：${formatTimestamp(currentWork.lastUpdateAt)}`,
     );
   } else if (lastWork) {
     lines.push(`- 上一条桥接任务：${lastWork.ok ? "已完成" : "失败"}（${formatTimestamp(lastWork.finishedAt)}）`);
@@ -210,7 +218,7 @@ function buildCurrentMarkdown(thread, snapshot) {
   const account = capacity.accountRemainingPercent === undefined
     ? "不可用"
     : formatPercent(capacity.accountRemainingPercent);
-  return [
+  const lines = [
     `当前绑定：**${compactTitle(thread.title, 100)}**`,
     "",
     `- 任务 ID：\`${thread.id}\``,
@@ -220,7 +228,12 @@ function buildCurrentMarkdown(thread, snapshot) {
     `- 账户周期剩余：${account}`,
     "",
     "发送 `/model` 查看模型详情，发送 `/capacity` 查看容量详情。以上查询不调用语言模型。",
-  ].join("\n");
+  ];
+  if (temporaryChat) {
+    const base = getThread(temporaryChat.baseThreadId);
+    lines.push("", `当前处于临时 Chat；发送 \`/endchat\` 返回：**${compactTitle(base?.title || temporaryChat.baseThreadId, 100)}**。`);
+  }
+  return lines.join("\n");
 }
 
 async function createCodexThread(topic, onProgress) {
@@ -352,11 +365,11 @@ function safeProgressUpdate(event) {
   return label ? { kind: "activity", text: label } : undefined;
 }
 
-async function askCodex(content, onProgress) {
+async function askCodex(content, onProgress, targetThreadId = activeThreadId) {
   const tempDir = await fs.mkdtemp(path.join(runtimeDir, "turn-"));
   const answerPath = path.join(tempDir, "answer.md");
-  const activeThread = getThread(activeThreadId);
-  if (!activeThread) throw new Error(`Selected Codex task no longer exists: ${activeThreadId}`);
+  const activeThread = getThread(targetThreadId);
+  if (!activeThread) throw new Error(`Selected Codex task no longer exists: ${targetThreadId}`);
   const activeWorkspace = normalizeCwd(activeThread.cwd);
   const rolloutPath = normalizeCwd(activeThread.rollout_path);
   let completionWatcher;
@@ -365,7 +378,7 @@ async function askCodex(content, onProgress) {
       stableMs: Number(config.completionStableMs) || 15_000,
     });
   } catch (error) {
-    log(`completion watcher unavailable for ${activeThreadId}: ${safeError(error)}`);
+    log(`completion watcher unavailable for ${targetThreadId}: ${safeError(error)}`);
   }
   let lastAgentMessage = "";
   const prompt = [
@@ -389,7 +402,7 @@ async function askCodex(content, onProgress) {
       answerPath,
       "resume",
       "--all",
-      activeThreadId,
+      targetThreadId,
       "-",
     ], {
       input: prompt,
@@ -521,11 +534,108 @@ async function replyCommand(msg, markdown) {
   await persistCompleted(msg.messageId);
 }
 
+async function startTemporaryChat(msg, topic) {
+  if (temporaryChat) {
+    await replyCommand(msg, temporaryChat.status === "creating"
+      ? "临时 Chat 正在创建，请稍等；创建后直接发送消息即可。"
+      : "当前已经处于临时 Chat。直接发送消息继续，或发送 `/endchat` 返回原任务。");
+    return;
+  }
+
+  const session = {
+    baseThreadId: activeThreadId,
+    threadId: undefined,
+    title: undefined,
+    status: "creating",
+    startedAt: new Date().toISOString(),
+  };
+  temporaryChat = session;
+  temporaryChatReady = (async () => {
+    await channel.reply(msg, {
+      markdown: topic
+        ? `⏳ 正在创建临时 Chat：**${compactTitle(topic, 100)}**`
+        : "⏳ 正在创建临时 Chat…",
+    });
+    const thread = await createCodexThread(topic || "飞书临时 Chat");
+    session.threadId = thread.id;
+    session.title = thread.title;
+    session.status = "active";
+    await selectThread(thread);
+    await fs.writeFile(temporaryChatPath, JSON.stringify({
+      baseThreadId: session.baseThreadId,
+      threadId: session.threadId,
+      title: session.title,
+      status: session.status,
+      startedAt: session.startedAt,
+    }, null, 2), "utf8");
+    await persistCompleted(msg.messageId);
+    await channel.reply(msg, { markdown: [
+      `临时 Chat 已就绪：**${compactTitle(thread.title, 100)}**`,
+      "",
+      "现在可以随时发送消息。它与原任务使用独立队列，可以并行处理。",
+      "发送 `/endchat`（或 `/end`）即可立即返回原任务；已发出的临时 Chat 消息仍会在后台完成。",
+    ].join("\n") });
+    log(`temporary Chat ${thread.id} started from ${session.baseThreadId}`);
+    return thread;
+  })();
+
+  try {
+    await temporaryChatReady;
+  } catch (error) {
+    if (temporaryChat === session) temporaryChat = undefined;
+    temporaryChatReady = undefined;
+    throw error;
+  }
+}
+
+async function endTemporaryChat(msg) {
+  const session = temporaryChat;
+  if (!session) {
+    await replyCommand(msg, "当前不在临时 Chat 中，无需返回。发送 `/chat` 可以创建一个临时异步 Chat。");
+    return;
+  }
+
+  session.ending = true;
+  if (temporaryChatReady) await temporaryChatReady;
+  const baseThread = getThread(session.baseThreadId);
+  if (!baseThread) throw new Error(`Original Codex task no longer exists: ${session.baseThreadId}`);
+  await selectThread(baseThread);
+  await fs.rm(temporaryChatPath, { force: true });
+  if (temporaryChat === session) temporaryChat = undefined;
+  temporaryChatReady = undefined;
+  await persistCompleted(msg.messageId);
+  await channel.reply(msg, { markdown: [
+    `已结束临时 Chat，并返回：**${compactTitle(baseThread.title, 100)}**`,
+    "",
+    "后续普通消息会继续使用原任务的完整对话上下文。临时 Chat 中已经提交的消息不会被取消，完成后仍会回复到各自的飞书卡片。",
+  ].join("\n") });
+  log(`temporary Chat ended; restored ${baseThread.id}`);
+}
+
+async function resolveMessageThreadId() {
+  const session = temporaryChat;
+  if (!session) return activeThreadId;
+  if (session.ending) return session.baseThreadId;
+  if (session.status === "creating" && temporaryChatReady) {
+    try { await temporaryChatReady; }
+    catch { return activeThreadId; }
+  }
+  return temporaryChat?.threadId || activeThreadId;
+}
+
 async function handleCommand(msg, content) {
   const trimmed = content.trim();
   const separator = trimmed.search(/\s/);
   const command = separator < 0 ? trimmed : trimmed.slice(0, separator);
   const argument = separator < 0 ? "" : trimmed.slice(separator).trim();
+  if (command === "/chat") {
+    await startTemporaryChat(msg, argument);
+    return true;
+  }
+  if (command === "/endchat" || command === "/end") {
+    await endTemporaryChat(msg);
+    return true;
+  }
   if (command === "/threads") {
     const threads = listRecentThreads();
     const lines = threads.map((thread, index) => `${index + 1}. ${compactTitle(thread.title)}\n   \`${thread.id}\``);
@@ -561,6 +671,10 @@ async function handleCommand(msg, content) {
     return true;
   }
   if (command === "/new") {
+    if (temporaryChat) {
+      await replyCommand(msg, "当前处于临时 Chat。请先发送 `/endchat` 返回原任务，再使用 `/new` 创建新的长期任务。");
+      return true;
+    }
     await channel.reply(msg, {
       markdown: argument
         ? `⏳ 正在创建新任务：**${compactTitle(argument, 100)}**`
@@ -582,6 +696,10 @@ async function handleCommand(msg, content) {
     return true;
   }
   if (command === "/use") {
+    if (temporaryChat) {
+      await replyCommand(msg, "当前处于临时 Chat。请先发送 `/endchat` 返回原任务，再使用 `/use` 切换长期任务。");
+      return true;
+    }
     if (!argument) {
       await replyCommand(msg, "请先发送 `/threads`，然后使用 `/use 2`；也可以发送 `/use <完整任务ID>`。");
       return true;
@@ -607,6 +725,9 @@ async function handleCommand(msg, content) {
       "- `/capacity`：查看上下文与账户周期剩余容量（不调用模型）",
       "- `/new`：创建并切换到新任务",
       "- `/new 主题`：以指定主题创建并切换到新任务",
+      "- `/chat`：创建临时异步 Chat，同时保留原任务上下文",
+      "- `/chat 主题`：以指定主题创建临时异步 Chat",
+      "- `/endchat`（或 `/end`）：结束临时 Chat，立即返回原任务",
       "- `/threads`：列出最近任务",
       "- `/use 2`：切换到列表中的第 2 个任务",
       "- `/current`：查看当前任务",
@@ -617,7 +738,7 @@ async function handleCommand(msg, content) {
   return false;
 }
 
-async function streamCodex(msg, content) {
+async function streamCodex(msg, content, targetThreadId, work) {
   // Feishu disables native streaming_mode after ten minutes. End it early,
   // then PATCH the same message as a regular card so long tasks neither freeze
   // nor create a new continuation card every eight minutes.
@@ -629,13 +750,13 @@ async function streamCodex(msg, content) {
     content,
     askCodex: async (prompt, onProgress) => {
       const answer = await askCodex(prompt, (update) => {
-        updateActiveWork(update);
+        updateActiveWork(work, update);
         onProgress?.(update);
-      });
-      if (activeWork) {
-        activeWork.phase = "正在回传最终结果";
-        activeWork.lastUpdate = "Codex 已完成，正在更新飞书消息";
-        activeWork.lastUpdateAt = Date.now();
+      }, targetThreadId);
+      if (work) {
+        work.phase = "正在回传最终结果";
+        work.lastUpdate = "Codex 已完成，正在更新飞书消息";
+        work.lastUpdateAt = Date.now();
       }
       return answer;
     },
@@ -651,13 +772,13 @@ async function streamCodex(msg, content) {
   });
 }
 
-async function processMessage(msg, content) {
+async function processMessage(msg, content, targetThreadId, work) {
   const messageStartedAt = Date.now();
   log(`accepted ${msg.messageId}`);
 
   try {
     if (await handleCommand(msg, content)) return true;
-    await streamCodex(msg, content);
+    await streamCodex(msg, content, targetThreadId, work);
     await deliveryOutbox.remove(msg.messageId);
     await persistCompleted(msg.messageId);
     try {
@@ -688,23 +809,24 @@ async function processMessage(msg, content) {
   }
 }
 
-async function processQueuedMessage(msg, content) {
+async function processQueuedMessage(msg, content, targetThreadId) {
   const startedAt = Date.now();
   const command = commandName(content);
-  activeWork = {
+  const work = {
     messageId: msg.messageId,
-    threadId: activeThreadId,
+    threadId: targetThreadId,
     startedAt,
     phase: command.startsWith("/") ? `正在执行 ${command}` : "正在启动 Codex",
     lastUpdate: "消息已从等待队列取出",
     lastUpdateAt: startedAt,
   };
+  activeWorks.set(targetThreadId, work);
   let ok = false;
   try {
-    ok = await processMessage(msg, content);
+    ok = await processMessage(msg, content, targetThreadId, work);
   } finally {
     lastWork = { messageId: msg.messageId, finishedAt: Date.now(), ok };
-    activeWork = undefined;
+    if (activeWorks.get(targetThreadId) === work) activeWorks.delete(targetThreadId);
   }
 }
 
@@ -715,10 +837,11 @@ channel.on("message", async (msg) => {
   if (!content) return;
 
   if (immediateCommands.has(commandName(content))) {
-    await processMessage(msg, content);
+    await processMessage(msg, content, activeThreadId);
     return;
   }
-  await enqueueWork(() => processQueuedMessage(msg, content));
+  const targetThreadId = await resolveMessageThreadId();
+  await workQueue.enqueue(targetThreadId, () => processQueuedMessage(msg, content, targetThreadId));
 });
 
 channel.on("reject", (event) => log(`rejected message ${event.messageId}: ${event.reason}`));

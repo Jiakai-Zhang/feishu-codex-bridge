@@ -7,6 +7,7 @@ $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
 $runtimeDir = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 $pidPath = Join-Path $runtimeDir 'bridge.pid'
 $stdoutPath = Join-Path $runtimeDir 'bridge.stdout.log'
+$bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'channel-bridge.mjs'))
 
 if (-not (Test-Path -LiteralPath $pidPath)) {
     Write-Output 'Bridge status: stopped'
@@ -14,7 +15,9 @@ if (-not (Test-Path -LiteralPath $pidPath)) {
 }
 
 $bridgePid = [int](Get-Content -Raw -LiteralPath $pidPath)
-if (-not (Get-Process -Id $bridgePid -ErrorAction SilentlyContinue)) {
+$process = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgePid" -ErrorAction SilentlyContinue
+$isBridge = $process -and $process.Name -eq 'node.exe' -and [string]$process.CommandLine -like "*$bridge*"
+if (-not $isBridge) {
     Write-Output "Bridge status: stopped (stale PID $bridgePid)"
     exit 1
 }
