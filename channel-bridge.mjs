@@ -3,6 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { createLarkChannel } from "@larksuite/channel";
+import {
+  createAgentEvent,
+  decodeAgentEvent,
+  encodeAgentEvent,
+  validateIncomingAgentEvent,
+} from "./agent-protocol.mjs";
 import { startCodexProjectThread } from "./codex-app-server.mjs";
 import {
   buildCapacityMarkdown,
@@ -30,7 +36,9 @@ import {
 import { ProjectContext } from "./project-context.mjs";
 import { classifyInboundMessage } from "./team-router.mjs";
 import { buildPeerControlReply, buildTeamMarkdown, parsePeerControlMessage } from "./team-commands.mjs";
+import { buildTeamTasksMarkdown, parseDelegateArgument, parseTaskActionArgument } from "./team-task-commands.mjs";
 import { loadBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
+import { TeamTaskStore } from "./team-task-store.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const config = await loadBridgeConfig(path.join(scriptDir, "bridge.config.json"));
@@ -44,6 +52,7 @@ const statePath = path.join(runtimeDir, "completed.json");
 const legacySelectionPath = path.join(runtimeDir, "selected-thread.json");
 const selectionPath = path.join(runtimeDir, `selected-thread.${config.project.id}.json`);
 const deliveryOutboxPath = path.join(runtimeDir, "pending-deliveries.json");
+const teamTaskStorePath = path.join(runtimeDir, "team-tasks.json");
 const codexStateDbPath = path.join(userProfile, ".codex", "state_5.sqlite");
 const codexHome = path.join(userProfile, ".codex");
 
@@ -55,6 +64,7 @@ await fs.mkdir(runtimeDir, { recursive: true });
 await fs.rm(stopPath, { force: true });
 await fs.writeFile(pidPath, String(process.pid), "utf8");
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
+const teamTaskStore = await TeamTaskStore.open(teamTaskStorePath);
 
 let completed = new Set();
 try {
@@ -190,7 +200,7 @@ function commandName(content) {
 }
 
 const immediateCommands = new Set([
-  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/team", "/help",
+  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/team", "/team-tasks", "/help",
 ]);
 
 function updateActiveWork(update) {
@@ -532,6 +542,49 @@ const channel = createLarkChannel({
   source: "codex-feishu-channel-bridge",
 });
 
+function trustedPeer(agentId) {
+  return config.collaboration.trustedPeers.find((peer) => (
+    peer.enabled
+    && peer.agentId === agentId
+    && peer.allowedProjectIds.includes(config.project.id)
+  ));
+}
+
+function requireTaskApprover(openId, task, { allowRequester = false } = {}) {
+  if (config.collaboration.approverOpenIds.includes(openId)) return;
+  if (allowRequester && task?.requesterHumanOpenId === openId) return;
+  throw new Error("该操作只允许配置的协作审批者执行");
+}
+
+function eventForTask(task, kind, payload) {
+  return createAgentEvent({
+    kind,
+    taskId: task.taskId,
+    projectId: task.projectId,
+    fromAgentId: config.agent.id,
+    toAgentId: task.peerAgentId,
+    requesterAgentId: task.requesterAgentId,
+    executorAgentId: task.executorAgentId,
+    payload,
+  }, { ttlMs: config.collaboration.eventTtlMs });
+}
+
+async function sendAgentEvent(peer, chatId, event) {
+  if (!peer?.botOpenId) throw new Error("Trusted peer Bot identity is unavailable");
+  if (!config.collaboration.groupChatIds.includes(chatId)) throw new Error("Agent event target group is not allowlisted");
+  await channel.send(chatId, { markdown: encodeAgentEvent(event) }, {
+    mentions: [{ key: "peer", openId: peer.botOpenId, name: peer.displayName, isBot: true }],
+  });
+}
+
+async function sendTaskEvent(task, kind, payload) {
+  const peer = trustedPeer(task.peerAgentId);
+  if (!peer) throw new Error(`Trusted peer ${task.peerAgentId} is unavailable for Project ${config.project.id}`);
+  const event = eventForTask(task, kind, payload);
+  await sendAgentEvent(peer, task.chatId || config.collaboration.defaultGroupChatId, event);
+  return event;
+}
+
 let deliveryRetryInFlight = false;
 
 async function deliverPendingRecord(record) {
@@ -663,6 +716,102 @@ async function handleCommand(msg, content) {
     await replyCommand(msg, buildTeamMarkdown(config, connectedBotOpenId));
     return true;
   }
+  if (command === "/team-tasks") {
+    await replyCommand(msg, buildTeamTasksMarkdown(teamTaskStore.list()));
+    return true;
+  }
+  if (command === "/delegate") {
+    if (!config.collaboration.enabled) {
+      await replyCommand(msg, "多 Bot 协作尚未启用。请先完成可信群、Bot 身份和 Project allowlist 配置。");
+      return true;
+    }
+    const request = parseDelegateArgument(argument);
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    const peer = trustedPeer(request.peerAgentId);
+    if (!peer) {
+      await replyCommand(msg, `未找到获准访问当前 Project 的可信 peer：\`${request.peerAgentId}\``);
+      return true;
+    }
+    const chatId = config.collaboration.defaultGroupChatId;
+    if (!chatId) throw new Error("collaboration.defaultGroupChatId is required for delegation");
+    const taskId = `task:${msg.messageId}`;
+    let task = teamTaskStore.get(taskId);
+    if (!task) {
+      const event = createAgentEvent({
+        kind: "task.request",
+        taskId,
+        projectId: config.project.id,
+        fromAgentId: config.agent.id,
+        toAgentId: peer.agentId,
+        requesterAgentId: config.agent.id,
+        executorAgentId: peer.agentId,
+        payload: { title: request.title, prompt: request.prompt, branch: request.branch },
+      }, { ttlMs: config.collaboration.eventTtlMs });
+      task = await teamTaskStore.createOutboundRequest(event, {
+        peer,
+        chatId,
+        requesterHumanOpenId: msg.senderId,
+      });
+      await sendAgentEvent(peer, chatId, event);
+    } else {
+      if (task.direction !== "outbound" || task.peerAgentId !== peer.agentId
+        || task.branch !== request.branch || task.prompt !== request.prompt) {
+        throw new Error(`Existing task ${taskId} does not match this delegation request`);
+      }
+      await sendTaskEvent(task, "task.request", {
+        title: task.title,
+        prompt: task.prompt,
+        branch: task.branch,
+      });
+    }
+    await replyCommand(msg, [
+      `已向 **${peer.displayName}** 委派任务。`,
+      "",
+      `- 任务：\`${task.taskId}\``,
+      `- Project：\`${task.projectId}\``,
+      `- 分支：\`${task.branch}\``,
+      "- 状态：等待 peer 接单",
+    ].join("\n"));
+    return true;
+  }
+  if (command === "/team-accept") {
+    const request = parseTaskActionArgument(argument);
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    await executeInboundTask(request.taskId, { commandMessage: msg, approvedByOpenId: msg.senderId });
+    return true;
+  }
+  if (command === "/team-reject") {
+    const request = parseTaskActionArgument(argument, { requireNote: true });
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    const current = teamTaskStore.get(request.taskId);
+    requireTaskApprover(msg.senderId, current);
+    const task = await teamTaskStore.rejectInbound(request.taskId, request.note, msg.senderId);
+    await sendTaskEvent(task, "task.rejected", { reason: request.note });
+    await replyCommand(msg, `已拒绝协作任务 \`${task.taskId}\`，并通知 ${task.peerAgentId}。`);
+    return true;
+  }
+  if (command === "/team-approve") {
+    const request = parseTaskActionArgument(argument);
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    const current = teamTaskStore.get(request.taskId);
+    requireTaskApprover(msg.senderId, current, { allowRequester: true });
+    const task = await teamTaskStore.approveOutbound(request.taskId, request.note, msg.senderId);
+    await sendTaskEvent(task, "task.approved", { note: request.note || undefined });
+    await replyCommand(msg, `已批准 peer 返回的任务结果：\`${task.taskId}\`。`);
+    return true;
+  }
   if (command === "/branches") {
     await replyCommand(msg, buildBranchesMarkdown(config, await projectContext.refresh()));
     return true;
@@ -769,6 +918,11 @@ async function handleCommand(msg, content) {
       "- `/use 2`：切换到列表中的第 2 个任务",
       "- `/current`：查看当前任务",
       "- `/team`：查看多 Bot 身份、群和 Project 授权状态",
+      "- `/team-tasks`：查看 Agent 协作任务和所有权状态",
+      "- `/delegate <peer> <branch> <任务>`：向可信 peer 委派任务",
+      "- `/team-accept <taskId>`：审批并执行收到的任务",
+      "- `/team-reject <taskId> <原因>`：拒绝收到的任务",
+      "- `/team-approve <taskId> [说明]`：批准 peer 返回的结果",
       "- `/help`：显示帮助",
     ].join("\n"));
     return true;
@@ -875,7 +1029,120 @@ async function processQueuedMessage(msg, content) {
   }
 }
 
+async function executeInboundTask(taskId, { commandMessage, approvedByOpenId } = {}) {
+  let task = teamTaskStore.get(taskId);
+  if (!task || task.direction !== "inbound") throw new Error(`Unknown inbound task ${taskId}`);
+  if (approvedByOpenId !== "auto") requireTaskApprover(approvedByOpenId, task);
+  try {
+    if (task.state === "pending" || task.state === "blocked") {
+      task = await teamTaskStore.acceptInbound(taskId, approvedByOpenId || "auto");
+    } else if (task.state !== "accepted") {
+      throw new Error(`Task ${taskId} cannot be executed from ${task.state}`);
+    }
+    await sendTaskEvent(task, "task.accepted", { message: "accepted by the local Bridge" });
+    if (commandMessage) {
+      await channel.reply(commandMessage, {
+        markdown: `⏳ 已审批协作任务 \`${task.taskId}\`，正在准备分支 \`${task.branch}\` 并启动 Codex。`,
+      });
+    }
+
+    const worktree = await projectContext.prepareWorktree(task.branch);
+    const thread = await executor.createThread(`[peer:${task.peerAgentId}] ${task.title}`, undefined, worktree.path);
+    await selectThread(thread, await projectContext.refresh());
+    task = await teamTaskStore.markRunning(task.taskId, {
+      threadId: thread.id,
+      worktree: worktree.path,
+      branch: worktree.branch,
+    });
+    await sendTaskEvent(task, "task.progress", { message: "Codex task started in the approved Project worktree" });
+
+    const prompt = [
+      `你正在执行一个经过本地审批的 Agent 协作任务。`,
+      `请求 Agent：${task.requesterAgentId}`,
+      `执行 Agent：${task.executorAgentId}`,
+      `Project：${task.projectId}`,
+      `分支：${task.branch}`,
+      `任务 ID：${task.taskId}`,
+      "",
+      "只在当前 Project/worktree 权限边界内完成任务并验证。不要修改任务协议字段或绕过审批状态。",
+      "",
+      task.prompt,
+    ].join("\n");
+    const answer = await executor.runTurn(prompt, (update) => updateActiveWork(update));
+    const summary = String(answer || "任务完成，但 Codex 未返回文本结果。").slice(0, 12_000);
+    task = await teamTaskStore.markCompleted(task.taskId, summary);
+    await sendTaskEvent(task, "task.result", { summary, threadId: task.localThreadId });
+    const doneMarkdown = [
+      `## 协作任务已完成`,
+      "",
+      `- 任务：\`${task.taskId}\``,
+      `- peer：\`${task.peerAgentId}\``,
+      `- 分支：\`${task.branch}\``,
+      "- 状态：等待请求方审批结果",
+    ].join("\n");
+    if (commandMessage) await replyCommand(commandMessage, doneMarkdown);
+    else await channel.send(task.chatId, { markdown: doneMarkdown });
+    return true;
+  } catch (error) {
+    const latest = teamTaskStore.get(taskId);
+    const peerReason = "本地执行未完成；请由本地审批者检查 Bridge 状态后决定是否重试。";
+    if (latest && new Set(["accepted", "running"]).has(latest.state)) {
+      task = await teamTaskStore.markBlocked(taskId, peerReason);
+      await sendTaskEvent(task, "task.blocked", { reason: peerReason }).catch((sendError) => {
+        log(`failed to notify peer about blocked task ${taskId}: ${safeError(sendError)}`);
+      });
+    }
+    if (commandMessage) {
+      await replyCommand(commandMessage, `协作任务 \`${taskId}\` 未完成：${safeError(error)}`);
+      return false;
+    }
+    log(`auto-accepted team task ${taskId} failed: ${safeError(error)}`);
+    return false;
+  }
+}
+
+function inboundEventMarkdown(event, task) {
+  const labels = {
+    "task.request": "收到新的协作任务，等待本地审批",
+    "task.accepted": "peer 已接单",
+    "task.progress": `peer 进度：${event.payload.message}`,
+    "task.result": "peer 已返回结果，等待请求者或审批者确认",
+    "task.blocked": `peer 阻塞：${event.payload.reason}`,
+    "task.rejected": `peer 已拒绝：${event.payload.reason}`,
+    "task.approved": "请求方已批准结果",
+  };
+  return [
+    `## ${labels[event.kind]}`,
+    "",
+    `- 任务：\`${task.taskId}\``,
+    `- requester：\`${task.requesterAgentId}\``,
+    `- executor：\`${task.executorAgentId}\``,
+    `- Project：\`${task.projectId}\``,
+    `- 分支：\`${task.branch}\``,
+  ].join("\n");
+}
+
 async function processPeerControlMessage(msg, route, content) {
+  if (content.startsWith("/agent-event")) {
+    const decoded = decodeAgentEvent(content);
+    const event = validateIncomingAgentEvent(decoded, { config, peer: route.peer });
+    const recorded = await teamTaskStore.recordInboundEvent(event, {
+      peer: route.peer,
+      chatId: msg.chatId,
+    });
+    if (recorded.duplicate) {
+      log(`duplicate Agent event ${event.eventId} ignored for ${event.taskId}`);
+      return true;
+    }
+    if (event.kind === "task.request" && config.collaboration.autoAcceptPeerTasks) {
+      await persistCompleted(msg.messageId);
+      void enqueueWork(() => executeInboundTask(event.taskId, { approvedByOpenId: "auto" }));
+      return true;
+    }
+    await replyCommand(msg, inboundEventMarkdown(event, recorded.task));
+    log(`Agent event ${event.kind} accepted from ${route.peer.agentId} for ${event.taskId}`);
+    return true;
+  }
   const request = parsePeerControlMessage(content);
   if (request.error) {
     log(`peer control ${msg.messageId} rejected: ${request.error}`);

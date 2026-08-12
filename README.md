@@ -85,7 +85,9 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `collaboration.enabled`：是否开放配置群中的多 Bot 路由。新安装应先保持 `false`，完成 Bot open_id、群 chat_id 和 Project allowlist 核对后再开启。
 - `collaboration.groupChatIds`：可信协作群的精确 `chat_id` allowlist。群消息还必须真实提及本 Bot，`@所有人` 不会触发。
 - `collaboration.trustedPeers`：可信 peer Bot 清单。每个启用的 peer 都必须配置唯一的 `agentId`、`botOpenId` 和非空 `allowedProjectIds`；peer 未获当前 `project.id` 授权时会被拒绝。
-- `collaboration.autoAcceptPeerTasks` 当前保持 `false`；步骤 3 只开放 `/peer ping|status` 控制面，普通 peer 文本绝不会进入 Codex。
+- `collaboration.defaultGroupChatId`：本 Bot 主动委派和回传 Agent 事件使用的群，必须同时位于 `groupChatIds`。
+- `collaboration.approverOpenIds`：可以接单、拒绝和审批结果的人类成员；必须是 `agent.allowedHumanOpenIds` 的子集，默认只有 owner。
+- `collaboration.autoAcceptPeerTasks`：是否跳过人工接单。建议保持 `false`；开启后仍会执行身份、Project、TTL、hop 和去重校验。
 
 真实 `bridge.config.json` 已被 `.gitignore` 排除。
 
@@ -117,6 +119,11 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /model
 /capacity
 /team
+/team-tasks
+/delegate teammate-codex task/LOGIN-123 修复登录问题并运行测试
+/team-accept task:om_xxx
+/team-reject task:om_xxx 超出当前 Project 范围
+/team-approve task:om_xxx 已审阅
 /help
 ```
 
@@ -142,6 +149,11 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 - `/model`：读取本机 Codex 状态数据库中的模型、推理强度、提供方和 CLI 版本。
 - `/capacity`（别名 `/quota`）：读取当前任务 rollout 中最新的 token 与账户周期快照。
 - `/team`：显示本地 Agent/Bot、可信群、可调用成员、peer Bot 及其 Project allowlist；不会调用 Codex。
+- `/team-tasks`：列出最近的 Agent 协作任务、方向、requester、executor、分支和状态，不展示完整任务提示词。
+- `/delegate <peer> <branch> <任务>`：由当前成员作为请求方，通过默认协作群向可信 peer 发送任务。
+- `/team-accept <taskId>`：仅审批者可用；在任务指定分支的独立 worktree 创建 Codex 任务并执行。
+- `/team-reject <taskId> <原因>`：仅审批者可用；持久化拒绝状态并通知请求 Agent。
+- `/team-approve <taskId> [说明]`：请求该任务的成员或审批者确认 peer 返回的结果。
 
 这些查询不启动 Codex，不产生模型 token。
 
@@ -163,4 +175,17 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 4. peer 的 `allowedProjectIds` 必须包含当前 `project.id`，否则即使 Bot 身份可信也不能跨 Project 调用。
 5. SDK loop guard 会限制短时间内的 Bot 提及；Bridge 的控制面回复不包含 Bot mention，因此不会形成回复回声。
 
-本阶段 peer 只能发送 `/peer ping <projectId> [requestId]` 或 `/peer status <projectId> [requestId]`。响应是确定性的本地状态，不调用模型、不写仓库，也不自动接单。后续 Agent 任务协议会在此身份和 Project 路由边界之上增加 TTL、事件去重、人工接单和任务状态机。
+`/peer ping <projectId> [requestId]` 与 `/peer status <projectId> [requestId]` 仍是无模型、无写入的控制面。真正的任务协作使用 `/agent-event <base64url-json>` wire 格式，普通 peer 文本永远不会进入 Codex。
+
+## Agent 任务协议
+
+每个 Agent 事件都包含 schema 版本、事件 ID、任务 ID、事件类型、`projectId`、发送/接收 Agent、requester、executor、创建/过期时间、hop 和有界 payload。Bridge 会先使用飞书事件的 Bot open_id 认证 peer，再验证事件声明；peer 不能通过修改 JSON 冒充其他 Agent、切换 Project 或改变任务所有权。
+
+支持的事件为：
+
+- `task.request`：requester 向 executor 发起任务，包含标题、提示词和分支。
+- `task.accepted` / `task.progress`：executor 报告接单与进度。
+- `task.result` / `task.blocked` / `task.rejected`：executor 返回结果、阻塞或拒绝。
+- `task.approved`：requester 在本地人类确认后批准结果。
+
+状态持久化在运行目录的 `team-tasks.json`，并按 `eventId` 去重。收到的任务默认进入 `pending`，只有 `approverOpenIds` 中的本地成员执行 `/team-accept` 后，Bridge 才会准备 Project 内的分支 worktree、创建独立 Codex 任务并运行。requester、executor 与本地审批者分别记录，状态转换不允许改变所有权。结果返回后仍需请求成员或审批者执行 `/team-approve`，从而区分“执行完成”和“结果获批”。

@@ -37,6 +37,10 @@
     "groupChatIds": [
       "oc_your_team_group_chat_id"
     ],
+    "defaultGroupChatId": "oc_your_team_group_chat_id",
+    "approverOpenIds": [
+      "ou_your_feishu_open_id"
+    ],
     "trustedPeers": [
       {
         "agentId": "teammate-codex",

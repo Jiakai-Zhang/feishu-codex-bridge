@@ -155,6 +155,18 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   if (botOpenId && trustedPeers.some((peer) => peer.botOpenId === botOpenId)) {
     throw new TypeError("A trusted peer cannot reuse the local bot open_id");
   }
+  const approverOpenIds = uniqueStrings(raw.collaboration?.approverOpenIds || [ownerOpenId]);
+  for (const openId of approverOpenIds) {
+    if (!allowedHumanOpenIds.includes(openId)) {
+      throw new TypeError("collaboration.approverOpenIds must be a subset of agent.allowedHumanOpenIds");
+    }
+  }
+  const defaultGroupChatId = raw.collaboration?.defaultGroupChatId
+    ? requiredString(raw.collaboration.defaultGroupChatId, "collaboration.defaultGroupChatId")
+    : groupChatIds[0];
+  if (defaultGroupChatId && !groupChatIds.includes(defaultGroupChatId)) {
+    throw new TypeError("collaboration.defaultGroupChatId must be listed in collaboration.groupChatIds");
+  }
 
   const teamHubEnabled = raw.teamHub?.enabled === true;
   const teamHubPath = raw.teamHub?.path
@@ -183,7 +195,9 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
     collaboration: {
       enabled: collaborationEnabled,
       groupChatIds,
+      defaultGroupChatId,
       trustedPeers,
+      approverOpenIds,
       autoAcceptPeerTasks: raw.collaboration?.autoAcceptPeerTasks === true,
       maxHops: positiveNumber(raw.collaboration?.maxHops, 2, { min: 1, max: 8 }),
       eventTtlMs: positiveNumber(raw.collaboration?.eventTtlMs, 15 * 60_000, {

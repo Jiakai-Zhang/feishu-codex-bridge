@@ -28,6 +28,8 @@ export function buildTeamMarkdown(config, connectedBotOpenId = config.agent.botO
     `- 多 Bot 协作：**${config.collaboration.enabled ? "已启用" : "未启用"}**`,
     `- 可信群：${config.collaboration.groupChatIds.length} 个`,
     `- 可调用本 Bot 的成员：${config.agent.allowedHumanOpenIds.length} 人`,
+    `- 协作任务审批者：${config.collaboration.approverOpenIds.length} 人`,
+    `- 默认协作群：${inlineCode(config.collaboration.defaultGroupChatId || "未配置")}`,
     `- peer 自动接单：**${config.collaboration.autoAcceptPeerTasks ? "已启用" : "未启用"}**`,
     "",
     "### 可信 peer Bot",

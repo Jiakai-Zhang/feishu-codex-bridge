@@ -13,6 +13,8 @@ const config = {
   collaboration: {
     enabled: true,
     groupChatIds: ["oc_team"],
+    defaultGroupChatId: "oc_team",
+    approverOpenIds: ["ou_owner"],
     autoAcceptPeerTasks: false,
     trustedPeers: [{
       agentId: "alice-codex",
@@ -44,6 +46,7 @@ test("team status shows identities and Project scopes", () => {
   assert.match(markdown, /local-codex/);
   assert.match(markdown, /alice-codex/);
   assert.match(markdown, /bridge/);
+  assert.match(markdown, /oc_team/);
   assert.match(markdown, /只接受 `\/peer ping\|status`/);
 });
 

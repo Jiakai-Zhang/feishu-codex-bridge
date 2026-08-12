@@ -35,6 +35,7 @@ test("normalizes a Codex-first team config", () => {
     collaboration: {
       enabled: true,
       groupChatIds: ["oc_team"],
+      approverOpenIds: ["ou_owner"],
       trustedPeers: [{
         agentId: "alice-codex",
         botOpenId: "ou_alicebot",
@@ -58,6 +59,8 @@ test("normalizes a Codex-first team config", () => {
   assert.equal(config.agent.id, "peiyuan-codex");
   assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner", "ou_teammate"]);
   assert.deepEqual(sdkGroupAllowlist(config), ["oc_team"]);
+  assert.deepEqual(config.collaboration.approverOpenIds, ["ou_owner"]);
+  assert.equal(config.collaboration.defaultGroupChatId, "oc_team");
   assert.equal(config.collaboration.trustedPeers[0].allowedProjectIds[0], "bridge");
   assert.equal(config.project.id, "bridge");
   assert.equal(config.project.desktopProjectId, "desktop-project-1");
@@ -123,6 +126,27 @@ test("refuses local identities in the trusted peer roster", () => {
       trustedPeers: [{ agentId: "alice", botOpenId: "ou_bot", allowedProjectIds: ["bridge"] }],
     },
   }), /local bot open_id/);
+});
+
+test("restricts task approvers and the default group to configured allowlists", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    collaboration: {
+      enabled: true,
+      groupChatIds: ["oc_team"],
+      approverOpenIds: ["ou_unknown"],
+    },
+  }), /subset/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    collaboration: {
+      enabled: true,
+      groupChatIds: ["oc_team"],
+      defaultGroupChatId: "oc_other",
+    },
+  }), /defaultGroupChatId/);
 });
 
 test("refuses a worktree creation root outside the allowed Project roots", () => {
