@@ -1,21 +1,33 @@
-# Feishu ↔ Codex 本地桥接
+# Feishu ↔ Codex Project Bridge
 
-这个本地桥接不使用 OpenAI API Key。它复用当前电脑上的 ChatGPT 登录态，通过官方 Codex CLI 恢复当前 Codex 任务，再由官方飞书 Channel SDK 接收消息和流式回复。
+这个本地桥接不使用 OpenAI API Key。它复用当前电脑上的 ChatGPT 登录态，通过 Codex CLI 继续本机 Codex 任务，再由飞书 Channel SDK 接收消息和回传结果。
 
-## 安全策略
+当前版本把一个飞书机器人定义为一个 **Project Agent**：
 
-- 只接受 `bridge.config.json` 中指定 `open_id` 发给机器人的单聊文本。
-- 群消息、其他发送者和非文本消息全部忽略。
-- 飞书触发的 Codex 运行使用 `danger-full-access`，可读写本机文件并执行命令。
+```text
+1 个飞书机器人
+└─ 1 个受控 Codex Project
+   ├─ 1 个 Git 仓库
+   ├─ 多个独立 Git worktree / branch
+   └─ 每个 worktree 下多个 Codex 任务（thread）
+```
+
+当前执行后端是 Codex。配置保留 `agent.executor.type` 边界，后续可以增加其他 Agent 执行器，但 Project、Git 和飞书权限策略不依赖具体模型后端。
+
+这里的 **Bridge Project** 与 Codex Desktop 侧边栏里的 **Desktop Project** 是两个对象：前者负责仓库、worktree、分支和写入权限边界，后者只负责 Desktop 中的目录与任务分组。Bridge 可以验证本机 Desktop 是否已注册同一仓库，但当前 Codex 独立 App Server 的 `thread/start` 没有 `projectId` 参数，所以 `/new` 创建的任务不会自动进入 Desktop Project 分组；任务仍会按真实 `cwd` 写入本机 Codex 状态并受 Bridge Project 校验。
+
+## Project 安全边界
+
+- `/threads` 只显示 `cwd` 位于当前 Project 已注册 Git worktree 内、且任务记录分支与 worktree 当前分支一致的 Codex 任务。
+- `/use` 会再次验证目标任务的 `cwd`、真实路径和分支绑定；不能切换到本机其他项目或已被外部切换分支的旧任务。
+- 切换 Codex 任务不会执行 `git checkout`，也不会改变任何 worktree 的分支。
+- `/new` 在当前 worktree 创建任务；没有当前任务时使用默认分支所在 worktree。
+- `/new --branch <branch>` 创建或复用该分支的独立 worktree，再在其中创建 Codex 任务。
+- `project.defaultBranch` 在 `protectDefaultBranch=true` 时强制使用 `read-only` 沙箱；要修改代码必须进入任务分支 worktree。
+- 普通任务分支使用 `sandboxMode`。新安装建议使用 `workspace-write`；`danger-full-access` 仅适合明确需要访问 Project 外资源的受信环境。
+- bridge 内的写入型消息目前全局串行，因此自然满足“同一 worktree 同时最多一个 bridge 回合”，但这不能阻止用户从桌面端另行并发启动同一目录的任务。
+- bridge 不自动 force push、reset、clean、merge 或删除 worktree；`/branches` 也不会自动 fetch。
 - 递归删除、覆盖重要数据、重置凭据或权限、强制推送、清空数据库等难以恢复的操作仍需再次确认。
-- 消息按顺序处理，并保存最近 1000 条已完成消息 ID，避免重复回复。
-- 应用密钥和 ChatGPT 登录凭据均不复制到本目录。
-- 普通消息使用飞书动态卡片显示 Codex 主动写给用户的具体过程说明（准备做什么、关键发现、下一步）以及经过脱敏的真实活动事件（分析、命令、文件修改、工具调用、搜索、计划更新）和处理时间；完成后在同一卡片中展示最终结果与简短过程摘要。
-- 流式卡片完成后，机器人会额外发送一条带总耗时的“任务已完成”普通消息，以触发飞书的新消息提醒；会话静音设置仍由飞书客户端控制。
-- 长时间运行的 Codex 回合不设桥接截止时间。前 8 分钟使用飞书原生流式卡片；随后结束 `streaming_mode`，改为更新同一条卡片，不会每 8 分钟新增续接卡片。执行期间每 30 秒在原卡片上刷新一次耗时心跳，不调用模型。
-- 任务运行期间每 30 秒增量读取一次本地 rollout 的新增字节；若发现本轮 `task_complete` 已稳定 15 秒，即使 `codex exec resume` 在 Windows 上没有退出，也会回收最终答案、完成飞书卡片并清理该 CLI 的辅助进程。没有活动任务时不会轮询，也不会产生网络请求或 token 消耗。
-- 收到 Codex 的 `turn.completed` 后会给 CLI 15 秒自行清理；若最终答案已经写好但子进程仍不退出，桥接只结束该次残留子进程并采用现有答案，避免卡片永久停留在“处理中”。
-- 不传输模型内部思维链、reasoning 内容、完整命令或敏感路径。动态卡片里的“Codex 过程说明”来自 CLI 的 `agent_message` 公共消息，与桌面端 commentary 属于同类可审阅内容。
 
 ## 安装与配置
 
@@ -26,13 +38,57 @@ npm install
 Copy-Item .\bridge.config.example.json .\bridge.config.json
 ```
 
-编辑本地 `bridge.config.json`，填写飞书 App ID、允许发送者的 `open_id`、初始 Codex 任务 ID、工作目录和本机可执行文件路径。真实配置已被 `.gitignore` 排除。
+核心配置示例：
 
-然后运行 `setup-channel-secret.ps1`，安全输入 App Secret。该脚本使用 Windows DPAPI 加密保存，明文不会写入配置、日志或仓库；启动器只在内存中解密并传给 Channel SDK 子进程。
+```json
+{
+  "schemaVersion": 2,
+  "appId": "cli_xxx",
+  "threadId": "",
+  "workspace": "C:\\CodexBridgeRuntime",
+  "agent": {
+    "id": "cryouni-frontend-codex",
+    "ownerOpenId": "ou_human",
+    "botOpenId": "ou_bot",
+    "allowedHumanOpenIds": ["ou_human"],
+    "executor": { "type": "codex" }
+  },
+  "project": {
+    "id": "cryouni-frontend",
+    "name": "CryoUNI Frontend",
+    "desktopProjectId": "paste-the-id-reported-by-codex-desktop",
+    "desktopProjectName": "CryoUNI Frontend",
+    "repoRoot": "G:\\Projects\\CryoUNI\\frontend",
+    "worktreeRoot": "G:\\Worktrees\\cryouni-frontend",
+    "allowedWorktreeRoots": [
+      "G:\\Projects\\CryoUNI\\frontend",
+      "G:\\Worktrees\\cryouni-frontend"
+    ],
+    "defaultBranch": "main",
+    "protectDefaultBranch": true,
+    "allowedRemotes": ["origin"]
+  },
+  "sandboxMode": "workspace-write"
+}
+```
 
-## 控制命令
+字段含义：
 
-在 PowerShell 中运行：
+- `workspace`：bridge 日志、去重记录和临时文件的本机运行根目录，不等于代码仓库。
+- `project.repoRoot`：必须是 `git rev-parse --show-toplevel` 返回的仓库根目录。
+- `project.worktreeRoot`：bridge 新建任务 worktree 的父目录。
+- `project.allowedWorktreeRoots`：允许桥接访问的 worktree 路径边界；必须包含 `repoRoot` 和 `worktreeRoot`。
+- `project.allowedRemotes`：允许用作新分支基线和显示远端 refs 的远端名称。
+- `project.desktopProjectId`：可选；Codex Desktop 为已注册目录生成的 Project ID。配置后 `/project` 会读取 `~/.codex/.codex-global-state.json`，只读验证 ID 与 `repoRoot` 是否匹配。
+- `project.desktopProjectName`：可选；Desktop 侧显示名称，仅用于状态回退，真实名称优先从本机 Desktop 状态读取。
+- `threadId`：可留空。若填写或从旧选择文件迁移，启动时仍会校验该任务是否属于 Project；不属于时会改选最近的 Project 任务或等待 `/new`。
+- `collaboration.enabled` 当前保持 `false`；多 Bot 群协作在 Project 边界稳定后接入。
+
+真实 `bridge.config.json` 已被 `.gitignore` 排除。
+
+随后运行 `setup-channel-secret.ps1`，隐藏输入 App Secret。脚本使用 Windows DPAPI 加密保存；明文不会写入配置、日志或仓库，启动器只在内存中解密并传给 Channel SDK 子进程。
+
+## 启动与停止
 
 ```powershell
 & .\start-bridge.ps1
@@ -40,47 +96,58 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 & .\stop-bridge.ps1
 ```
 
-运行日志和去重状态保存在项目的 `work\feishu-codex-bridge` 目录中。
+运行日志、投递发件箱和去重状态位于 `<workspace>\work\feishu-codex-bridge`。
 
-## 使用方式
-
-启动成功后，在飞书中私聊应用机器人。机器人会把文本发送到当前 Codex 任务，并把最终回复引用回复到原消息。
-
-### 选择要继续的 Codex 任务
-
-在飞书私聊中发送：
+## 飞书命令
 
 ```text
-/new
-/new 项目规划
+/project
+/branches
+/worktrees
 /threads
+/threads branch task/LOGIN-123
 /use 2
 /current
+/new 修复登录问题
+/new --branch task/LOGIN-123 修复登录问题
 /status
 /model
 /capacity
 /help
 ```
 
-### 本地状态查询（不调用语言模型）
+### Project 与 Git
 
-- `/status`：查看 Channel SDK 连接、桥接运行时间、当前任务阶段、最近进展和等待队列。该命令会绕过普通任务队列，因此长任务运行时也能立即查询。
-- `/model`：读取当前所选 Codex 任务在本机状态数据库中记录的模型、推理强度、提供方和 CLI 版本。
-- `/capacity`（别名 `/quota`）：读取当前任务 rollout 中最新的 `token_count`，显示最近一次上下文窗口的近似剩余 token，以及账户用量周期的剩余百分比与重置时间。
-- `/current`：除任务标题和 ID 外，同时显示模型、推理强度和两类剩余容量的摘要。
+- `/project`：分别显示 Bridge Project 的执行边界和 Codex Desktop Project 的只读注册状态，避免把二者混为一个对象。
+- `/branches`：列出本地分支与允许远端中的本地 refs 快照，并标出哪个分支已有 worktree。该命令不联网、不 fetch。
+- `/worktrees`：列出允许范围内的 Git worktree、HEAD、分支和其中的 Codex 任务数；范围外 worktree 只显示数量，不允许访问。
 
-这些命令只读取桥接内存、`state_5.sqlite` 和 rollout 文件，不会启动 `codex exec`，不会产生新的模型 token。容量是最近一次本地计数的快照；发送新消息、产生工具输出或触发上下文压缩后会发生变化。
+### Codex 任务
 
-### 飞书回传超时补偿
+- `/threads`：只列出当前 Project 最近 20 个任务。
+- `/threads branch <branch>`：按 worktree 当前真实分支过滤，而不是只信任任务数据库里可能过期的 `git_branch` 字段。
+- `/use 2`：切换到最近一次 `/threads` 返回列表中的第 2 项；列表缓存 30 分钟。完整任务 ID 同样必须通过 Project 校验。
+- `/new <主题>`：通过 Codex App Server 在当前 worktree 中创建并命名空白任务，不启动模型回合、不消耗 token；若当前是受保护默认分支，新任务只能读和分析。
+- 当前 Desktop 版本不会自动把独立 App Server 创建的任务归入 Desktop Project；`/new` 的回复会明确提示这一点。这不影响 `/threads`、`/use` 或 cwd/worktree 安全校验。
+- `/new --branch <branch> <主题>`：若分支已有允许范围内 worktree，则复用；否则在 `worktreeRoot` 下创建新 worktree。新本地分支优先基于同名允许远端分支，其次基于 `<allowedRemote>/<defaultBranch>`，最后基于本地默认分支。
+- `/current`：显示当前任务、Project、worktree、分支、实际沙箱、模型与容量摘要。
 
-- Channel SDK 的所有 REST 请求设置为 20 秒超时，单次网络请求不会无限阻塞桥接。
-- Codex 产生最终答案后，桥接会在更新卡片或发送回复之前写入 `work\feishu-codex-bridge\pending-deliveries.json`。
-- 若卡片更新、最终回复或网络连接发生超时/重置，答案会保留在发件箱；桥接每分钟检查一次，并按指数退避重试。
-- 后台补发使用原飞书消息 ID 派生的稳定 `uuid`，相同结果的重试具有幂等性；补发过程不会重新运行 Codex，也不会产生新的模型 token。
-- `/status` 的“待补发结果”会显示当前发件箱数量。投递成功后才会移除记录并写入完成去重状态。
+### 本地状态查询
 
-`/new` 会创建并自动切换到一个新的 Codex 任务；也可以使用 `/new 主题` 指定任务主题。创建过程只进行只读初始化，不会执行命令或修改文件。旧任务仍会保留，可通过 `/threads` 找回。
+- `/status`：查看 Channel 连接、Project、当前分支、实际沙箱、运行阶段、队列和待补发结果。
+- `/model`：读取本机 Codex 状态数据库中的模型、推理强度、提供方和 CLI 版本。
+- `/capacity`（别名 `/quota`）：读取当前任务 rollout 中最新的 token 与账户周期快照。
 
-`/threads` 会列出最近 10 个本地 Codex 任务；`/use 2` 会把后续飞书消息切换到列表中的第 2 个任务。切换后，Codex 会继续该任务已有的完整聊天历史。这里只能选择本地 Codex 任务，不能切换到普通 ChatGPT 聊天。
+这些查询不启动 Codex，不产生模型 token。
 
-当前任务正在桌面端运行时，请等它结束后再从飞书发新消息；同一任务不应同时运行两个回合。
+## 长任务与投递可靠性
+
+- 普通消息使用飞书动态卡片展示 Codex 主动写给用户的公开过程说明，以及经过脱敏的活动事件；不会传输隐藏思维链、完整命令或敏感路径。
+- 前 8 分钟使用飞书原生流式卡片，之后更新同一条普通卡片；每 30 秒刷新耗时心跳。
+- bridge 增量读取本地 rollout。发现稳定完成后，即使 Windows 上的 `codex exec resume` 未退出，也会回收最终答案并结束残留辅助进程。
+- 最终答案在飞书投递前写入 `pending-deliveries.json`。网络失败会按指数退避补发，使用稳定幂等键，不会重新运行 Codex。
+- 最近 1000 条已完成飞书消息 ID 会持久化，避免重复执行。
+
+## 当前阶段
+
+Project 边界和单 Bot 工作流是第一阶段。下一阶段才会启用飞书群内 Bot-to-Bot 协作，并要求每个协作事件同时携带可信 Bot 身份、`projectId`、任务分支/worktree、TTL、去重 ID 和人工接单状态。

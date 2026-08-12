@@ -11,5 +11,7 @@ channel-secret.dpapi
 pending-deliveries.json
 completed.json
 selected-thread.json
+selected-thread.*.json
+team-tasks.json
 turn-*/
 new-thread-*/

@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import test from "node:test";
+import { normalizeBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
+
+const legacy = {
+  appId: "cli_example",
+  threadId: "019ff4bc-4bb0-7643-9781-136733a00616",
+  allowedSenderOpenId: "ou_owner",
+  workspace: "./workspace",
+};
+
+test("normalizes legacy single-user config without enabling group access", () => {
+  const config = normalizeBridgeConfig(legacy, { configDir: "C:/config" });
+  assert.equal(config.schemaVersion, 2);
+  assert.equal(config.agent.id, "local-codex");
+  assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner"]);
+  assert.equal(config.agent.executor.type, "codex");
+  assert.equal(config.collaboration.enabled, false);
+  assert.deepEqual(sdkGroupAllowlist(config), ["oc_collaboration_disabled"]);
+  assert.equal(config.project.repoRoot, path.resolve("C:/config", "workspace"));
+  assert.equal(config.repositories[0].path, config.project.repoRoot);
+});
+
+test("normalizes a Codex-first team config", () => {
+  const config = normalizeBridgeConfig({
+    ...legacy,
+    agent: {
+      id: "peiyuan-codex",
+      ownerOpenId: "ou_owner",
+      botOpenId: "ou_localbot",
+      allowedHumanOpenIds: ["ou_teammate", "ou_owner"],
+      executor: { type: "codex" },
+    },
+    collaboration: {
+      enabled: true,
+      groupChatIds: ["oc_team"],
+      trustedPeers: [{
+        agentId: "alice-codex",
+        botOpenId: "ou_alicebot",
+        allowedRepoIds: ["bridge"],
+      }],
+    },
+    repositories: [{ id: "bridge", path: "./bridge", defaultBranch: "main" }],
+    project: {
+      id: "bridge",
+      name: "Bridge",
+      desktopProjectId: "desktop-project-1",
+      desktopProjectName: "Bridge Desktop",
+      repoRoot: "./bridge",
+      worktreeRoot: "../worktrees/bridge",
+      allowedWorktreeRoots: ["./bridge", "../worktrees/bridge"],
+      allowedRemotes: ["origin"],
+    },
+    teamHub: { enabled: true, path: "../team-agent-hub" },
+  }, { configDir: "C:/config" });
+
+  assert.equal(config.agent.id, "peiyuan-codex");
+  assert.deepEqual(config.agent.allowedHumanOpenIds, ["ou_owner", "ou_teammate"]);
+  assert.deepEqual(sdkGroupAllowlist(config), ["oc_team"]);
+  assert.equal(config.collaboration.trustedPeers[0].allowedRepoIds[0], "bridge");
+  assert.equal(config.project.id, "bridge");
+  assert.equal(config.project.desktopProjectId, "desktop-project-1");
+  assert.equal(config.project.desktopProjectName, "Bridge Desktop");
+  assert.equal(config.project.worktreeRoot, path.resolve("C:/config", "../worktrees/bridge"));
+  assert.equal(config.teamHub.path, path.resolve("C:/config", "../team-agent-hub"));
+});
+
+test("refuses collaboration without an explicit group", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    collaboration: { enabled: true, groupChatIds: [] },
+  }), /groupChatIds/);
+});
+
+test("refuses duplicate peer bot identities", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    agent: { ownerOpenId: "ou_owner", botOpenId: "ou_bot" },
+    collaboration: {
+      enabled: true,
+      groupChatIds: ["oc_team"],
+      trustedPeers: [
+        { agentId: "alice", botOpenId: "ou_same" },
+        { agentId: "bob", botOpenId: "ou_same" },
+      ],
+    },
+  }), /bot open_ids must be unique/);
+});
+
+test("refuses a worktree creation root outside the allowed Project roots", () => {
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    project: {
+      id: "bridge",
+      repoRoot: "./bridge",
+      worktreeRoot: "C:/untrusted/worktrees",
+      allowedWorktreeRoots: ["./bridge"],
+    },
+  }, { configDir: "C:/config" }), /worktreeRoot must be inside/);
+});

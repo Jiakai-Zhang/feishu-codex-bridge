@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { createLarkChannel } from "@larksuite/channel";
+import { startCodexProjectThread } from "./codex-app-server.mjs";
 import {
   buildCapacityMarkdown,
   buildModelMarkdown,
@@ -13,21 +14,37 @@ import {
   readLatestRolloutSnapshot,
 } from "./codex-status.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
+import { inspectDesktopProject } from "./desktop-project-state.mjs";
+import { createExecutor } from "./executor-registry.mjs";
 import { runProcess } from "./process-runner.mjs";
 import { createRolloutCompletionWatcher } from "./rollout-completion.mjs";
 import { streamCodexInSingleMessage } from "./stream-progress.mjs";
+import {
+  buildBranchesMarkdown,
+  buildProjectMarkdown,
+  buildProjectThreadsMarkdown,
+  buildWorktreesMarkdown,
+  parseNewCommandArgument,
+  parseThreadsCommandArgument,
+} from "./project-commands.mjs";
+import { ProjectContext } from "./project-context.mjs";
+import { classifyInboundMessage } from "./team-router.mjs";
+import { loadBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const config = JSON.parse(await fs.readFile(path.join(scriptDir, "bridge.config.json"), "utf8"));
+const config = await loadBridgeConfig(path.join(scriptDir, "bridge.config.json"));
+const projectContext = new ProjectContext(config.project);
 const userProfile = process.env.USERPROFILE;
 if (!userProfile) throw new Error("USERPROFILE is required to locate the Codex state database");
 const runtimeDir = path.join(config.workspace, "work", "feishu-codex-bridge");
 const pidPath = path.join(runtimeDir, "bridge.pid");
 const stopPath = path.join(runtimeDir, "stop.request");
 const statePath = path.join(runtimeDir, "completed.json");
-const selectionPath = path.join(runtimeDir, "selected-thread.json");
+const legacySelectionPath = path.join(runtimeDir, "selected-thread.json");
+const selectionPath = path.join(runtimeDir, `selected-thread.${config.project.id}.json`);
 const deliveryOutboxPath = path.join(runtimeDir, "pending-deliveries.json");
 const codexStateDbPath = path.join(userProfile, ".codex", "state_5.sqlite");
+const codexHome = path.join(userProfile, ".codex");
 
 const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
@@ -47,11 +64,14 @@ try {
 }
 
 let activeThreadId = config.threadId;
-try {
-  const selected = JSON.parse(await fs.readFile(selectionPath, "utf8"));
-  if (typeof selected.threadId === "string") activeThreadId = selected.threadId;
-} catch (error) {
-  if (error?.code !== "ENOENT") log("thread selection file was unreadable; using the configured task");
+for (const candidatePath of [selectionPath, legacySelectionPath]) {
+  try {
+    const selected = JSON.parse(await fs.readFile(candidatePath, "utf8"));
+    if (typeof selected.threadId === "string") activeThreadId = selected.threadId;
+    break;
+  } catch (error) {
+    if (error?.code !== "ENOENT") log("thread selection file was unreadable; using the configured task");
+  }
 }
 
 const bridgeStartedAt = Date.now();
@@ -61,6 +81,8 @@ let lastWork;
 let queuedWorkCount = 0;
 let workTail = Promise.resolve();
 let completedWriteTail = Promise.resolve();
+let connectedBotOpenId = config.agent.botOpenId;
+const threadListSelections = new Map();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -78,21 +100,33 @@ function withStateDb(callback) {
 }
 
 function getThread(threadId) {
+  if (!threadId) return undefined;
   return withStateDb((db) => db.prepare(
     `select id, title, cwd, rollout_path, updated_at_ms, model, reasoning_effort,
       model_provider, cli_version, tokens_used, git_branch
-     from threads where id = ? and coalesce(thread_source, 'user') = 'user' limit 1`,
+     from threads where id = ? and archived = 0 and coalesce(thread_source, 'user') = 'user' limit 1`,
   ).get(threadId));
 }
 
-function listRecentThreads(limit = 10) {
+function listRecentThreads(limit = 500) {
   return withStateDb((db) => db.prepare(
-    "select id, title, cwd, updated_at_ms from threads where archived = 0 and coalesce(thread_source, 'user') = 'user' order by updated_at_ms desc limit ?",
+    "select id, title, cwd, updated_at_ms, git_branch from threads where archived = 0 and coalesce(thread_source, 'user') = 'user' order by updated_at_ms desc limit ?",
   ).all(limit));
 }
 
 function normalizeCwd(cwd) {
-  return typeof cwd === "string" ? cwd.replace(/^\\\\\?\\/, "") : config.workspace;
+  return typeof cwd === "string" ? cwd.replace(/^\\\\\?\\/, "") : config.project.repoRoot;
+}
+
+async function listProjectThreads({ branch, limit = 20, snapshot } = {}) {
+  const currentSnapshot = snapshot || await projectContext.refresh();
+  const validated = await Promise.all(listRecentThreads().map((thread) => projectContext.validateThread(thread, currentSnapshot)));
+  return validated.filter(Boolean).filter((thread) => !branch || thread.worktree.branch === branch).slice(0, limit);
+}
+
+async function activeProjectThread(snapshot) {
+  const currentSnapshot = snapshot || await projectContext.refresh();
+  return projectContext.validateThread(getThread(activeThreadId), currentSnapshot);
 }
 
 function compactTitle(value, max = 56) {
@@ -122,13 +156,20 @@ async function persistCompleted(messageId) {
   await completedWriteTail;
 }
 
-async function selectThread(thread) {
+async function selectThread(thread, snapshot) {
+  const currentSnapshot = snapshot || await projectContext.refresh();
+  const scopedThread = await projectContext.validateThread(thread, currentSnapshot);
+  if (!scopedThread) throw new Error("This Codex task is outside the configured Project or its recorded branch no longer matches the worktree");
   activeThreadId = thread.id;
   await fs.writeFile(selectionPath, JSON.stringify({
+    projectId: config.project.id,
     threadId: thread.id,
     title: thread.title,
+    cwd: thread.cwd,
+    branch: scopedThread.worktree.branch,
     selectedAt: new Date().toISOString(),
   }, null, 2), "utf8");
+  return scopedThread;
 }
 
 async function getThreadSnapshot(thread) {
@@ -148,7 +189,7 @@ function commandName(content) {
 }
 
 const immediateCommands = new Set([
-  "/status", "/model", "/capacity", "/quota", "/current", "/threads", "/help",
+  "/status", "/model", "/capacity", "/quota", "/current", "/project", "/branches", "/worktrees", "/threads", "/help",
 ]);
 
 function updateActiveWork(update) {
@@ -169,7 +210,7 @@ function enqueueWork(task) {
   return result;
 }
 
-function buildStatusMarkdown(thread, snapshot) {
+function buildStatusMarkdown(thread, snapshot, scopedThread) {
   const lifecycle = snapshot?.lifecycle?.type;
   const idleState = lifecycle === "task_complete"
     ? "空闲（最近一轮已完成）"
@@ -184,7 +225,10 @@ function buildStatusMarkdown(thread, snapshot) {
     `- 当前状态：**${activeWork ? activeWork.phase : idleState}**`,
     `- 等待队列：${queuedWorkCount} 条`,
     `- 待补发结果：${deliveryOutbox.size()} 条`,
+    `- Project：**${config.project.name}**（\`${config.project.id}\`）`,
     `- 当前任务：${thread ? `**${compactTitle(thread.title, 80)}**` : "不存在"}`,
+    `- 当前分支：${scopedThread?.worktree?.branch ? `\`${scopedThread.worktree.branch}\`` : "不在 Project 内"}`,
+    `- 写入策略：${scopedThread?.worktree ? `\`${projectContext.effectiveSandbox(scopedThread.worktree, config.sandboxMode)}\`` : "不可用"}`,
     `- 模型：\`${thread?.model || "不可用"}\`（推理强度 \`${thread?.reasoning_effort || "不可用"}\`）`,
   ];
   if (activeWork) {
@@ -201,8 +245,13 @@ function buildStatusMarkdown(thread, snapshot) {
   return lines.join("\n");
 }
 
-function buildCurrentMarkdown(thread, snapshot) {
+function buildCurrentMarkdown(thread, snapshot, scopedThread) {
   if (!thread) return `当前绑定的任务不存在：\`${activeThreadId}\``;
+  if (!scopedThread) return [
+    `当前任务不属于 Project **${config.project.name}**，或记录分支已与 worktree 不一致；桥接已禁止继续运行。`,
+    "",
+    "请发送 `/threads` 选择 Project 内任务，或发送 `/new` 在当前 Project worktree 中创建任务。",
+  ].join("\n");
   const capacity = capacityView(snapshot);
   const remaining = capacity.contextRemaining === undefined
     ? "不可用"
@@ -214,6 +263,10 @@ function buildCurrentMarkdown(thread, snapshot) {
     `当前绑定：**${compactTitle(thread.title, 100)}**`,
     "",
     `- 任务 ID：\`${thread.id}\``,
+    `- Project：\`${config.project.id}\``,
+    `- worktree：\`${scopedThread.worktree.path}\``,
+    `- 分支：\`${scopedThread.worktree.branch || "detached"}\``,
+    `- 沙箱：\`${projectContext.effectiveSandbox(scopedThread.worktree, config.sandboxMode)}\``,
     `- 模型：\`${thread.model || "不可用"}\``,
     `- 推理强度：\`${thread.reasoning_effort || "不可用"}\``,
     `- 当前上下文剩余：${remaining}`,
@@ -223,60 +276,25 @@ function buildCurrentMarkdown(thread, snapshot) {
   ].join("\n");
 }
 
-async function createCodexThread(topic, onProgress) {
-  const tempDir = await fs.mkdtemp(path.join(runtimeDir, "new-thread-"));
-  const answerPath = path.join(tempDir, "answer.md");
+async function createCodexThread(topic, onProgress, workspace = config.project.repoRoot) {
   const compactTopic = String(topic || "从飞书新建的任务").replace(/\s+/g, " ").trim().slice(0, 200);
-  const prompt = [
-    compactTopic,
-    "",
-    "[飞书新任务初始化]",
-    "这是创建空白 Codex 任务的初始化消息。不要执行命令、修改文件或调用外部工具；只回复：新任务已创建，可以开始了。",
-  ].join("\n");
-  let newThreadId;
-
-  try {
-    const result = await runProcess(config.codexExecutable, [
-      "exec",
-      "--sandbox",
-      "read-only",
-      "--cd",
-      config.workspace,
-      "--skip-git-repo-check",
-      "--json",
-      "--output-last-message",
-      answerPath,
-      "-",
-    ], {
-      input: prompt,
-      cwd: config.workspace,
-      onStdoutLine: (line) => {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "thread.started" && typeof event.thread_id === "string") {
-            newThreadId = event.thread_id;
-          }
-          const update = safeProgressUpdate(event);
-          if (update) onProgress?.(update);
-          return event.type === "turn.completed";
-        } catch {}
-        return false;
-      },
-    });
-
-    if (result.code !== 0 && !result.logicalCompletionSeen) {
-      throw new Error(`Codex new task failed with exit code ${result.code}`);
-    }
-    if (!newThreadId) throw new Error("Codex did not return a new task ID");
-    const thread = getThread(newThreadId);
-    if (!thread) throw new Error(`New Codex task was not persisted: ${newThreadId}`);
-    return thread;
-  } finally {
-    const resolved = path.resolve(tempDir);
-    if (resolved.startsWith(`${path.resolve(runtimeDir)}${path.sep}`)) {
-      await fs.rm(resolved, { recursive: true, force: true });
-    }
+  const projectSnapshot = await projectContext.refresh();
+  const worktree = projectContext.matchCwd(workspace, projectSnapshot);
+  if (!worktree) throw new Error("New Codex task workspace is outside the configured Project worktrees");
+  onProgress?.({ kind: "activity", text: "正在创建空白 Project 任务" });
+  const created = await startCodexProjectThread({
+    codexExecutable: config.codexExecutable,
+    cwd: workspace,
+    name: compactTopic,
+    sandboxMode: projectContext.effectiveSandbox(worktree, config.sandboxMode),
+    timeoutMs: Number(config.handshakeTimeoutMs) || 20_000,
+  });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const thread = getThread(created.id);
+    if (thread) return thread;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  throw new Error(`New Codex task was not persisted: ${created.id}`);
 }
 
 function sanitizeProgressNote(value, max = 1600) {
@@ -357,7 +375,11 @@ async function askCodex(content, onProgress) {
   const answerPath = path.join(tempDir, "answer.md");
   const activeThread = getThread(activeThreadId);
   if (!activeThread) throw new Error(`Selected Codex task no longer exists: ${activeThreadId}`);
+  const projectSnapshot = await projectContext.refresh();
+  const scopedThread = await projectContext.validateThread(activeThread, projectSnapshot);
+  if (!scopedThread) throw new Error("Selected Codex task is outside the configured Project or its recorded branch no longer matches the worktree");
   const activeWorkspace = normalizeCwd(activeThread.cwd);
+  const effectiveSandbox = projectContext.effectiveSandbox(scopedThread.worktree, config.sandboxMode);
   const rolloutPath = normalizeCwd(activeThread.rollout_path);
   let completionWatcher;
   try {
@@ -369,10 +391,11 @@ async function askCodex(content, onProgress) {
   }
   let lastAgentMessage = "";
   const prompt = [
-    "[来自已验证的飞书私聊]",
+    `[来自已验证的飞书消息；Project=${config.project.id}；branch=${scopedThread.worktree.branch || "detached"}]`,
     content.slice(0, config.maxInputChars),
     "",
-    "请直接处理并回答这条消息。当前通道具有完全本机权限，可以读写文件和执行命令。对于递归删除、覆盖重要数据、重置凭据或权限、强制推送、清空数据库及其他难以恢复的操作，必须先向用户说明具体影响并取得明确确认。",
+    `请直接处理并回答这条消息。本轮运行沙箱为 ${effectiveSandbox}。只允许在当前 Project 的 worktree 内工作，不得切换 checkout 的分支。${effectiveSandbox === "read-only" ? "当前是受保护的默认分支，只能读取和分析；需要修改时请让用户用 /new --branch 创建任务 worktree。" : "当前任务分支允许按沙箱策略修改。"}`,
+    "对于递归删除、覆盖重要数据、重置凭据或权限、强制推送、清空数据库及其他难以恢复的操作，必须先向用户说明具体影响并取得明确确认。",
     "处理过程中，请像 Codex 桌面端一样，在开始主要阶段、得到关键发现或下一步发生变化时，主动发送一两句简短、可公开的过程说明：说清楚准备做什么、刚发现了什么、接下来做什么。不要逐字输出隐藏思维链，也不要在过程说明里粘贴凭据、完整命令、命令输出或敏感路径。",
   ].join("\n");
 
@@ -380,7 +403,7 @@ async function askCodex(content, onProgress) {
     const result = await runProcess(config.codexExecutable, [
       "exec",
       "--sandbox",
-      config.sandboxMode,
+      effectiveSandbox,
       "--cd",
       activeWorkspace,
       "--skip-git-repo-check",
@@ -392,7 +415,7 @@ async function askCodex(content, onProgress) {
       activeThreadId,
       "-",
     ], {
-      input: prompt,
+      input: Buffer.from(prompt, "utf8"),
       cwd: activeWorkspace,
       onStdoutLine: (line) => {
         try {
@@ -437,6 +460,32 @@ async function askCodex(content, onProgress) {
   }
 }
 
+async function initializeProjectSelection() {
+  const snapshot = await projectContext.refresh();
+  const selected = await projectContext.validateThread(getThread(activeThreadId), snapshot);
+  if (selected) {
+    if (!await fs.stat(selectionPath).then(() => true, () => false)) await selectThread(selected, snapshot);
+    return selected;
+  }
+  const fallback = (await listProjectThreads({ snapshot, limit: 1 }))[0];
+  if (fallback) {
+    await selectThread(fallback, snapshot);
+    log(`selected most recent Project task ${fallback.id}; previous selection was outside Project`);
+    return fallback;
+  }
+  activeThreadId = undefined;
+  log(`Project ${config.project.id} has no Codex task yet; use /new to create one`);
+  return undefined;
+}
+
+await initializeProjectSelection();
+const executor = createExecutor(config.agent.executor, {
+  codex: {
+    createThread: createCodexThread,
+    runTurn: askCodex,
+  },
+});
+
 const channel = createLarkChannel({
   appId: config.appId,
   appSecret,
@@ -445,11 +494,17 @@ const channel = createLarkChannel({
   handshakeTimeoutMs: Number(config.handshakeTimeoutMs) || 20_000,
   policy: {
     dmMode: "allowlist",
-    dmAllowlist: [config.allowedSenderOpenId],
-    groupAllowlist: [],
+    dmAllowlist: config.agent.allowedHumanOpenIds,
+    groupAllowlist: sdkGroupAllowlist(config),
     requireMention: true,
     respondToMentionAll: false,
-    botLoopGuard: { enabled: true, onTrip: "reject" },
+    botLoopGuard: {
+      enabled: true,
+      windowMs: 60_000,
+      maxBotMentions: 5,
+      scope: "chat+sender",
+      onTrip: "reject",
+    },
   },
   safety: {
     dedup: { ttl: 3_600_000, maxEntries: 2000 },
@@ -461,7 +516,7 @@ const channel = createLarkChannel({
   outbound: {
     streamThrottleMs: 800,
     streamThrottleChars: 20,
-    streamInitialText: "⏳ Codex 正在连接当前任务…（完全权限）",
+    streamInitialText: "⏳ Codex 正在连接当前 Project 任务…（权限由分支策略决定）",
     streamMaxElementChars: 10_000,
     ssrfGuard: true,
   },
@@ -521,53 +576,128 @@ async function replyCommand(msg, markdown) {
   await persistCompleted(msg.messageId);
 }
 
+function threadListKey(msg) {
+  return `${msg.chatId}:${msg.senderId}`;
+}
+
+function rememberThreadList(msg, threads) {
+  threadListSelections.set(threadListKey(msg), {
+    threadIds: threads.map(({ id }) => id),
+    expiresAt: Date.now() + 30 * 60_000,
+  });
+  if (threadListSelections.size > 100) {
+    const oldest = threadListSelections.keys().next().value;
+    threadListSelections.delete(oldest);
+  }
+}
+
+async function selectedThreadFromList(msg, index) {
+  const cached = threadListSelections.get(threadListKey(msg));
+  if (cached?.expiresAt > Date.now()) return getThread(cached.threadIds[index]);
+  return (await listProjectThreads())[index];
+}
+
 async function handleCommand(msg, content) {
   const trimmed = content.trim();
   const separator = trimmed.search(/\s/);
   const command = separator < 0 ? trimmed : trimmed.slice(0, separator);
   const argument = separator < 0 ? "" : trimmed.slice(separator).trim();
   if (command === "/threads") {
-    const threads = listRecentThreads();
-    const lines = threads.map((thread, index) => `${index + 1}. ${compactTitle(thread.title)}\n   \`${thread.id}\``);
-    await replyCommand(msg, [
-      "## 最近的 Codex 任务",
-      "",
-      ...lines,
-      "",
-      "发送 `/use 2` 切换到第 2 个任务；发送 `/current` 查看当前绑定。",
-    ].join("\n"));
+    const filter = parseThreadsCommandArgument(argument);
+    if (filter.error) {
+      await replyCommand(msg, filter.error);
+      return true;
+    }
+    const snapshot = await projectContext.refresh();
+    const threads = await listProjectThreads({ branch: filter.branch, snapshot });
+    rememberThreadList(msg, threads);
+    await replyCommand(msg, buildProjectThreadsMarkdown(threads, filter));
     return true;
   }
   if (command === "/status") {
     const thread = getThread(activeThreadId);
-    const snapshot = await getThreadSnapshot(thread);
-    await replyCommand(msg, buildStatusMarkdown(thread, snapshot));
+    const [rolloutSnapshot, projectSnapshot] = await Promise.all([
+      getThreadSnapshot(thread),
+      projectContext.refresh(),
+    ]);
+    const scopedThread = await projectContext.validateThread(thread, projectSnapshot);
+    await replyCommand(msg, buildStatusMarkdown(thread, rolloutSnapshot, scopedThread));
     return true;
   }
   if (command === "/model") {
-    await replyCommand(msg, buildModelMarkdown(getThread(activeThreadId)));
+    const thread = getThread(activeThreadId);
+    const scopedThread = await projectContext.validateThread(thread, await projectContext.refresh());
+    await replyCommand(msg, scopedThread
+      ? buildModelMarkdown(thread)
+      : "当前没有选中 Project 内的 Codex 任务。请先使用 `/threads`、`/use` 或 `/new`。"
+    );
     return true;
   }
   if (command === "/capacity" || command === "/quota") {
     const thread = getThread(activeThreadId);
-    const snapshot = await getThreadSnapshot(thread);
-    await replyCommand(msg, buildCapacityMarkdown(snapshot));
+    const scopedThread = await projectContext.validateThread(thread, await projectContext.refresh());
+    await replyCommand(msg, scopedThread
+      ? buildCapacityMarkdown(await getThreadSnapshot(thread))
+      : "当前没有选中 Project 内的 Codex 任务。请先使用 `/threads`、`/use` 或 `/new`。"
+    );
     return true;
   }
   if (command === "/current") {
     const thread = getThread(activeThreadId);
-    const snapshot = await getThreadSnapshot(thread);
-    await replyCommand(msg, buildCurrentMarkdown(thread, snapshot));
+    const projectSnapshot = await projectContext.refresh();
+    const scopedThread = await projectContext.validateThread(thread, projectSnapshot);
+    await replyCommand(msg, buildCurrentMarkdown(thread, await getThreadSnapshot(thread), scopedThread));
+    return true;
+  }
+  if (command === "/project") {
+    const snapshot = await projectContext.refresh();
+    const [selectedThread, desktopStatus] = await Promise.all([
+      activeProjectThread(snapshot),
+      inspectDesktopProject(config.project, { codexHome }),
+    ]);
+    await replyCommand(msg, buildProjectMarkdown(config, snapshot, selectedThread, desktopStatus));
+    return true;
+  }
+  if (command === "/branches") {
+    await replyCommand(msg, buildBranchesMarkdown(config, await projectContext.refresh()));
+    return true;
+  }
+  if (command === "/worktrees") {
+    const snapshot = await projectContext.refresh();
+    const threads = await listProjectThreads({ snapshot, limit: 500 });
+    await replyCommand(msg, buildWorktreesMarkdown(config, snapshot, threads, activeThreadId));
     return true;
   }
   if (command === "/new") {
+    const request = parseNewCommandArgument(argument);
+    if (request.error) {
+      await replyCommand(msg, request.error);
+      return true;
+    }
+    let snapshot = await projectContext.refresh();
+    const current = await activeProjectThread(snapshot);
+    const targetWorktree = request.branch
+      ? await projectContext.prepareWorktree(request.branch)
+      : current?.worktree || snapshot.worktrees.find(({ branch }) => branch === config.project.defaultBranch) || snapshot.worktrees[0];
+    if (!targetWorktree) {
+      await replyCommand(msg, "Project 内没有可用 worktree；请检查 `project.repoRoot` 与 `allowedWorktreeRoots` 配置。");
+      return true;
+    }
+    const topic = request.topic || (request.branch
+      ? `${request.branch} 任务`
+      : `${config.project.name} 新任务`);
     await channel.reply(msg, {
-      markdown: argument
-        ? `⏳ 正在创建新任务：**${compactTitle(argument, 100)}**`
-        : "⏳ 正在创建新的 Codex 任务…",
+      markdown: [
+        `⏳ 正在创建 Codex 任务：**${compactTitle(topic, 100)}**`,
+        "",
+        `- 分支：\`${targetWorktree.branch || "detached"}\``,
+        `- worktree：\`${targetWorktree.path}\``,
+        `- 权限：\`${projectContext.effectiveSandbox(targetWorktree, config.sandboxMode)}\``,
+      ].join("\n"),
     });
-    const thread = await createCodexThread(argument);
-    await selectThread(thread);
+    const thread = await executor.createThread(topic, undefined, targetWorktree.path);
+    snapshot = await projectContext.refresh();
+    const scopedThread = await selectThread(thread, snapshot);
     // Persist the side effect before replying so a transient reply failure cannot
     // cause the same Feishu delivery to create a second Codex task.
     await persistCompleted(msg.messageId);
@@ -576,9 +706,17 @@ async function handleCommand(msg, content) {
       "",
       `\`${thread.id}\``,
       "",
-      "现在发送的下一条普通消息会进入这个新任务；旧任务仍然保留，可用 `/threads` 切回。",
+      `分支 \`${scopedThread.worktree.branch || "detached"}\` · worktree \`${scopedThread.worktree.path}\``,
+      "",
+      scopedThread.worktree.branch === config.project.defaultBranch && config.project.protectDefaultBranch
+        ? "这是受保护的默认分支任务，只能读取和分析；需要改代码请用 `/new --branch <任务分支> <主题>`。"
+        : "下一条普通消息会进入这个任务；旧任务仍然保留，可用 `/threads` 切回。",
+      "",
+      config.project.desktopProjectId
+        ? "说明：该任务由独立 App Server 创建，当前 Codex Desktop 不会自动把它归入已注册的 Desktop Project；Bridge 的 cwd/worktree 安全边界不受影响。"
+        : "说明：尚未配置 Desktop Project 关联；Bridge 的 cwd/worktree 安全边界不受影响。",
     ].join("\n") });
-    log(`created and selected thread ${thread.id}`);
+    log(`created and selected project thread ${thread.id} in ${scopedThread.worktree.path}`);
     return true;
   }
   if (command === "/use") {
@@ -587,14 +725,25 @@ async function handleCommand(msg, content) {
       return true;
     }
     let thread;
-    if (/^\d+$/.test(argument)) thread = listRecentThreads()[Number(argument) - 1];
+    if (/^\d+$/.test(argument)) thread = await selectedThreadFromList(msg, Number(argument) - 1);
     else if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(argument)) thread = getThread(argument);
     if (!thread) {
-      await replyCommand(msg, "没有找到这个 Codex 任务。请发送 `/threads` 后重新选择。");
+      await replyCommand(msg, "没有在最近的 Project 任务列表中找到该项。请重新发送 `/threads` 后选择。");
       return true;
     }
-    await selectThread(thread);
-    await replyCommand(msg, `已切换到：**${compactTitle(thread.title, 100)}**\n\n后续消息会携带该任务的完整历史继续处理。`);
+    let scopedThread;
+    try { scopedThread = await selectThread(thread); }
+    catch {
+      await replyCommand(msg, "已拒绝切换：该 Codex 任务的 cwd 不属于当前 Project，或任务记录的分支已与 worktree 当前分支不一致。");
+      return true;
+    }
+    await replyCommand(msg, [
+      `已切换到：**${compactTitle(thread.title, 100)}**`,
+      "",
+      `分支 \`${scopedThread.worktree.branch || "detached"}\` · worktree \`${scopedThread.worktree.path}\``,
+      "",
+      "后续消息会携带该任务的完整历史继续处理；bridge 不会执行 git checkout。",
+    ].join("\n"));
     log(`selected thread ${thread.id}`);
     return true;
   }
@@ -602,12 +751,16 @@ async function handleCommand(msg, content) {
     await replyCommand(msg, [
       "## 飞书 Codex 命令",
       "",
+      "- `/project`：查看 Bot 绑定的 Project 与权限边界",
+      "- `/branches`：列出本地/远端 refs 与分支 worktree",
+      "- `/worktrees`：列出 Project 的 worktree、HEAD 与任务数",
       "- `/status`：查看桥接、运行任务、队列和最近进展（不调用模型）",
       "- `/model`：查看当前任务使用的模型和推理强度（不调用模型）",
       "- `/capacity`：查看上下文与账户周期剩余容量（不调用模型）",
-      "- `/new`：创建并切换到新任务",
-      "- `/new 主题`：以指定主题创建并切换到新任务",
-      "- `/threads`：列出最近任务",
+      "- `/new 主题`：在当前 worktree 创建并切换到新任务",
+      "- `/new --branch task/LOGIN-123 主题`：准备独立 worktree 后创建任务",
+      "- `/threads`：只列出当前 Project 的任务",
+      "- `/threads branch task/LOGIN-123`：按分支过滤任务",
       "- `/use 2`：切换到列表中的第 2 个任务",
       "- `/current`：查看当前任务",
       "- `/help`：显示帮助",
@@ -628,7 +781,7 @@ async function streamCodex(msg, content) {
     msg,
     content,
     askCodex: async (prompt, onProgress) => {
-      const answer = await askCodex(prompt, (update) => {
+      const answer = await executor.runTurn(prompt, (update) => {
         updateActiveWork(update);
         onProgress?.(update);
       });
@@ -657,6 +810,14 @@ async function processMessage(msg, content) {
 
   try {
     if (await handleCommand(msg, content)) return true;
+    if (!await activeProjectThread()) {
+      await replyCommand(msg, [
+        `当前没有选中 Project **${config.project.name}** 内的 Codex 任务。`,
+        "",
+        "发送 `/threads` 选择已有任务，或发送 `/new` 在默认 worktree 中创建任务。需要修改代码时建议使用 `/new --branch task/<ID> <主题>`。",
+      ].join("\n"));
+      return true;
+    }
     await streamCodex(msg, content);
     await deliveryOutbox.remove(msg.messageId);
     await persistCompleted(msg.messageId);
@@ -709,7 +870,11 @@ async function processQueuedMessage(msg, content) {
 }
 
 channel.on("message", async (msg) => {
-  if (msg.chatType !== "p2p" || msg.senderId !== config.allowedSenderOpenId || msg.rawContentType !== "text") return;
+  const route = classifyInboundMessage(msg, config, connectedBotOpenId);
+  if (route.kind !== "human") {
+    if (route.kind === "peer") log(`peer message ${msg.messageId} ignored until team task routing is enabled`);
+    return;
+  }
   if (completed.has(msg.messageId)) return;
   const content = String(msg.content || "").trim();
   if (!content) return;
@@ -758,6 +923,10 @@ try {
   await channel.connect();
   channelConnected = true;
   const identity = channel.getBotIdentity();
+  if (config.agent.botOpenId && config.agent.botOpenId !== identity.openId) {
+    throw new Error(`Configured bot open_id does not match the connected Channel identity`);
+  }
+  connectedBotOpenId = identity.openId;
   log(`READY: Channel SDK connected as ${identity.name || identity.openId}`);
   void retryPendingDeliveries();
   await stopPromise;
