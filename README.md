@@ -298,6 +298,11 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 /project
 /branches
 /worktrees
+/new
+/new 项目规划
+/chat
+/chat 临时问题
+/endchat
 /threads
 /threads branch task/LOGIN-123
 /use 2
@@ -343,6 +348,18 @@ Copy-Item .\bridge.config.example.json .\bridge.config.json
 Bridge Project 与 Codex Desktop Project 是两个对象：前者负责执行和安全，后者只负责 Desktop 目录/任务分组。当前独立 Codex App Server 的 `thread/start` 不接受 `projectId`，所以 `/new` 不会自动进入 Desktop Project 分组，但仍按真实 cwd 保存在本机并受 Bridge Project 校验。
 
 ## Agent 事件与可靠性
+
+### 临时异步 Chat
+
+- `/chat` 或 `/chat 主题`：创建临时 Codex Chat，并记住当前原任务。
+- 临时 Chat 与原任务使用不同的执行队列，因此原任务正在运行时也可以创建 Chat、继续提问；同一个任务中的多条消息仍按顺序处理。
+- `/endchat`（别名 `/end`）：立即把后续消息路由回原任务及其完整历史，不会取消已经提交到临时 Chat 的回合；这些回合完成后仍会更新自己的飞书卡片。
+- 临时 Chat 会保留在 Codex 任务列表中，但 `/new` 和 `/use` 在临时模式中会要求先执行 `/endchat`，避免意外覆盖返回位置。
+- 临时 Chat 的返回位置会持久化；桥接重启后仍可使用 `/endchat` 回到原任务。
+
+`/threads` 仍只列出当前 Bridge Project 内通过 cwd/worktree 校验的 Codex 任务；`/use 2` 会把后续飞书消息切换到列表中的第 2 个任务。切换后，Codex 会继续该任务已有的完整聊天历史。
+
+### Agent 协议
 
 Agent 协议 v2 包含事件/任务 ID、唯一群、规范化 GitHub 仓库、发送/接收 Agent、requester/executor、TTL、hop 和有界 payload：
 

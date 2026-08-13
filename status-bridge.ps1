@@ -17,6 +17,8 @@ if (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf) {
         $supervisorState = "running:$supervisorPid"
     }
 }
+$bridgeName = if ($mode -eq 'session-relay') { 'session-relay.mjs' } else { 'channel-bridge.mjs' }
+$bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $bridgeName))
 
 if (-not (Test-Path -LiteralPath $pidPath)) {
     Write-Output "Bridge status: stopped; supervisor=$supervisorState"
@@ -24,7 +26,9 @@ if (-not (Test-Path -LiteralPath $pidPath)) {
 }
 
 $bridgePid = [int](Get-Content -Raw -LiteralPath $pidPath)
-if (-not (Get-Process -Id $bridgePid -ErrorAction SilentlyContinue)) {
+$process = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgePid" -ErrorAction SilentlyContinue
+$isBridge = $process -and $process.Name -eq 'node.exe' -and [string]$process.CommandLine -like "*$bridge*"
+if (-not $isBridge) {
     Write-Output "Bridge status: stopped (stale PID $bridgePid)"
     exit 1
 }

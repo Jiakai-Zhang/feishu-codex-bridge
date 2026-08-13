@@ -5,6 +5,7 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw 'bridge.config.json not found.'
 }
 $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+$mode = if ([string]::IsNullOrWhiteSpace([string]$config.mode)) { 'project-agent' } else { [string]$config.mode }
 $runtimeDir = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 $pidPath = Join-Path $runtimeDir 'bridge.pid'
 $stopPath = Join-Path $runtimeDir 'stop.request'
@@ -15,6 +16,8 @@ $supervisorPid = $null
 if (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf) {
     $supervisorPid = [int](Get-Content -Raw -LiteralPath $supervisorPidPath)
 }
+$bridgeName = if ($mode -eq 'session-relay') { 'session-relay.mjs' } else { 'channel-bridge.mjs' }
+$bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $bridgeName))
 
 if (-not (Test-Path -LiteralPath $pidPath)) {
     if ($supervisorPid -and (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
@@ -27,12 +30,14 @@ if (-not (Test-Path -LiteralPath $pidPath)) {
 }
 
 $bridgePid = [int](Get-Content -Raw -LiteralPath $pidPath)
-$process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
-if (-not $process) {
+$processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgePid" -ErrorAction SilentlyContinue
+$isBridge = $processInfo -and $processInfo.Name -eq 'node.exe' -and [string]$processInfo.CommandLine -like "*$bridge*"
+if (-not $isBridge) {
     Remove-Item -LiteralPath $pidPath -Force
-    Write-Output 'Bridge was not running; removed the stale PID file.'
+    Write-Output 'Bridge was not running; removed the stale PID file without touching the unrelated process.'
     exit 0
 }
+$process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
 
 New-Item -ItemType File -Force -Path $stopPath | Out-Null
 if ($supervisorPid) {
