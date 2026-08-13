@@ -22,7 +22,7 @@
 Beta 版本必须使用明确的 release tag `v0.1.0-beta.1`，不要从未知分支复制文件：
 
 ```powershell
-git clone --branch v0.1.0-beta.1 --depth 1 https://github.com/Jiakai-Zhang/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.1.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```

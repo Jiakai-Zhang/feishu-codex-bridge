@@ -13,7 +13,7 @@
 最短用法：
 
 ```text
-请按照 https://github.com/Jiakai-Zhang/feishu-codex-bridge/releases/tag/v0.1.0-beta.1 帮我安装部署这个应用。
+请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.1.0-beta.1 帮我安装部署这个应用。
 ```
 
 仓库根目录 `AGENTS.md` 会把安装代理引导到可验证的 `docs/INSTALL_AGENT.md` 流程，并在飞书应用发布、OAuth、App Secret 安全输入和 Codex Desktop 完整重启等人工节点停下来。安装脚本会固定依赖版本、生成本机配置、安装 `$feishu-session-bind` Skill，并用 `doctor.ps1` 验证结果。

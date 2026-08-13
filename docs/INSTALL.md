@@ -34,12 +34,14 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.1.0-beta.1 --depth 1 https://github.com/Jiakai-Zhang/feishu-codex-bridge.git
+git clone --branch v0.1.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
 ```
 
 仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
+
+当前 Beta release 暂由贡献者 fork 托管，并通过上游草稿 PR 合并到 `Jiakai-Zhang/feishu-codex-bridge`；固定 tag 的内容与该 PR 的已验证提交一致。
 
 ## 3. 创建并发布专用飞书应用
 
