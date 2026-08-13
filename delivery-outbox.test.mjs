@@ -19,8 +19,67 @@ test("persists a completed answer before delivery and removes it after success",
     assert.equal(outbox.size(), 1);
     const reopened = await DeliveryOutbox.open(file);
     assert.equal(reopened.list()[0].markdown, "answer");
+    assert.equal(reopened.list()[0].deliveryId, "om_1");
+    assert.equal(reopened.list()[0].kind, "reply");
     await reopened.remove("om_1");
     assert.equal((await DeliveryOutbox.open(file)).size(), 0);
+  });
+});
+
+test("persists proactive rich-text sends under a synthetic turn delivery id", async () => {
+  await withOutbox(async (file) => {
+    const outbox = await DeliveryOutbox.open(file);
+    await outbox.put({
+      kind: "send",
+      deliveryId: "codex-turn:thread-1:turn-1",
+      chatId: "oc_1",
+      threadId: "thread-1",
+      post: { zh_cn: { title: "Codex 回复", content: [[{ tag: "text", text: "body" }]] } },
+      createdAt: 20,
+    });
+    const record = (await DeliveryOutbox.open(file)).list()[0];
+    assert.equal(record.kind, "send");
+    assert.equal(record.deliveryId, "codex-turn:thread-1:turn-1");
+    assert.equal(record.messageId, undefined);
+    assert.equal(record.post.zh_cn.title, "Codex 回复");
+  });
+});
+
+test("persists rich-text reply payloads with uploaded images", async () => {
+  await withOutbox(async (file) => {
+    const outbox = await DeliveryOutbox.open(file);
+    await outbox.put({
+      deliveryId: "om_image_reply",
+      messageId: "om_image_reply",
+      chatId: "oc_1",
+      post: { zh_cn: { content: [[{ tag: "img", image_key: "img_answer" }]] } },
+    });
+    const record = (await DeliveryOutbox.open(file)).list()[0];
+    assert.equal(record.kind, "reply");
+    assert.equal(record.post.zh_cn.content[0][0].image_key, "img_answer");
+  });
+});
+
+test("persists only reply-scoped public status delivery bypasses", async () => {
+  await withOutbox(async (file) => {
+    const outbox = await DeliveryOutbox.open(file);
+    await outbox.put({
+      deliveryId: "steer:om_1",
+      messageId: "om_1",
+      chatId: "oc_1",
+      markdown: "steer accepted",
+      publicStatus: true,
+    });
+    await outbox.put({
+      kind: "send",
+      deliveryId: "codex-turn:thread:turn",
+      chatId: "oc_1",
+      post: { zh_cn: { content: [[{ tag: "text", text: "answer" }]] } },
+      publicStatus: true,
+    });
+    const [reply, send] = (await DeliveryOutbox.open(file)).list();
+    assert.equal(reply.publicStatus, true);
+    assert.equal(send.publicStatus, false);
   });
 });
 

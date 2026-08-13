@@ -206,7 +206,9 @@ export class KnowledgeHub {
         break;
       } catch (error) {
         if (error?.code !== "EEXIST") throw error;
-        const stale = await fs.stat(files.lock).then((stat) => this.now() - stat.mtimeMs > 30_000, () => false);
+        // Lock age must use the filesystem wall clock. `this.now` is an injectable
+        // metadata clock and may intentionally be fixed or offset in tests.
+        const stale = await fs.stat(files.lock).then((stat) => Date.now() - stat.mtimeMs > 30_000, () => false);
         if (stale) await fs.unlink(files.lock).catch(() => {});
         await new Promise((resolve) => setTimeout(resolve, 20));
       }

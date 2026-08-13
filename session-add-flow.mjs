@@ -1,0 +1,192 @@
+function selectionNumber(value) {
+  const match = /^\s*(\d+)\s*$/.exec(String(value || ""));
+  return match ? Number(match[1]) : undefined;
+}
+
+function ageLabel(updatedAtMs, nowMs) {
+  const ageMs = Math.max(0, nowMs - Number(updatedAtMs || 0));
+  if (ageMs < 60 * 60_000) return `${Math.max(1, Math.round(ageMs / 60_000))} 分钟前`;
+  if (ageMs < 24 * 60 * 60_000) return `${Math.round(ageMs / 3_600_000)} 小时前`;
+  return `${Math.round(ageMs / 86_400_000)} 天前`;
+}
+
+function projectMenu(catalog) {
+  const lines = [
+    "### 创建 Session 群",
+    "",
+    "回复编号选择任务归属：",
+    "",
+    "1. **独立**",
+  ];
+  catalog.projects.forEach((project, index) => lines.push(`${index + 2}. ${project.name}`));
+  lines.push("", "发送 `/cancel` 取消。");
+  return lines.join("\n");
+}
+
+function sessionMenu(state, nowMs) {
+  const { selection, sessions, pageSize } = state;
+  const independent = selection.kind === "independent";
+  const pageCount = Math.max(1, Math.ceil(sessions.length / pageSize));
+  const page = Math.min(pageCount - 1, Math.max(0, state.page || 0));
+  state.page = page;
+  const start = page * pageSize;
+  const visible = sessions.slice(start, start + pageSize);
+  const lines = [
+    `### ${selection.name}：选择 Codex 任务`,
+    "",
+  ];
+  if (independent && page === 0) lines.push("1. **新建独立任务**", "");
+  if (visible.length === 0 && !independent) {
+    lines.push("该 Project 暂无可列出的原生任务。请先在 Codex Desktop 的这个 Project 中创建任务，再重新发送 `/add`。");
+  } else {
+    visible.forEach((session, localIndex) => {
+      const sessionIndex = start + localIndex;
+      const number = sessionIndex + (independent ? 2 : 1);
+      const bound = session.binding ? " · 已绑定" : "";
+      lines.push(`${number}. ${session.displayTitle}（${ageLabel(session.updatedAtMs, nowMs)}${bound}）`);
+    });
+  }
+  if (pageCount > 1) {
+    lines.push("", `第 ${page + 1}/${pageCount} 页；回复“下一页”或“上一页”翻页。`);
+  }
+  lines.push("", "回复任务编号，或发送 `/cancel` 取消。");
+  return lines.join("\n");
+}
+
+function successReply(result) {
+  if (result.alreadyBound) {
+    return [
+      "### 已经绑定",
+      "",
+      "该 Codex 任务已经有固定飞书群，没有重复创建。",
+    ].join("\n");
+  }
+  return [
+    "### Session 群已创建",
+    "",
+    `- 群名：${result.groupName}`,
+    `- 标签：${result.feedGroupName}`,
+    "- 绑定：一个群固定对应一个 Codex 任务",
+    "",
+    "Bridge 将自动重载；随后可在新群中直接发送 Prompt，无需 @Bot。",
+  ].join("\n");
+}
+
+export class SessionAddFlow {
+  constructor({
+    loadCatalog,
+    provision,
+    createIndependent,
+    now = () => Date.now(),
+    ttlMs = 15 * 60_000,
+    pageSize = 20,
+  }) {
+    this.loadCatalog = loadCatalog;
+    this.provision = provision;
+    this.createIndependent = createIndependent;
+    this.now = now;
+    this.ttlMs = ttlMs;
+    this.pageSize = pageSize;
+    this.states = new Map();
+  }
+
+  has(conversationId) {
+    const state = this.states.get(conversationId);
+    if (!state) return false;
+    if (this.now() - state.updatedAtMs <= this.ttlMs) return true;
+    this.states.delete(conversationId);
+    return false;
+  }
+
+  cancel(conversationId) {
+    return this.states.delete(conversationId);
+  }
+
+  async begin(conversationId) {
+    const catalog = await this.loadCatalog();
+    this.states.set(conversationId, {
+      step: "project",
+      catalog,
+      updatedAtMs: this.now(),
+    });
+    return { handled: true, reply: projectMenu(catalog) };
+  }
+
+  async handle({ conversationId, text }) {
+    const content = String(text || "").trim();
+    if (/^\/add(?:@[^\s]+)?$/i.test(content)) return this.begin(conversationId);
+    if (/^\/cancel(?:@[^\s]+)?$/i.test(content)) {
+      if (!this.has(conversationId)) return { handled: false };
+      this.states.delete(conversationId);
+      return { handled: true, reply: "已取消创建 Session 群。" };
+    }
+    if (!this.has(conversationId)) return { handled: false };
+    const state = this.states.get(conversationId);
+    state.updatedAtMs = this.now();
+
+    if (state.step === "project") {
+      const number = selectionNumber(content);
+      if (!number || number > state.catalog.projects.length + 1) {
+        return { handled: true, reply: `请输入 1-${state.catalog.projects.length + 1} 的 Project 编号，或发送 \`/cancel\`。` };
+      }
+      const selection = number === 1
+        ? { kind: "independent", id: "independent", name: "独立", sessions: state.catalog.independent }
+        : { ...state.catalog.projects[number - 2], kind: "project" };
+      Object.assign(state, {
+        step: "session",
+        selection,
+        sessions: [...selection.sessions],
+        page: 0,
+        pageSize: this.pageSize,
+      });
+      return { handled: true, reply: sessionMenu(state, this.now()) };
+    }
+
+    if (state.step === "session") {
+      if (content === "下一页" || content.toLowerCase() === "next") {
+        state.page += 1;
+        return { handled: true, reply: sessionMenu(state, this.now()) };
+      }
+      if (content === "上一页" || content.toLowerCase() === "prev") {
+        state.page -= 1;
+        return { handled: true, reply: sessionMenu(state, this.now()) };
+      }
+      const number = selectionNumber(content);
+      const independent = state.selection.kind === "independent";
+      if (independent && number === 1) {
+        state.step = "new-name";
+        return {
+          handled: true,
+          reply: "请输入新独立任务的名称（下一步会再询问本机工作目录）。",
+        };
+      }
+      const index = number == null ? -1 : number - (independent ? 2 : 1);
+      const session = state.sessions[index];
+      if (!session) {
+        return { handled: true, reply: "请输入列表中的任务编号，或发送 `/cancel`。" };
+      }
+      const result = await this.provision(session.id);
+      this.states.delete(conversationId);
+      return { handled: true, reply: successReply(result), result, restart: !result.alreadyBound };
+    }
+
+    if (state.step === "new-name") {
+      if (!content || content.length > 100 || content.startsWith("/")) {
+        return { handled: true, reply: "任务名称需要是 1-100 个字符，且不能以 `/` 开头。" };
+      }
+      state.taskName = content;
+      state.step = "new-cwd";
+      return { handled: true, reply: "请输入新独立任务使用的本机绝对工作目录。" };
+    }
+
+    if (state.step === "new-cwd") {
+      const session = await this.createIndependent({ name: state.taskName, cwd: content });
+      const result = await this.provision(session.id, { session });
+      this.states.delete(conversationId);
+      return { handled: true, reply: successReply(result), result, restart: !result.alreadyBound };
+    }
+
+    this.states.delete(conversationId);
+    return { handled: true, reply: "创建流程状态已失效，请重新发送 `/add`。" };
+  }
+}

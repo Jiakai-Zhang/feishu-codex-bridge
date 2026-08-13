@@ -7,12 +7,20 @@ bridge.config.json
 work/
 *.log
 *.pid
+stop.request
+restart.request
+supervisor-stop.request
 channel-secret.dpapi
 pending-deliveries.json
 pending-agent-events.json
 audit.jsonl
 task-leases.json
 completed.json
+session-relay-completed.json
+session-relay-pending-deliveries.json
+session-relay-input-ledger.json
+session-relay-prompt-queue.json
+session-binding-requests/
 selected-thread.json
 selected-thread.*.json
 team-tasks.json
@@ -20,3 +28,5 @@ turn-*/
 new-thread-*/
 .agent/
 collaboration-inbox/
+feishu-app-setup.png
+feishu-oauth.png

@@ -1,77 +1,26 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
+  "mode": "session-relay",
   "appId": "cli_your_feishu_app_id",
-  "threadId": "",
   "workspace": "C:\\path\\to\\bridge-runtime-root",
   "agent": {
-    "id": "cryouni-frontend-codex",
-    "displayName": "CryoUNI Frontend Codex",
-    "ownerOpenId": "ou_your_feishu_open_id",
-    "botOpenId": "ou_your_bot_open_id",
-    "allowedHumanOpenIds": [
-      "ou_your_feishu_open_id"
-    ],
-    "executor": {
-      "type": "codex"
-    }
+    "ownerOpenId": "ou_your_feishu_open_id"
   },
-  "project": {
-    "id": "cryouni-frontend",
-    "name": "CryoUNI Frontend",
-    "desktopProjectId": "paste-the-id-reported-by-codex-desktop",
-    "desktopProjectName": "CryoUNI Frontend",
-    "repoRoot": "G:\\Projects\\CryoUNI\\frontend",
-    "worktreeRoot": "G:\\Worktrees\\cryouni-frontend",
-    "allowedWorktreeRoots": [
-      "G:\\Projects\\CryoUNI\\frontend",
-      "G:\\Worktrees\\cryouni-frontend"
-    ],
-    "defaultBranch": "main",
-    "protectDefaultBranch": true,
-    "allowedRemotes": [
-      "origin"
-    ]
+  "sessionRelay": {
+    "nameSync": "none",
+    "appServerUrl": "ws://127.0.0.1:47321/rpc",
+    "displayTimeZone": "Asia/Shanghai",
+    "promptPreviewChars": 4000,
+    "feedGroup": {
+      "enabled": true,
+      "agentName": "Codex"
+    },
+    "bindings": []
   },
-  "collaboration": {
-    "enabled": false,
-    "groupChatId": "oc_your_team_group_chat_id",
-    "githubRepository": "your-github-org/your-shared-repository",
-    "remote": "origin",
-    "groupHumanMessageMode": "owner",
-    "receiveMode": "recommend",
-    "approverOpenIds": [
-      "ou_your_feishu_open_id"
-    ],
-    "trustedPeers": [
-      {
-        "agentId": "teammate-codex",
-        "displayName": "Teammate Codex",
-        "humanOpenId": "ou_teammate_human_open_id",
-        "humanDisplayName": "Teammate",
-        "botOpenId": "ou_teammate_bot_open_id",
-        "enabled": true
-      }
-    ],
-    "maxHops": 2,
-    "eventTtlMs": 900000,
-    "taskLeaseMs": 43200000
-  },
-  "teamHub": {
-    "enabled": false,
-    "path": "C:\\path\\to\\shared-team-hub",
-    "writerOpenIds": [
-      "ou_your_feishu_open_id"
-    ],
-    "repositoryIds": [
-      "cryouni-frontend"
-    ],
-    "maxContextChars": 24000
-  },
-  "nodeExecutable": "C:\\path\\to\\node.exe",
-  "larkCliEntry": "C:\\path\\to\\node_modules\\@larksuite\\cli\\scripts\\run.js",
+  "nodeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+  "larkCliEntry": ".\\node_modules\\@larksuite\\cli\\scripts\\run.js",
   "codexExecutable": "C:\\path\\to\\codex.exe",
   "sandboxMode": "workspace-write",
-  "streamSegmentMs": 480000,
   "completionPollMs": 30000,
   "completionStableMs": 15000,
   "httpTimeoutMs": 20000,

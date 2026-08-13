@@ -1,11 +1,17 @@
 {
   "name": "feishu-codex-channel-bridge",
+  "version": "0.1.0-beta.1",
   "private": true,
+  "description": "Windows Feishu relay for local Codex Desktop tasks",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
-    "@larksuite/channel": "0.4.1"
+    "@larksuite/channel": "0.4.1",
+    "@larksuite/cli": "1.0.86"
   }
 }

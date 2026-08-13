@@ -1,14 +1,27 @@
 import { promises as fs } from "node:fs";
 
 function normalizeRecord(record) {
-  if (!record || typeof record !== "object" || typeof record.messageId !== "string") {
-    throw new TypeError("Delivery record requires a messageId");
+  if (!record || typeof record !== "object") {
+    throw new TypeError("Delivery record must be an object");
+  }
+  const kind = record.kind === "send" ? "send" : "reply";
+  const deliveryId = String(record.deliveryId || record.messageId || "");
+  if (!deliveryId) throw new TypeError("Delivery record requires a deliveryId");
+  const messageId = record.messageId ? String(record.messageId) : undefined;
+  const post = record.post && typeof record.post === "object" ? record.post : undefined;
+  if (kind === "reply" && !messageId) throw new TypeError("Reply delivery requires a messageId");
+  if (kind === "send" && !post) {
+    throw new TypeError("Send delivery requires a post payload");
   }
   return {
-    messageId: record.messageId,
+    deliveryId,
+    kind,
+    messageId,
     chatId: String(record.chatId || ""),
     threadId: record.threadId ? String(record.threadId) : undefined,
     markdown: String(record.markdown || ""),
+    post: post ? structuredClone(post) : undefined,
+    publicStatus: kind === "reply" && record.publicStatus === true,
     createdAt: Number(record.createdAt) || Date.now(),
     attempts: Math.max(0, Number(record.attempts) || 0),
     nextAttemptAt: Math.max(0, Number(record.nextAttemptAt) || 0),
@@ -21,7 +34,7 @@ export class DeliveryOutbox {
     this.filePath = filePath;
     this.records = new Map(records.map((record) => {
       const normalized = normalizeRecord(record);
-      return [normalized.messageId, normalized];
+      return [normalized.deliveryId, normalized];
     }));
     this.writeTail = Promise.resolve();
   }
@@ -49,34 +62,34 @@ export class DeliveryOutbox {
     return this.records.size;
   }
 
-  has(messageId) {
-    return this.records.has(messageId);
+  has(deliveryId) {
+    return this.records.has(deliveryId);
   }
 
   async put(record) {
     const normalized = normalizeRecord(record);
-    const existing = this.records.get(normalized.messageId);
-    this.records.set(normalized.messageId, existing
+    const existing = this.records.get(normalized.deliveryId);
+    this.records.set(normalized.deliveryId, existing
       ? { ...existing, ...normalized, attempts: existing.attempts, nextAttemptAt: existing.nextAttemptAt }
       : normalized);
     await this.persist();
   }
 
-  async remove(messageId) {
-    if (!this.records.delete(messageId)) return;
+  async remove(deliveryId) {
+    if (!this.records.delete(deliveryId)) return;
     await this.persist();
   }
 
-  async markFailure(messageId, error, {
+  async markFailure(deliveryId, error, {
     now = Date.now(),
     baseDelayMs = 60_000,
     maxDelayMs = 15 * 60_000,
   } = {}) {
-    const current = this.records.get(messageId);
+    const current = this.records.get(deliveryId);
     if (!current) return;
     const attempts = current.attempts + 1;
     const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.min(attempts - 1, 6));
-    this.records.set(messageId, {
+    this.records.set(deliveryId, {
       ...current,
       attempts,
       nextAttemptAt: now + delay,
