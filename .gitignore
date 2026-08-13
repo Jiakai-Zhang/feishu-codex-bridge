@@ -20,6 +20,7 @@ session-relay-completed.json
 session-relay-pending-deliveries.json
 session-relay-input-ledger.json
 session-relay-prompt-queue.json
+session-relay-settings.json
 session-binding-requests/
 selected-thread.json
 selected-thread.*.json

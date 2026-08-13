@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  executeGlobalSettingsCommand,
   executeSessionCommand,
   formatGoalStatus,
+  formatGlobalSessionSettings,
   formatModelView,
   formatPromptQueue,
+  formatSessionSettings,
   formatSessionStatus,
   parseQueueAction,
   parseSessionCommand,
+  parseSettingsAction,
 } from "./session-relay-commands.mjs";
 
 test("recognizes only Bridge-owned slash commands and leaves unknown slash text as a prompt", () => {
@@ -19,9 +23,16 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   });
   assert.deepEqual(parseSessionCommand("/stop@relay_bot"), { name: "stop", args: "", raw: "/stop@relay_bot" });
   assert.deepEqual(parseSessionCommand("/queue run tests"), { name: "queue", args: "run tests", raw: "/queue run tests" });
+  assert.deepEqual(parseSessionCommand("/settings progress on"), {
+    name: "settings",
+    args: "progress on",
+    raw: "/settings progress on",
+  });
   assert.deepEqual(parseQueueAction("run tests"), { action: "enqueue", text: "run tests" });
   assert.deepEqual(parseQueueAction("remove 2"), { action: "remove", position: 2 });
   assert.deepEqual(parseQueueAction("-- clear the cache"), { action: "enqueue", text: "clear the cache" });
+  assert.deepEqual(parseSettingsAction("input queue"), { action: "input", value: "queue" });
+  assert.deepEqual(parseSettingsAction("thinking on"), { action: "progress", value: true });
   assert.equal(parseSessionCommand("/review this change"), undefined);
   assert.equal(parseSessionCommand("please /stop"), undefined);
 });
@@ -39,7 +50,10 @@ test("formats status, model, and Goal state without exposing reasoning or local 
     },
     tokenUsage: { total: { totalTokens: 12345 } },
     goal: { status: "paused", tokensUsed: 100 },
-  }, { queueEntries: [{ text: "run all tests" }] });
+  }, {
+    queueEntries: [{ text: "run all tests" }],
+    relaySettings: { inputMode: "queue", publicProgress: true },
+  });
   assert.match(status, /正在回答/);
   assert.match(status, /等待：用户输入/);
   assert.match(status, /gpt-5\.6-sol/);
@@ -47,6 +61,8 @@ test("formats status, model, and Goal state without exposing reasoning or local 
   assert.match(status, /Plan/);
   assert.match(status, /下一轮队列：1 条/);
   assert.match(status, /下一条：run all tests/);
+  assert.match(status, /普通消息：排队新 Turn/);
+  assert.match(status, /公开进度：开启/);
   assert.equal(status.includes("C:\\"), false);
 
   const model = formatModelView({
@@ -82,6 +98,15 @@ test("formats status, model, and Goal state without exposing reasoning or local 
   assert.match(queue, /等待：2 条/);
   assert.match(queue, /当前回答完成/);
   assert.ok(queue.indexOf("first queued prompt") < queue.indexOf("second queued prompt"));
+
+  const relaySettings = formatSessionSettings({ inputMode: "steer", publicProgress: false });
+  assert.match(relaySettings, /调整当前回答（steer）/);
+  assert.match(relaySettings, /公开进度：关闭/);
+  assert.match(relaySettings, /非隐藏思维链/);
+
+  const globalSettings = formatGlobalSessionSettings({ inputMode: "queue", publicProgress: true });
+  assert.match(globalSettings, /新绑定默认设置/);
+  assert.match(globalSettings, /已有绑定群不会随全局默认变化/);
 });
 
 test("routes stop, model, plan, and Goal commands to native controller operations", async () => {
@@ -149,4 +174,60 @@ test("queues, lists, removes, and clears prompts through the persistent queue co
   entries.push({ text: "one" }, { text: "two" });
   assert.match(await executeSessionCommand(parseSessionCommand("/queue clear"), context), /已删除 2 条/);
   assert.equal(entries.length, 0);
+});
+
+test("views, updates, and resets persistent Session relay settings", async () => {
+  const records = new Map();
+  const defaults = { inputMode: "steer", publicProgress: false };
+  const settingsStore = {
+    get: (thread) => ({ ...defaults, ...(records.get(thread) || {}) }),
+    update: async (thread, patch) => {
+      records.set(thread, { ...defaults, ...(records.get(thread) || {}), ...patch });
+      return settingsStore.get(thread);
+    },
+    reset: async (thread) => {
+      records.delete(thread);
+      return settingsStore.get(thread);
+    },
+  };
+  const context = {
+    controller: { getStatus: async () => ({ connected: true, status: { type: "idle" }, settings: {} }) },
+    threadId: "thread-id",
+    settingsStore,
+  };
+
+  assert.match(await executeSessionCommand(parseSessionCommand("/settings"), context), /调整当前回答/);
+  assert.match(await executeSessionCommand(parseSessionCommand("/settings input queue"), context), /排队新 Turn/);
+  assert.match(await executeSessionCommand(parseSessionCommand("/settings progress on"), context), /公开进度：开启/);
+  assert.deepEqual(settingsStore.get("thread-id"), { inputMode: "queue", publicProgress: true });
+  assert.match(await executeSessionCommand(parseSessionCommand("/settings reset"), context), /公开进度：关闭/);
+  assert.deepEqual(settingsStore.get("thread-id"), defaults);
+});
+
+test("manages new-binding defaults through the global settings command", async () => {
+  let defaults = { inputMode: "queue", publicProgress: true };
+  const settingsStore = {
+    getDefaults: () => ({ ...defaults }),
+    updateDefaults: async (patch) => {
+      defaults = { ...defaults, ...patch };
+      return { ...defaults };
+    },
+    resetDefaults: async () => {
+      defaults = { inputMode: "queue", publicProgress: true };
+      return { ...defaults };
+    },
+  };
+
+  assert.match(
+    await executeGlobalSettingsCommand(parseSessionCommand("/settings"), { settingsStore }),
+    /新绑定默认设置/,
+  );
+  assert.match(
+    await executeGlobalSettingsCommand(parseSessionCommand("/settings input steer"), { settingsStore }),
+    /调整当前回答/,
+  );
+  await executeGlobalSettingsCommand(parseSessionCommand("/settings progress off"), { settingsStore });
+  assert.deepEqual(defaults, { inputMode: "steer", publicProgress: false });
+  await executeGlobalSettingsCommand(parseSessionCommand("/settings reset"), { settingsStore });
+  assert.deepEqual(defaults, { inputMode: "queue", publicProgress: true });
 });

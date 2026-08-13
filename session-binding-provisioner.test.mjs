@@ -33,7 +33,14 @@ function fixture({ bindings = [] } = {}) {
     },
     ownerOpenId: "ou_owner",
     verifyGroup: async ({ binding }) => { calls.push(["verify", binding.groupChatId]); },
-    sendWelcome: async ({ chatId }) => { calls.push(["welcome", chatId]); },
+    settingsStore: {
+      initialize: async (threadId) => {
+        calls.push(["settings", threadId]);
+        return { created: true, settings: { inputMode: "queue", publicProgress: true } };
+      },
+      remove: async (threadId) => { calls.push(["settings-remove", threadId]); },
+    },
+    sendWelcome: async ({ chatId, settings }) => { calls.push(["welcome", chatId, settings]); },
   });
   return { provisioner, calls };
 }
@@ -46,8 +53,9 @@ test("creates, verifies, labels, persists, and welcomes a session group in order
   assert.equal(result.groupName, "Alpha/Fix login");
   assert.equal(result.feedGroupName, "HOST-Codex");
   assert.deepEqual(calls.map(([name]) => name), [
-    "label-ready", "create", "verify", "label", "persist", "welcome",
+    "label-ready", "create", "verify", "label", "settings", "persist", "welcome",
   ]);
+  assert.deepEqual(calls.at(-1)[2], { inputMode: "queue", publicProgress: true });
 });
 
 test("is idempotent when a task is already bound", async () => {
@@ -70,4 +78,27 @@ test("does not persist a group whose Feed label could not be applied", async () 
     (error) => error?.code === "created_group_tag_failed",
   );
   assert.equal(calls.some(([name]) => name === "persist"), false);
+});
+
+test("does not persist a binding when its inherited defaults cannot be saved", async () => {
+  const { provisioner, calls } = fixture();
+  provisioner.settingsStore.initialize = async () => { throw new Error("disk unavailable"); };
+
+  await assert.rejects(
+    provisioner.provision("thread-a"),
+    (error) => error?.code === "settings_persist_failed",
+  );
+  assert.equal(calls.some(([name]) => name === "persist"), false);
+  assert.equal(calls.some(([name]) => name === "welcome"), false);
+});
+
+test("removes a newly seeded settings snapshot when binding persistence fails", async () => {
+  const { provisioner, calls } = fixture();
+  provisioner.registry.add = async () => { throw new Error("config write failed"); };
+
+  await assert.rejects(
+    provisioner.provision("thread-a"),
+    (error) => error?.code === "binding_persist_failed",
+  );
+  assert.equal(calls.some(([name]) => name === "settings-remove"), true);
 });

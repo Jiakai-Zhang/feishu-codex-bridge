@@ -19,10 +19,10 @@
 %LOCALAPPDATA%\FeishuCodexBridge\app
 ```
 
-Beta 版本必须使用明确的 release tag `v0.1.0-beta.1`，不要从未知分支复制文件：
+Beta 版本必须使用明确的 release tag `v0.2.0-beta.1`，不要从未知分支复制文件：
 
 ```powershell
-git clone --branch v0.1.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.2.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -135,3 +135,17 @@ Desktop 重启后再执行一次：
 2. 分别从飞书群和 Codex Desktop 发送 Prompt；确认两端进入同一任务，最终回答均返回群。
 
 只有上述验证成功才报告部署完成。报告中列出版本、Bridge connected 状态、绑定数量和仍需注意的 Beta 限制，不列出任何身份标识或绝对任务路径。
+
+## 7. 升级已有安装
+
+用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不要创建或修改飞书应用，也不要重新索取 App Secret。若工作树有改动，停止并请用户先保存；不得 reset、clean、stash 或覆盖。
+
+已有 `update.ps1` 时，只运行固定目标版本：
+
+```powershell
+.\update.ps1 -Version <目标 release tag>
+```
+
+若从不含升级器的 `v0.1.0-beta.1` 首次升级到 `v0.2.0-beta.1`，按照 `docs/INSTALL.md#更新` 从该固定 tag 的 raw URL 下载 `update.ps1` 到系统临时目录，并用 `-InstallRoot` 指向现有安装目录。不要从 `main` 或未固定分支下载脚本。
+
+升级器负责停止/恢复 Bridge、创建本机恢复备份、切换 tag、运行 `npm ci`、保留原配置和 DPAPI 密文、更新 Skill，并在失败时回滚。成功后核对 `git describe --tags --exact-match`、`status-bridge.ps1` 与 `doctor.ps1 -RequireRunning`；只报告版本和检查结论，不输出恢复目录、配置、身份标识或任务路径。只有目标 release notes 明确要求时才让用户完整重启 Codex Desktop。

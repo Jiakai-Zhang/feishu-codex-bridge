@@ -4,6 +4,7 @@ import {
   buildExternalTurnPost,
   buildFinalAnswerReplyPost,
   buildGoalTurnPost,
+  buildSessionProgressPost,
   CodexSessionObserver,
   CodexTurnCollector,
   externalTurnDeliveryId,
@@ -236,6 +237,102 @@ test("builds a Goal progress post without exposing reasoning or tool events", ()
   assert.match(serialized, /最终结果/);
   assert.match(serialized, /tests passed/);
   assert.match(serialized, /12,345/);
+});
+
+test("formats public commentary as numbered progress with only a timestamp footer", () => {
+  const post = buildSessionProgressPost({
+    text: "正在检查测试结果。",
+    sequence: 3,
+    createdAtMs: Date.UTC(2026, 7, 13, 4, 5, 6),
+    timeZone: "Asia/Shanghai",
+  });
+  assert.equal(post.zh_cn.title, "Codex 公开进度 #3");
+  const serialized = JSON.stringify(post);
+  assert.match(serialized, /正在检查测试结果/);
+  assert.equal(serialized.includes("非隐藏思维链"), false);
+  assert.match(serialized, /2026.*08.*13.*12.*05.*06/);
+});
+
+test("emits only completed commentary items as public progress and deduplicates them", async () => {
+  const progress = [];
+  const collector = new CodexTurnCollector({
+    targets: [target],
+    onTurnProgress: (record) => progress.push(record),
+  });
+  collector.handleNotification("turn/started", {
+    threadId: "thread-id",
+    turn: { id: "turn-progress", status: "inProgress", items: [] },
+  });
+  const commentary = {
+    id: "commentary-one",
+    type: "agentMessage",
+    phase: "commentary",
+    text: "公开阶段说明",
+  };
+  for (const item of [
+    commentary,
+    commentary,
+    { id: "commentary-two", type: "agentMessage", phase: "commentary", text: "第二条公开阶段说明" },
+    { id: "raw-reasoning", type: "reasoning", summary: ["do not emit"], content: ["secret"] },
+    { id: "unphased", type: "agentMessage", text: "legacy answer" },
+    { id: "final", type: "agentMessage", phase: "final_answer", text: "final answer" },
+  ]) {
+    collector.handleNotification("item/completed", {
+      threadId: "thread-id",
+      turnId: "turn-progress",
+      completedAtMs: 1_786_593_600_100,
+      item,
+    });
+  }
+  await Promise.resolve();
+
+  assert.equal(progress.length, 2);
+  assert.deepEqual(progress[0], {
+    threadId: "thread-id",
+    turnId: "turn-progress",
+    chatId: "oc_group",
+    itemId: "commentary-one",
+    sequence: 1,
+    text: "公开阶段说明",
+    createdAtMs: 1_786_593_600_100,
+  });
+  assert.equal(progress[1].sequence, 2);
+  assert.equal(JSON.stringify(progress).includes("secret"), false);
+});
+
+test("continues progress numbering from commentary already present in an active reconnect snapshot", async () => {
+  const progress = [];
+  const collector = new CodexTurnCollector({
+    targets: [target],
+    onTurnProgress: (record) => progress.push(record),
+  });
+  collector.seedThread({
+    id: "thread-id",
+    turns: [{
+      id: "turn-reconnected-progress",
+      status: "inProgress",
+      items: [{
+        id: "commentary-before-reconnect",
+        type: "agentMessage",
+        phase: "commentary",
+        text: "重连前进度",
+      }],
+    }],
+  });
+  collector.handleNotification("item/completed", {
+    threadId: "thread-id",
+    turnId: "turn-reconnected-progress",
+    item: {
+      id: "commentary-after-reconnect",
+      type: "agentMessage",
+      phase: "commentary",
+      text: "重连后进度",
+    },
+  });
+  await Promise.resolve();
+
+  assert.equal(progress.length, 1);
+  assert.equal(progress[0].sequence, 2);
 });
 
 test("emits only an external final answer and ignores commentary and Feishu-originated turns", async () => {

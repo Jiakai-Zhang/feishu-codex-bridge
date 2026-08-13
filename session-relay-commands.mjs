@@ -1,4 +1,4 @@
-const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue"]);
+const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "settings"]);
 
 export class SessionCommandError extends Error {
   constructor(code, message) {
@@ -37,6 +37,25 @@ export function parseQueueAction(value) {
     usage("用法：`/queue`、`/queue <Prompt>`、`/queue remove <序号>` 或 `/queue clear`");
   }
   return Object.freeze({ action: "enqueue", text });
+}
+
+export function parseSettingsAction(input) {
+  const text = String(input || "").trim();
+  if (!text || text.toLowerCase() === "status") return Object.freeze({ action: "status" });
+  if (text.toLowerCase() === "reset") return Object.freeze({ action: "reset" });
+
+  const match = /^(input|default|mode|progress|thinking|commentary)\s+(\S+)$/i.exec(text);
+  if (!match) {
+    usage("用法：`/settings`、`/settings input steer|queue`、`/settings progress on|off` 或 `/settings reset`");
+  }
+  const setting = match[1].toLowerCase();
+  const value = match[2].toLowerCase();
+  if (["input", "default", "mode"].includes(setting)) {
+    if (!["steer", "queue"].includes(value)) usage("用法：`/settings input steer|queue`");
+    return Object.freeze({ action: "input", value });
+  }
+  if (!["on", "off"].includes(value)) usage("用法：`/settings progress on|off`");
+  return Object.freeze({ action: "progress", value: value === "on" });
 }
 
 function stateLabel(status) {
@@ -122,6 +141,42 @@ function queueWaitReason(status) {
   return `会话恢复空闲（当前：${stateLabel(status?.status)}）`;
 }
 
+function inputModeLabel(inputMode) {
+  return inputMode === "queue" ? "排队新 Turn（queue）" : "调整当前回答（steer）";
+}
+
+export function formatSessionSettings(settings, { changed = false } = {}) {
+  const value = settings || {};
+  return [
+    `### Session 设置${changed ? "已更新" : ""}`,
+    "",
+    `- 普通消息：${inputModeLabel(value.inputMode)}`,
+    `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
+    "",
+    "命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings reset`",
+    "",
+    "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session。",
+    "",
+    "> “公开进度（非隐藏思维链）”只转发 Codex 标记为 commentary 的阶段说明；不会转发隐藏思维链、raw reasoning 或工具原始输出。",
+  ].join("\n");
+}
+
+export function formatGlobalSessionSettings(settings, { changed = false } = {}) {
+  const value = settings || {};
+  return [
+    `### 新绑定默认设置${changed ? "已更新" : ""}`,
+    "",
+    `- 普通消息：${inputModeLabel(value.inputMode)}`,
+    `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
+    "",
+    "私聊命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings reset`",
+    "",
+    "> 只在此后成功创建绑定时复制给新 Session；已有绑定群不会随全局默认变化。群内 `/settings` 仍只修改该 Session。",
+    "",
+    "> “公开进度（非隐藏思维链）”不会转发隐藏思维链、raw reasoning 或工具原始输出。",
+  ].join("\n");
+}
+
 export function formatPromptQueue(entries, { status } = {}) {
   const queue = Array.isArray(entries) ? entries : [];
   const lines = ["### 下一轮队列", ""];
@@ -143,7 +198,7 @@ export function formatPromptQueue(entries, { status } = {}) {
   return lines.join("\n");
 }
 
-export function formatSessionStatus(status, { queueEntries = [] } = {}) {
+export function formatSessionStatus(status, { queueEntries = [], relaySettings } = {}) {
   const settings = status?.settings || {};
   const activeFlags = Array.isArray(status?.status?.activeFlags) ? status.status.activeFlags : [];
   const usage = status?.tokenUsage?.total;
@@ -161,6 +216,8 @@ export function formatSessionStatus(status, { queueEntries = [] } = {}) {
     `- 推理强度：${settings.effort || "默认"}`,
     `- 速度：${speedLabel(settings.serviceTier)}`,
     `- 模式：${statusModeLabel(status)}`,
+    `- 普通消息：${inputModeLabel(relaySettings?.inputMode)}`,
+    `- 公开进度：${relaySettings?.publicProgress ? "开启" : "关闭"}`,
   );
   if (usage) {
     lines.push(`- 上下文累计：${Number(usage.totalTokens || 0).toLocaleString("zh-CN")} tokens`);
@@ -331,8 +388,36 @@ async function executeQueue(command, context) {
     "",
     `- 当前排位：${queued.position}`,
     "- 执行方式：任务空闲后作为独立的新 Turn 开始",
-    "- 普通消息：仍会作为当前回答的调整方向",
+    "- 普通消息：由 `/settings` 的默认输入方式决定",
   ].join("\n");
+}
+
+async function executeSettings(command, context) {
+  const { settingsStore, threadId } = context;
+  if (!settingsStore) throw new TypeError("Settings command execution requires a Session settings store");
+  const request = parseSettingsAction(command.args);
+  if (request.action === "status") return formatSessionSettings(settingsStore.get(threadId));
+  if (request.action === "reset") {
+    return formatSessionSettings(await settingsStore.reset(threadId), { changed: true });
+  }
+  const patch = request.action === "input"
+    ? { inputMode: request.value }
+    : { publicProgress: request.value };
+  return formatSessionSettings(await settingsStore.update(threadId, patch), { changed: true });
+}
+
+export async function executeGlobalSettingsCommand(command, { settingsStore } = {}) {
+  if (command?.name !== "settings") throw new TypeError("A parsed settings command is required");
+  if (!settingsStore) throw new TypeError("Global settings command requires a Session settings store");
+  const request = parseSettingsAction(command.args);
+  if (request.action === "status") return formatGlobalSessionSettings(settingsStore.getDefaults());
+  if (request.action === "reset") {
+    return formatGlobalSessionSettings(await settingsStore.resetDefaults(), { changed: true });
+  }
+  const patch = request.action === "input"
+    ? { inputMode: request.value }
+    : { publicProgress: request.value };
+  return formatGlobalSessionSettings(await settingsStore.updateDefaults(patch), { changed: true });
 }
 
 export async function executeSessionCommand(command, context) {
@@ -343,6 +428,7 @@ export async function executeSessionCommand(command, context) {
     if (command.args) usage("用法：`/status`");
     return formatSessionStatus(await controller.getStatus(threadId), {
       queueEntries: context.promptQueue?.list(threadId) || [],
+      relaySettings: context.settingsStore?.get(threadId),
     });
   }
   if (command.name === "stop") {
@@ -361,6 +447,7 @@ export async function executeSessionCommand(command, context) {
   if (command.name === "model") return executeModel(command, context);
   if (command.name === "plan") return executePlan(command, context);
   if (command.name === "queue") return executeQueue(command, context);
+  if (command.name === "settings") return executeSettings(command, context);
   return executeGoal(command, context);
 }
 

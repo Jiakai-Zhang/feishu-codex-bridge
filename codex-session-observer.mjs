@@ -352,6 +352,37 @@ export function buildFinalAnswerReplyPost({
   };
 }
 
+export function buildSessionProgressPost({
+  text,
+  sequence,
+  createdAtMs,
+  timeZone = "Asia/Shanghai",
+  maxChars = 4_000,
+} = {}) {
+  const progress = boundedText(
+    text,
+    maxChars,
+    "（公开进度过长，已截断；最终结果仍会在回答完成后发送。）",
+  ) || "Codex 正在处理。";
+  const progressSequence = Number(sequence);
+  const title = Number.isSafeInteger(progressSequence) && progressSequence > 0
+    ? `Codex 公开进度 #${progressSequence}`
+    : "Codex 公开进度";
+  return {
+    zh_cn: {
+      title,
+      content: [
+        [{ tag: "md", text: progress }],
+        [{
+          tag: "text",
+          text: formatPromptTime(createdAtMs || Date.now(), timeZone),
+          style: ["italic"],
+        }],
+      ],
+    },
+  };
+}
+
 export function buildGoalTurnPost({
   goal,
   answer,
@@ -416,6 +447,11 @@ function userMessageItemKey(item) {
     : `content:${String(item?.clientId || "")}:${JSON.stringify(item?.content || [])}`;
 }
 
+function progressItemKey(item) {
+  const text = String(item?.text || "").trim();
+  return item?.id == null ? `text:${text}` : `id:${String(item.id)}`;
+}
+
 function turnKey(threadId, turnId) {
   return `${threadId}:${turnId}`;
 }
@@ -425,17 +461,20 @@ export class CodexTurnCollector {
     targets,
     onExternalTurn,
     onTurnCompleted,
+    onTurnProgress,
     isFeishuClientId = defaultFeishuClientId,
     onError = () => {},
   }) {
     this.targets = new Map((targets || []).map((target) => [target.threadId, Object.freeze({ ...target })]));
     this.onExternalTurn = onExternalTurn;
     this.onTurnCompleted = onTurnCompleted;
+    this.onTurnProgress = onTurnProgress;
     this.isFeishuClientId = isFeishuClientId;
     this.onError = onError;
     this.turns = new Map();
     this.threadUsageTotals = new Map();
     this.emitted = new Set();
+    this.emittedProgress = new Set();
   }
 
   #state(threadId, turnId, { create = true } = {}) {
@@ -459,6 +498,8 @@ export class CodexTurnCollector {
         finalAnswer: "",
         planAnswer: "",
         unphasedAnswer: "",
+        progressSequence: 0,
+        progressItemSequences: new Map(),
       };
       this.turns.set(key, state);
     }
@@ -500,7 +541,13 @@ export class CodexTurnCollector {
     if (item.type !== "agentMessage") return;
     const text = String(item.text || "").trim();
     if (!text) return;
-    if (item.phase === "final_answer") state.finalAnswer = text;
+    if (item.phase === "commentary") {
+      const itemKey = progressItemKey(item);
+      if (!state.progressItemSequences.has(itemKey)) {
+        state.progressSequence += 1;
+        state.progressItemSequences.set(itemKey, state.progressSequence);
+      }
+    } else if (item.phase === "final_answer") state.finalAnswer = text;
     else if (item.phase == null) state.unphasedAnswer = text;
   }
 
@@ -548,6 +595,31 @@ export class CodexTurnCollector {
     }
     state.tokenUsage = baseline ? subtractTokenUsage(total, baseline) : last;
     this.threadUsageTotals.set(state.threadId, total);
+  }
+
+  #emitProgress(state, item, completedAtMs) {
+    if (!state || item?.type !== "agentMessage" || item.phase !== "commentary") return;
+    const text = String(item.text || "").trim();
+    if (!text || typeof this.onTurnProgress !== "function") return;
+    const itemKey = progressItemKey(item);
+    const key = `${state.key}:${itemKey}`;
+    if (this.emittedProgress.has(key)) return;
+    this.emittedProgress.add(key);
+    if (this.emittedProgress.size > 10_000) {
+      this.emittedProgress = new Set([...this.emittedProgress].slice(-8_000));
+    }
+    const target = this.targets.get(state.threadId);
+    const sequence = state.progressItemSequences.get(itemKey);
+    const record = Object.freeze({
+      threadId: state.threadId,
+      turnId: state.turnId,
+      chatId: target.chatId,
+      itemId: item.id == null ? itemKey : String(item.id),
+      sequence,
+      text,
+      createdAtMs: completedAtMs ? normalizeTimestampMs(completedAtMs) : Date.now(),
+    });
+    Promise.resolve(this.onTurnProgress(record)).catch((error) => this.onError(error));
   }
 
   #finalize(state, turn) {
@@ -624,6 +696,7 @@ export class CodexTurnCollector {
     if (method === "item/completed") {
       const state = this.#state(threadId, params.turnId);
       this.#collectItem(state, params.item, params.completedAtMs);
+      this.#emitProgress(state, params.item, params.completedAtMs);
       return;
     }
     if (method === "thread/tokenUsage/updated") {

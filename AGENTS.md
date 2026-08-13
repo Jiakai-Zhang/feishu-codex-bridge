@@ -13,3 +13,13 @@ When the user asks to install, deploy, set up, or onboard this repository on Win
 7. Do not create, publish, or change a Feishu application without the user's explicit approval of that external change.
 
 For ordinary development, debugging, or review requests, follow the repository tests and preserve untracked local runtime/configuration files.
+
+## Update requests
+
+When the user asks to update an existing installation:
+
+1. Read the upgrade section of `docs/INSTALL_AGENT.md` and use `update.ps1` with an explicit release tag.
+2. Inspect the remote, exact tag, worktree status, Bridge status, and doctor result before changing anything.
+3. Stop if tracked or untracked user changes exist. Never reset, clean, stash, or overwrite them on the user's behalf.
+4. Preserve the existing local configuration, DPAPI credential, bindings, Session settings, queues, ledgers, and delivery state. Do not request the App Secret again.
+5. Verify the exact installed tag and live Bridge health after the update. Follow the target release notes for any required Codex Desktop restart.

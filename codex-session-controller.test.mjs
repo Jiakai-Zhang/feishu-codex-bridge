@@ -237,6 +237,13 @@ function fakeControllerServer({ activeTurn, goal = null } = {}) {
     if (server.goal && goalStatus) notify("thread/goal/updated", { threadId, turnId: turn.id, goal: structuredClone(server.goal) });
     notify("turn/completed", { threadId, turn: structuredClone(turn) });
   };
+  server.emitCommentary = (text, id = "commentary-progress") => {
+    const turn = active();
+    if (!turn) throw new Error("no active turn");
+    const item = { id, type: "agentMessage", phase: "commentary", text };
+    turn.items.push(item);
+    notify("item/completed", { threadId, turnId: turn.id, completedAtMs: Date.now(), item });
+  };
   server.disconnect = () => {
     const socket = server.sockets.at(-1);
     const event = new Event("close");
@@ -286,6 +293,22 @@ test("starts an idle Feishu prompt, steers the next prompt into the same active 
     { text: "adjust it", clientId: "om_adjust" },
   ]);
   assert.equal(completed[0].answer, "final answer");
+  await client.stop();
+});
+
+test("forwards only the collector's public commentary callback", async () => {
+  const server = fakeControllerServer();
+  const progress = [];
+  const client = controller(server, { onTurnProgress: (record) => progress.push(record) });
+  await client.start();
+  await client.submitPrompt({ threadId, text: "initial", clientUserMessageId: "om_progress" });
+  server.emitCommentary("checking the workspace");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(progress.length, 1);
+  assert.equal(progress[0].threadId, threadId);
+  assert.equal(progress[0].turnId, "turn-1");
+  assert.equal(progress[0].text, "checking the workspace");
   await client.stop();
 });
 

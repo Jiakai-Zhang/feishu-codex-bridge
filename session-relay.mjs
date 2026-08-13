@@ -11,6 +11,7 @@ import {
   buildExternalTurnPost,
   buildFinalAnswerReplyPost,
   buildGoalTurnPost,
+  buildSessionProgressPost,
   externalTurnDeliveryId,
 } from "./codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
@@ -24,6 +25,7 @@ import { SessionBindingRegistry } from "./session-binding-registry.mjs";
 import { SessionDeleteFlow } from "./session-delete-flow.mjs";
 import { SessionInputLedger } from "./session-input-ledger.mjs";
 import {
+  executeGlobalSettingsCommand,
   executeSessionCommand,
   parseQueueAction,
   parseSessionCommand,
@@ -38,6 +40,7 @@ import {
 } from "./session-relay-core.mjs";
 import { SessionPromptQueue } from "./session-prompt-queue.mjs";
 import { loadSessionRelayConfig } from "./session-relay-config.mjs";
+import { SessionRelaySettingsStore } from "./session-relay-settings.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const configPath = path.join(scriptDir, "bridge.config.json");
@@ -52,6 +55,7 @@ const completedPath = path.join(runtimeDir, "session-relay-completed.json");
 const deliveryOutboxPath = path.join(runtimeDir, "session-relay-pending-deliveries.json");
 const inputLedgerPath = path.join(runtimeDir, "session-relay-input-ledger.json");
 const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json");
+const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
@@ -75,6 +79,9 @@ await fs.writeFile(pidPath, String(process.pid), "utf8");
 let sessionController;
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
 const inputLedger = await SessionInputLedger.open(inputLedgerPath);
+const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
+  legacyInstall: config.sessionRelay.bindings.length > 0,
+});
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => inputLedger.put({
@@ -131,6 +138,7 @@ let connectedBotOpenId = config.agent.botOpenId;
 let channelConnected = false;
 let deliveryRetryInFlight = false;
 const inFlightMessageIds = new Set();
+const turnOutputTails = new Map();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -151,6 +159,17 @@ function dispatchAllQueuedPrompts() {
   void promptQueue.dispatchAll().catch((error) => {
     log(`queued prompt retry scan deferred: ${safeError(error)}`);
   });
+}
+
+function enqueueTurnOutput(threadId, work) {
+  const key = String(threadId);
+  const previous = turnOutputTails.get(key) || Promise.resolve();
+  const running = previous.catch(() => {}).then(work);
+  const tail = running.catch(() => {}).finally(() => {
+    if (turnOutputTails.get(key) === tail) turnOutputTails.delete(key);
+  });
+  turnOutputTails.set(key, tail);
+  return running;
 }
 
 async function persistCompleted(messageId) {
@@ -316,7 +335,8 @@ async function verifyCreatedGroup({ binding, groupName }) {
   }
 }
 
-async function sendBindingWelcome({ chatId, groupName, feedGroupName }) {
+async function sendBindingWelcome({ chatId, groupName, feedGroupName, settings }) {
+  const inputMode = settings?.inputMode === "queue" ? "queue（排队新 Turn）" : "steer（调整当前回答）";
   await channel.send(chatId, {
     markdown: [
       "### Codex Session 已绑定",
@@ -324,8 +344,10 @@ async function sendBindingWelcome({ chatId, groupName, feedGroupName }) {
       `- 群名：${groupName}`,
       `- 标签：${feedGroupName}`,
       "- 本群固定对应一个 Codex 任务",
+      `- 普通消息默认：${inputMode}`,
+      `- 公开进度：${settings?.publicProgress ? "开启" : "关闭"}`,
       "",
-      "Bridge 重载后，可直接发送 Prompt，无需 @Bot。",
+      "Bridge 重载后，可直接发送 Prompt，无需 @Bot。使用 `/settings` 调整普通消息的 steer/queue 默认方式与公开进度回传。",
     ].join("\n"),
   });
 }
@@ -363,6 +385,8 @@ function publicBindingFailure(error) {
       return "新群没有通过“仅你 + 当前 Bot”的成员校验，因此没有写入绑定。";
     case "binding_persist_failed":
       return "新群和标签已创建，但本机绑定配置写入失败。Bridge 没有把该群当作可用 Session 群，请在本机检查配置。";
+    case "settings_persist_failed":
+      return "新群和标签已创建，但新绑定默认设置无法在本机持久化，因此没有继续写入 Session 绑定。请检查本机工作目录后重试。";
     default:
       return "创建 Session 群失败，未改投到其他 Codex 任务。请稍后重新发送 `/add`。";
   }
@@ -436,10 +460,53 @@ async function queueDelivery(record, successLog) {
   }
 }
 
+async function enqueuePromptMessage(msg, binding, text) {
+  return promptQueue.enqueue({
+    messageId: msg.messageId,
+    sessionThreadId: binding.threadId,
+    chatId: msg.chatId,
+    feishuThreadId: msg.threadId,
+    text,
+    createdAt: Date.now(),
+  }, {
+    afterPersist: async (queued) => inputLedger.put({
+      messageId: queued.messageId,
+      chatId: queued.chatId,
+      threadId: queued.feishuThreadId,
+      kind: "queued",
+      createdAt: queued.createdAt,
+    }),
+  });
+}
+
 async function processPromptMessage(msg, binding, content) {
   const startedAt = Date.now();
   log(`accepted relay message ${msg.messageId}`);
   try {
+    const settings = relaySettings.get(binding.threadId);
+    if (settings.inputMode === "queue") {
+      await inspectBinding(binding);
+      const queued = await enqueuePromptMessage(msg, binding, content);
+      await queueDelivery({
+        kind: "reply",
+        deliveryId: `default-queue:${msg.messageId}`,
+        messageId: msg.messageId,
+        chatId: msg.chatId,
+        threadId: msg.threadId,
+        markdown: [
+          `### ${queued.alreadyQueued ? "已在下一轮队列中" : "已按默认设置加入下一轮队列"}`,
+          "",
+          `- 当前排位：${queued.position}`,
+          "- 执行方式：任务空闲后作为独立的新 Turn 开始",
+          "- 如需改为调整方向：使用 `/settings input steer` 后再发送",
+        ].join("\n"),
+        publicStatus: true,
+        createdAt: Date.now(),
+      }, `default queue acknowledged for ${msg.messageId}`);
+      dispatchQueuedPrompts(binding.threadId);
+      log(`queued relay message ${msg.messageId}; position=${queued.position}; elapsedMs=${Date.now() - startedAt}`);
+      return;
+    }
     const result = await sessionController.submitPrompt({
       threadId: binding.threadId,
       text: content,
@@ -494,22 +561,8 @@ async function processCommandMessage(msg, binding, command) {
         controller: sessionController,
         threadId: binding.threadId,
         promptQueue,
-        enqueuePrompt: async (text) => promptQueue.enqueue({
-          messageId: msg.messageId,
-          sessionThreadId: binding.threadId,
-          chatId: msg.chatId,
-          feishuThreadId: msg.threadId,
-          text,
-          createdAt: Date.now(),
-        }, {
-          afterPersist: async (queued) => inputLedger.put({
-            messageId: queued.messageId,
-            chatId: queued.chatId,
-            threadId: queued.feishuThreadId,
-            kind: "queued",
-            createdAt: queued.createdAt,
-          }),
-        }),
+        settingsStore: relaySettings,
+        enqueuePrompt: async (text) => enqueuePromptMessage(msg, binding, text),
       });
     } catch (error) {
       markdown = publicCommandFailure(error);
@@ -539,6 +592,19 @@ async function processCommandMessage(msg, binding, command) {
     log(`session command /${command.name} could not be processed: ${safeError(error)}`);
     await replyFailure(msg, error);
   }
+}
+
+async function processGlobalSettingsMessage(msg, command) {
+  log(`accepted global Session settings command from ${msg.messageId}`);
+  let markdown;
+  try {
+    markdown = await executeGlobalSettingsCommand(command, { settingsStore: relaySettings });
+  } catch (error) {
+    markdown = publicCommandFailure(error);
+    log(`global Session settings command failed: ${safeError(error)}`);
+  }
+  await channel.reply(msg, { markdown });
+  await persistCompleted(msg.messageId);
 }
 
 async function uploadPromptImages(resources) {
@@ -619,6 +685,46 @@ async function uploadFinalAnswerSegments(answer) {
     log(`stripped ${extracted.strippedMetadataBlockCount} renderer metadata block(s) from final answer`);
   }
   return Object.freeze(segments);
+}
+
+async function processTurnProgress(record) {
+  if (!relaySettings.get(record.threadId).publicProgress) return;
+  if (!channelConnected) {
+    log("public progress skipped while Feishu channel is disconnected");
+    return;
+  }
+  const binding = bindingsByChat.get(record.chatId);
+  if (!binding || binding.threadId !== record.threadId) {
+    log("public progress skipped because its Session binding is unavailable");
+    return;
+  }
+  try {
+    await inspectBinding(binding);
+    const deliveryId = `codex-progress:${record.threadId}:${record.turnId}:${record.itemId}`;
+    const response = await channel.rawClient.im.message.create({
+      params: {
+        receive_id_type: "chat_id",
+      },
+      data: {
+        receive_id: record.chatId,
+        content: JSON.stringify(buildSessionProgressPost({
+          text: record.text,
+          sequence: record.sequence,
+          createdAtMs: record.createdAtMs,
+          timeZone: config.sessionRelay.displayTimeZone,
+          maxChars: Math.min(config.maxReplyChars, 4_000),
+        })),
+        msg_type: "post",
+        uuid: deliveryIdempotencyKey(deliveryId),
+      },
+    });
+    if (response?.code !== undefined && response.code !== 0) {
+      throw new Error(`Feishu send failed with code ${response.code}`);
+    }
+    log("public Codex progress delivered to its bound Session group");
+  } catch (error) {
+    log(`public Codex progress was not delivered: ${safeError(error)}`);
+  }
 }
 
 async function processCompletedTurn(record) {
@@ -760,6 +866,7 @@ const bindingProvisioner = feedGroupManager && sessionChatManager
       ownerOpenId: config.agent.ownerOpenId,
       verifyGroup: verifyCreatedGroup,
       sendWelcome: sendBindingWelcome,
+      settingsStore: relaySettings,
       onWarning: (error) => log(`new group welcome could not be delivered: ${safeError(error)}`),
     })
   : undefined;
@@ -889,7 +996,15 @@ channel.on("message", async (msg) => {
   inFlightMessageIds.add(msg.messageId);
   try {
     if (msg.rawContentType === "text") {
-      const setupHandled = await processBindingSetupMessage(msg, String(msg.content || ""), binding);
+      const rawContent = String(msg.content || "");
+      const directCommand = !binding && msg.chatType === "p2p"
+        ? parseSessionCommand(rawContent)
+        : undefined;
+      if (directCommand?.name === "settings") {
+        await processGlobalSettingsMessage(msg, directCommand);
+        return;
+      }
+      const setupHandled = await processBindingSetupMessage(msg, rawContent, binding);
       if (setupHandled) return;
     }
     if (!binding) {
@@ -984,8 +1099,12 @@ try {
       sandboxMode: config.sandboxMode,
       onTurnCompleted: async (record) => {
         dispatchQueuedPrompts(record.threadId);
-        await processCompletedTurn(record);
+        await enqueueTurnOutput(record.threadId, () => processCompletedTurn(record));
       },
+      onTurnProgress: async (record) => enqueueTurnOutput(
+        record.threadId,
+        () => processTurnProgress(record),
+      ),
       log,
     });
     await sessionController.start();

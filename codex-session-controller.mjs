@@ -111,6 +111,7 @@ export class CodexSessionController {
     targets,
     sandboxMode,
     onTurnCompleted,
+    onTurnProgress,
     WebSocketImpl = globalThis.WebSocket,
     requestTimeoutMs = 30_000,
     reconnectDelayMs = 2_000,
@@ -123,6 +124,7 @@ export class CodexSessionController {
     this.targets = new Map((targets || []).map((target) => [target.threadId, Object.freeze({ ...target })]));
     this.sandboxMode = sandboxMode;
     this.onTurnCompleted = onTurnCompleted;
+    this.onTurnProgress = onTurnProgress;
     this.WebSocketImpl = WebSocketImpl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.reconnectDelayMs = reconnectDelayMs;
@@ -147,6 +149,7 @@ export class CodexSessionController {
     this.collector = new CodexTurnCollector({
       targets: [...this.targets.values()],
       onTurnCompleted: (record) => this.#emitCompletedTurn(record),
+      onTurnProgress: (record) => this.#emitTurnProgress(record),
       onError: (error) => this.log(`turn completion callback failed: ${error instanceof Error ? error.name : "unknown"}`),
     });
     this.connection = undefined;
@@ -448,6 +451,10 @@ export class CodexSessionController {
     if (typeof this.onTurnCompleted === "function") {
       await this.onTurnCompleted(Object.freeze({ ...record, goal: clone(goal) }));
     }
+  }
+
+  async #emitTurnProgress(record) {
+    if (typeof this.onTurnProgress === "function") await this.onTurnProgress(record);
   }
 
   async #readThread(threadId, includeTurns = true) {

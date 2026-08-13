@@ -19,6 +19,7 @@ export class SessionBindingProvisioner {
     ownerOpenId,
     verifyGroup,
     sendWelcome,
+    settingsStore,
     onWarning = () => {},
   }) {
     this.catalog = catalog;
@@ -28,6 +29,7 @@ export class SessionBindingProvisioner {
     this.ownerOpenId = ownerOpenId;
     this.verifyGroup = verifyGroup;
     this.sendWelcome = sendWelcome;
+    this.settingsStore = settingsStore;
     this.onWarning = onWarning;
     this.tail = Promise.resolve();
   }
@@ -92,12 +94,26 @@ export class SessionBindingProvisioner {
         );
       }
 
+      let initializedSettings;
+      try {
+        initializedSettings = await this.settingsStore?.initialize(threadId);
+      } catch (error) {
+        throw new SessionBindingProvisionError(
+          "settings_persist_failed",
+          "The new binding defaults could not be persisted locally",
+          { cause: error },
+        );
+      }
+
       let binding;
       try {
         binding = await this.registry.add(candidateBinding);
       } catch (error) {
         if (error?.code === "session_already_bound") {
           return Object.freeze({ alreadyBound: true, binding: error.binding });
+        }
+        if (initializedSettings?.created) {
+          await this.settingsStore?.remove(threadId).catch((cleanupError) => this.onWarning(cleanupError));
         }
         throw new SessionBindingProvisionError(
           "binding_persist_failed",
@@ -112,6 +128,7 @@ export class SessionBindingProvisioner {
           groupName,
           session,
           binding,
+          settings: initializedSettings?.settings,
           feedGroupName: this.feedGroupManager.groupName,
         });
       } catch (error) {
@@ -123,6 +140,7 @@ export class SessionBindingProvisioner {
         groupName,
         feedGroupName: this.feedGroupManager.groupName,
         session: Object.freeze({ ...session }),
+        settings: initializedSettings?.settings,
       });
     };
     const running = this.tail.catch(() => {}).then(work);
