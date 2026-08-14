@@ -12,6 +12,7 @@ $stdoutPath = Join-Path $runtimeDir 'bridge.stdout.log'
 $stderrPath = Join-Path $runtimeDir 'bridge.stderr.log'
 $supervisorLogPath = Join-Path $runtimeDir 'bridge-supervisor.log'
 $secretPath = Join-Path $runtimeDir 'channel-secret.dpapi'
+$desktopRelayPointerScript = Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1'
 $node = [string]$config.nodeExecutable
 $mode = if ([string]::IsNullOrWhiteSpace([string]$config.mode)) { 'project-agent' } else { [string]$config.mode }
 switch ($mode) {
@@ -84,6 +85,13 @@ try {
     Write-SupervisorLog "supervisor failed: $($_.Exception.GetType().Name)"
     exit 1
 } finally {
+    if ($mode -eq 'session-relay') {
+        try {
+            & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
+        } catch {
+            Write-SupervisorLog 'Could not pause Desktop relay during supervisor shutdown.'
+        }
+    }
     Remove-Item -LiteralPath $supervisorStopPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $restartPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $supervisorPidPath -Force -ErrorAction SilentlyContinue

@@ -13,6 +13,7 @@ $bootstrapSourcePath = Join-Path $PSScriptRoot 'desktop-relay-bootstrap.ps1'
 $statePath = Join-Path $bootstrapRoot 'desktop-relay-state.json'
 $statusPath = Join-Path $bootstrapRoot 'desktop-relay-watchdog-status.json'
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
+$desktopRelayPointerScript = Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1'
 
 function Send-EnvironmentChanged {
     if (-not ('SessionRelay.NativeMethods' -as [type])) {
@@ -159,6 +160,7 @@ function Write-RelayState {
     $state = [ordered]@{
         schemaVersion = 1
         enabled = $true
+        bridgeEnabled = $true
         expectedUrl = $RelayUrl.AbsoluteUri
         activationId = $ActivationId
         configuredAt = [DateTime]::UtcNow.ToString('o')
@@ -237,6 +239,11 @@ if ($Disable) {
 }
 
 $url = Get-RelayUrl
+$statusLines = & (Join-Path $PSScriptRoot 'status-bridge.ps1') 2>&1
+$statusText = ($statusLines | ForEach-Object { [string]$_ }) -join ' '
+if ($LASTEXITCODE -ne 0 -or $statusText -notmatch 'connected=True') {
+    throw 'Start the Bridge and wait for its authenticated Channel connection before enabling Desktop relay.'
+}
 $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
 if ($current -and $current -ne $url.AbsoluteUri -and -not $Force) {
     throw "$variableName already contains a different value; refusing to overwrite another setup."
@@ -323,8 +330,7 @@ try {
 
     # The shared listener and watchdog definition are both verified before the
     # persistent Desktop dependency is introduced.
-    [Environment]::SetEnvironmentVariable($variableName, $url.AbsoluteUri, [EnvironmentVariableTarget]::User)
-    Send-EnvironmentChanged
+    & $desktopRelayPointerScript -Url $url.AbsoluteUri | Out-Null
     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
 
     $watchdogDeadline = [DateTime]::UtcNow.AddSeconds(20)

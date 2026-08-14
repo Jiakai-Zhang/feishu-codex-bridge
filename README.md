@@ -130,15 +130,15 @@ Feed 标签是当前授权用户侧的会话分组，不是全体群成员共享
 
 首次启用共享 App Server：
 
-1. 运行 `start-bridge.ps1`；它会先通过独立的 `start-app-server.ps1` 启动或复用经过 PID、可执行文件和回环端口校验的 Codex App Server，再启动隐藏的 Bridge supervisor。
+1. 运行 `start-bridge.ps1`；它会先暂停旧 pointer，通过独立的 `start-app-server.ps1` 启动或复用经过 PID、可执行文件和回环端口校验的 Codex App Server，再启动隐藏的 Bridge supervisor。Bridge 确认连接后才恢复 pointer。
 2. Bridge 显示 connected 后运行 `configure-codex-desktop-relay.ps1`。脚本会再次验证 App Server，安装并立即启动当前用户的连续 watchdog，再把同一回环地址写入 `CODEX_APP_SERVER_WS_URL`；只有 watchdog 的 ready heartbeat 到达后才算激活成功。前置步骤失败时会撤销 pointer，让 Desktop 保持 fail-open。
 3. 运行 `doctor.ps1 -RequireRunning -RequireDesktopRelay`，确认 Desktop relay pointer、连续 watchdog、新鲜 heartbeat、共享监听器所有权和 Bridge 全部通过。
 4. 完全退出并重新打开 Codex Desktop。环境变量只在新进程中生效；正在运行的 Desktop 不会被热切换。
 5. 若要撤销，运行 `configure-codex-desktop-relay.ps1 -Disable`，再完全重启 Codex Desktop。撤销会先阻止 watchdog 回写并移除 Desktop 依赖，再移除官方任务；任何自建守护都不会被脚本删除。
 
-共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时不停止共享 App Server，因为 Codex Desktop 仍可能正在使用它。官方任务 `FeishuCodexBridge-DesktopRelay-Watchdog` 不依赖飞书 App Secret：它在登录后常驻，每 3 秒检查监听器；监听器消失时先移除 Bridge 自己的 Desktop relay pointer，再尝试恢复 App Server，只有 PID、可执行文件、命令行和端口重新验证后才恢复 pointer。稳定 bootstrap 只会清理由本地 activation state 精确记录的 URL，不会删除其他软件的 loopback pointer。激活时若发现可能的自建守护进程、计划任务或服务，只记录兼容提示并保留它们；官方 watchdog 会复用已经通过验证的同一 App Server，用户可在严格 Doctor 通过后自行决定是否撤销旧守护。日志和 heartbeat 保存在 `%LOCALAPPDATA%\FeishuCodexBridge\bootstrap`。
+共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时会移除 Desktop relay pointer，并把连续 watchdog 切换为 paused；watchdog 不再恢复 App Server 或 Bridge。为避免中断仍在运行的 Desktop，停止 Bridge 不会立即终止共享 App Server；完整退出并重开 Desktop 后会回到自身 App Server。官方任务 `FeishuCodexBridge-DesktopRelay-Watchdog` 不依赖飞书 App Secret：Bridge 运行时它每 3 秒检查监听器；监听器消失时先移除 Bridge 自己的 Desktop relay pointer，再尝试恢复 App Server，只有 PID、可执行文件、命令行和端口重新验证后才恢复 pointer。稳定 bootstrap 只会清理由本地 activation state 精确记录的 URL，不会删除其他软件的 loopback pointer。激活时若发现可能的自建守护进程、计划任务或服务，只记录兼容提示并保留它们；官方 watchdog 会复用已经通过验证的同一 App Server，用户可在严格 Doctor 通过后自行决定是否撤销旧守护。日志和 heartbeat 保存在 `%LOCALAPPDATA%\FeishuCodexBridge\bootstrap`。
 
-Bridge supervisor 是 `/add`、`/delete` 后自动重载的进程边界：Bridge 先确认 supervisor PID 仍存活，再写入 `restart.request` 并优雅退出；supervisor 等旧进程完全结束后才启动替代进程。若 supervisor 不可用，Bridge 会拒绝自停并保留现有群的服务，避免一次新增绑定使所有旧群同时离线。`status-bridge.ps1` 会同时显示 Bridge、supervisor 和共享 App Server 状态；正常停止使用 `stop-bridge.ps1`，不要直接结束其中任一进程。
+Bridge supervisor 是 `/add`、`/delete` 后自动重载的进程边界：Bridge 先确认 supervisor PID 仍存活，再写入 `restart.request` 并优雅退出；supervisor 等旧进程完全结束后才启动替代进程。若 supervisor 不可用，Bridge 会拒绝自停并保留现有群的服务，避免一次新增绑定使所有旧群同时离线。`status-bridge.ps1` 会同时显示 Bridge、supervisor 和共享 App Server 状态；正常停止使用 `stop-bridge.ps1`，不要直接结束其中任一进程。正常停止或 supervisor 最终退出时会自动暂停 watchdog 并移除 pointer。
 
 为了实现“群里不 @ 也能收到”，飞书应用必须订阅 `im.message.receive_v1`，并申请、发布敏感权限 `im:message.group_msg`。安全门禁还需要 `im:chat:readonly` 与 `im:chat.members:read`；自动建群还需要 Bot 权限 `im:chat:create`，现有 Bot 回复权限也必须保留。只有 `im:message.group_at_msg` 时，平台不会把普通未 @ 消息投递给 Bridge，这与群里是否只有两名成员无关。Bot 私聊 `/add` 还需要应用能够接收用户发给 Bot 的单聊消息事件。
 
