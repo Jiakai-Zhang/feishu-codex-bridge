@@ -163,6 +163,35 @@ test("renders uploaded final-answer images in place without exposing local paths
   assert.equal(serialized.includes("C:/"), false);
 });
 
+test("mentions the owner only in final Turn posts when enabled", () => {
+  const compact = buildFinalAnswerReplyPost({
+    answer: "done",
+    mentionOpenId: "ou_owner",
+  });
+  assert.deepEqual(compact.zh_cn.content[0], [{ tag: "at", user_id: "ou_owner" }]);
+
+  const proactive = buildExternalTurnPost({
+    prompt: "run it",
+    answer: "done",
+    promptAtMs: Date.UTC(2026, 7, 13, 4, 5, 6),
+    mentionOpenId: "ou_owner",
+  });
+  assert.equal(JSON.stringify(proactive).match(/\"tag\":\"at\"/g)?.length, 1);
+
+  const goal = buildGoalTurnPost({
+    goal: { objective: "finish", status: "complete" },
+    answer: "done",
+    mentionOpenId: "ou_owner",
+  });
+  assert.equal(JSON.stringify(goal).match(/\"tag\":\"at\"/g)?.length, 1);
+
+  const disabled = buildFinalAnswerReplyPost({ answer: "done" });
+  assert.equal(JSON.stringify(disabled).includes('"tag":"at"'), false);
+
+  const progress = buildSessionProgressPost({ text: "working", sequence: 1 });
+  assert.equal(JSON.stringify(progress).includes('"tag":"at"'), false);
+});
+
 test("renders image-only and multi-image prompts without textual file labels", () => {
   const post = buildExternalTurnPost({
     prompt: "",
@@ -250,6 +279,7 @@ test("formats public commentary as numbered progress with only a timestamp foote
   const serialized = JSON.stringify(post);
   assert.match(serialized, /正在检查测试结果/);
   assert.equal(serialized.includes("非隐藏思维链"), false);
+  assert.equal(serialized.includes('"tag":"at"'), false);
   assert.match(serialized, /2026.*08.*13.*12.*05.*06/);
 });
 

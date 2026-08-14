@@ -243,6 +243,11 @@ function answerMetadataRows({ completedAtMs, durationMs, tokenUsage, timeZone = 
   ];
 }
 
+function finalMentionRows(mentionOpenId) {
+  const userId = String(mentionOpenId || "").trim();
+  return userId ? [[{ tag: "at", user_id: userId }]] : [];
+}
+
 export function buildExternalTurnPost({
   prompt,
   promptEntries = [],
@@ -257,6 +262,7 @@ export function buildExternalTurnPost({
   maxPromptChars = 4_000,
   maxReplyChars = 10_000,
   hasPromptResources = false,
+  mentionOpenId,
 }) {
   const entries = Array.isArray(promptEntries) && promptEntries.length > 0
     ? promptEntries
@@ -310,6 +316,7 @@ export function buildExternalTurnPost({
   content.push(
     [{ tag: "hr" }],
     [{ tag: "md", text: "#### 最终回答" }],
+    ...finalMentionRows(mentionOpenId),
     ...answerContentRows({
       answer,
       answerSegments,
@@ -336,14 +343,18 @@ export function buildFinalAnswerReplyPost({
   tokenUsage,
   timeZone = "Asia/Shanghai",
   maxReplyChars = 10_000,
+  mentionOpenId,
 }) {
-  const content = answerContentRows({
-    answer,
-    answerSegments,
-    maxReplyChars,
-    suffix: "（回复过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
-    emptyText: "Codex 已完成处理，但没有返回文本结果。",
-  });
+  const content = [
+    ...finalMentionRows(mentionOpenId),
+    ...answerContentRows({
+      answer,
+      answerSegments,
+      maxReplyChars,
+      suffix: "（回复过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
+      emptyText: "Codex 已完成处理，但没有返回文本结果。",
+    }),
+  ];
   content.push(...answerMetadataRows({ completedAtMs, durationMs, tokenUsage, timeZone }));
   return {
     zh_cn: {
@@ -392,6 +403,7 @@ export function buildGoalTurnPost({
   tokenUsage,
   timeZone = "Asia/Shanghai",
   maxReplyChars = 10_000,
+  mentionOpenId,
 }) {
   const statusLabels = {
     active: "运行中",
@@ -411,6 +423,7 @@ export function buildGoalTurnPost({
         [{ tag: "text", text: `状态：${status} · Token：${used} / ${budget}`, style: ["italic"] }],
         [{ tag: "hr" }],
         [{ tag: "md", text: goal?.status === "complete" ? "#### 最终结果" : "#### 本轮结果" }],
+        ...finalMentionRows(mentionOpenId),
         ...answerContentRows({
           answer,
           answerSegments,

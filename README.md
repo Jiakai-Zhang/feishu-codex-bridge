@@ -2,7 +2,7 @@
 
 这个 Windows 本地桥接不使用 OpenAI API Key。它复用当前电脑的 ChatGPT/Codex 登录态，通过飞书 Channel SDK 把成员消息送入本机 Codex，并把结果发回飞书。
 
-> **v0.2.0-beta.1 / Codex 专用测试版**：当前正式支持的产品入口是 Windows 上的个人 Session Relay。它依赖 Codex App Server 的实验性 WebSocket 接口；保留的 Project Agent/多人协作代码不是本次发布合同。
+> **v0.3.0-beta.1 / Codex 专用测试版**：当前正式支持的产品入口是 Windows 上的个人 Session Relay。它依赖 Codex App Server 的实验性 WebSocket 接口；保留的 Project Agent/多人协作代码不是本次发布合同。
 
 ## 安装
 
@@ -13,12 +13,12 @@
 最短用法：
 
 ```text
-请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.2.0-beta.1 帮我安装部署这个应用。
+请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.3.0-beta.1 帮我安装部署这个应用。
 ```
 
 仓库根目录 `AGENTS.md` 会把安装代理引导到可验证的 `docs/INSTALL_AGENT.md` 流程，并在飞书应用发布、OAuth、App Secret 安全输入和 Codex Desktop 完整重启等人工节点停下来。安装脚本会固定依赖版本、生成本机配置、安装 `$feishu-session-bind` Skill，并用 `doctor.ps1` 验证结果。
 
-已有 `v0.2.0-beta.1` 或更高版本安装后，升级到指定 release 只需运行 `update.ps1 -Version <tag>`。升级器拒绝脏工作树和未知远端，升级前会在本机运行目录备份配置、DPAPI 密文、Session 设置、队列和投递状态；安装或健康检查失败时自动切回原提交并恢复状态。`v0.1.0-beta.1` 首次升级到本版本的引导命令见 [Windows 完整安装指南](docs/INSTALL.md#更新)。
+已有 `v0.2.0-beta.1` 或更高版本安装后，升级到指定 release 只需运行 `update.ps1 -Version <tag>`。升级器拒绝脏工作树和未知远端，升级前会在本机运行目录备份配置、DPAPI 密文、Session 设置、队列和投递状态；安装或健康检查失败时自动切回原提交并恢复状态。`v0.1.0-beta.1` 首次迁移到内置升级器的引导命令见 [Windows 完整安装指南](docs/INSTALL.md#更新)。
 
 ## 当前产品形态：个人 Session Relay
 
@@ -37,10 +37,11 @@ Session Relay 的行为合同：
 - 不提供 `/use`、`/new` 或全局“当前任务”切换。Bridge 只拦截下文列出的 Session 控制命令和 `/add`、`/cancel`、`/delete` 绑定管理命令；其他内容（包括未知的 `/xxx`）仍原样作为普通 prompt。
 - 每个 Session 的普通消息方式可在 `steer` 与 `queue` 之间选择；**新安装默认 `queue`**。`queue` 会在空闲时立即开始独立新 Turn，忙碌时进入持久 FIFO，等待当前 Turn 和原生 Goal 结束。切换为 `steer` 后，活动 turn 中的新消息会使用控制器已订阅到的 `activeTurnId`，直接调用 App Server 原生 `turn/steer` 成为“调整方向”；若与上一轮完成恰好竞态，Bridge 只有确认已 idle 后才新建 turn，并在飞书明确提示边界变化。
 - 使用 `/queue <Prompt>` 可显式绕过 `turn/steer`：消息写入每个 Session 独立的本机持久 FIFO，当前任务恢复 idle 且原生 Goal 不再运行后，才用原飞书消息 ID 启动一个独立的新 turn。多条队列不合并；Bridge/共享 App Server 断线或重启后仍会恢复，并以 client ID 对账避免重复启动。若 Codex Desktop 抢先开始新 turn，排队项继续等待，不会误变成调整方向。
-- Bridge 始终同步绑定任务的所有 Codex 最终答案；**新安装默认开启公开进度**。Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary` 的公开阶段说明，每个 Turn 按 `Codex 公开进度 #1/#2…` 编号，卡片底部只显示时间戳。隐藏思维链、`reasoning`/raw reasoning、工具原始输出始终禁止转发；可用 `/settings progress off` 关闭。断线期间的公开进度不补发，最终答案仍走持久发件箱。一个 App Server turn 是唯一的最终回复与幂等边界，初始 Prompt 和后续任意多次调整都按 App Server 接受顺序组成输入事件流。只要该 turn 含有飞书输入，最终答案就回复其中最后一条飞书消息；完全没有飞书输入时，Bot 才在绑定群主动新发富文本。两种最终回复底部都显示回答完成时间、整轮用时和本轮真实 Token；本轮 Token 由 App Server 的会话累计 usage 差值计算，覆盖一次 turn 内的多次模型调用。断线补发缺少 usage 快照时明确显示“暂不可用”，不做文本长度估算。
+- Bridge 始终同步绑定任务的所有 Codex 最终答案；**新安装默认开启公开进度与最终回答 @提醒**。Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary` 的公开阶段说明，每个 Turn 按 `Codex 公开进度 #1/#2…` 编号，卡片底部只显示时间戳，且公开进度始终不 @。隐藏思维链、`reasoning`/raw reasoning、工具原始输出始终禁止转发；可用 `/settings progress off` 关闭公开进度，用 `/settings mention off` 关闭当前 Session 的最终回答 @提醒。断线期间的公开进度不补发，最终答案仍走持久发件箱。一个 App Server turn 是唯一的最终回复与幂等边界，初始 Prompt 和后续任意多次调整都按 App Server 接受顺序组成输入事件流。只要该 turn 含有飞书输入，最终答案就回复其中最后一条飞书消息；完全没有飞书输入时，Bot 才在绑定群主动新发富文本。两种最终回复底部都显示回答完成时间、整轮用时和本轮真实 Token；本轮 Token 由 App Server 的会话累计 usage 差值计算，覆盖一次 turn 内的多次模型调用。断线补发缺少 usage 快照时明确显示“暂不可用”，不做文本长度估算。
 - 跨客户端调整是对称的：飞书开始后可从 Codex 调整，Codex 开始后也可从飞书调整；多端交替输入不会拆分、合并或覆盖事件。含多条输入的飞书富文本按“初始 Prompt · 飞书/Codex”“调整方向 N · 飞书/Codex”展示完整时间线。单条飞书 Prompt 仍使用紧凑回复。Bridge 在线收到调整事件时会显示每次调整时间；断线重连后的 App Server 快照不含单条调整时间，因此只保留可确认的初始发送时间。
 - Desktop 主动同步使用飞书 `post` 的 `md` 元素：两个分区标题以 Markdown heading 显示，Prompt 与最终回答放入 blockquote，并用分割线区隔。飞书控制最终字体，Bridge 不指定自定义字体族。
 - Codex Prompt 中的本地图片不会显示文件名或本机绝对路径，而是直接上传为同一条富文本内的图片；多张图片按输入顺序逐张显示。其他附件/音频仍会在 Prompt 引用块中显示类型和文件名。Codex Desktop 自动注入的 `Files mentioned by the user` / `My request` 包装不会显示在飞书中。图片上传失败时仍发送文本摘要和最终回答。
+- Codex 最终回答中的本地图片与文件链接不会把本机绝对路径发到群里。图片不超过 10 MB 时继续内嵌；超过图片上限、内嵌上传失败或属于其他本地附件时，只要文件不超过 30 MB，就在最终回答之后按原顺序发送为群内原生附件。`::visualize` 指向的本地 HTML 也作为附件发送。最终回答与附件共同进入持久发件箱，附件不额外 @owner，失败重试不会重新运行 Codex；超过飞书 30 MB 文件上限时只给出明确提示，原文件仍保留在 Codex 任务中。
 - Bridge 通过 App Server `userMessage.clientId` 区分来源：由飞书提交的每条消息都使用原始 `om_...` 消息 ID，其余原生客户端在第一阶段统一显示为“Codex”，不展示内部 client ID。所有最终答案使用 `threadId + turnId` 的确定性投递 ID，因此混合来源或多次调整也只会投递一次。Bridge 启动时不补发历史答案；若启动时任务正处于运行中，会接管该活动 turn，监听断线重连后也会补齐断线期间刚完成的 turn。
 - 所有最终答案先进入持久发件箱，再用确定性消息 UUID 回复或主动发送；飞书发送失败不会重新执行 Codex。主动发送前仍会重新核验群内严格只有绑定 owner 和当前 Bot，避免成员变化后泄漏任务内容。
 - 入站 Prompt 先由不可变的 `chat_id` 与精确 owner `sender_id` 鉴权，因此不为每次 steer 增加群成员网络往返；静态“调整方向已加入”确认也不含任务内容。任何最终回答、命令结果等可能携带任务信息的出站消息，仍会在发送前用 Bot 身份重新读取群成员，必须严格等于“绑定 owner 一人 + 当前 Bot 一个”。加入第三个人、第三方 Bot、Session 被归档或成员无法完整核验时，敏感出站内容全部 fail closed。
@@ -54,7 +55,7 @@ Session Relay 的行为合同：
 - `/status`：查看连接、idle/active 状态、当前 Turn、等待标志、模型、推理强度、速度、Plan 模式、Token 与 Goal 摘要。
 - `/stop`：按精确活动 Turn ID 调用 `turn/interrupt`。若原生 Goal 正在运行，会先暂停 Goal 再中止当前 turn，防止自动续跑。
 - `/queue <Prompt>`：将 Prompt 作为独立新 Turn 排队；`/queue` 查看，`/queue remove <序号>` 删除一条，`/queue clear` 清空待执行项。Prompt 恰好以 `status`、`clear` 或 `remove` 开头时，可写成 `/queue -- <Prompt>`。`/stop` 只中止当前 Turn，保留的队列会继续执行。
-- `/settings`：查看该 Session 的 Bridge 偏好；`/settings input steer|queue` 设置普通消息默认行为，`/settings progress on|off` 设置是否回传公开阶段说明，`/settings reset` 复制当前“新绑定默认设置”。兼容 `/settings thinking on|off` 输入，但界面会明确显示为“公开进度（非隐藏思维链）”。设置按 Codex `threadId` 本机持久化并立即生效。
+- `/settings`：查看该 Session 的 Bridge 偏好；`/settings input steer|queue` 设置普通消息默认行为，`/settings progress on|off` 设置是否回传公开阶段说明，`/settings mention on|off` 设置最终回答是否 @owner，`/settings reset` 复制当前“新绑定默认设置”。兼容 `/settings thinking on|off` 输入，但界面会明确显示为“公开进度（非隐藏思维链）”。设置按 Codex `threadId` 本机持久化并立即生效。
 - `/model`：动态列出当前账号实际可用的模型、推理强度和速度；支持 `/model <编号或模型>`、`/model effort <强度>`、`/model speed standard|fast`、`/model reset`。Bridge 不硬编码模型目录，也不会把不受当前模型支持的组合写入任务。
 - `/plan`、`/plan on`、`/plan off`：查看或切换 App Server 原生 Plan collaboration mode。Plan 与 Goal 是独立轴；活动 Goal 必须先暂停才能进入 Plan。
 - `/goal`：查看原生 Goal；支持 `/goal start <目标>`、`pause`、`resume`、`replace <目标>`、`budget <tokens|none>` 与 `clear`。Goal 自动续跑产生的每轮最终结果会以“Goal 进展”富文本发回群，完成后显示“Goal 已完成”。
@@ -64,9 +65,9 @@ Session Relay 的行为合同：
 
 ### 新绑定群的全局默认设置
 
-在与 CLI Bot 的**私聊**中发送 `/settings`，操作的是后续新绑定的默认值；命令仍为 `/settings input steer|queue`、`/settings progress on|off` 和 `/settings reset`。每次成功创建绑定时，Bridge 会把当时的全局默认复制为该 Codex Session 的独立设置：
+在与 CLI Bot 的**私聊**中发送 `/settings`，操作的是后续新绑定的默认值；命令为 `/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off` 和 `/settings reset`。每次成功创建绑定时，Bridge 会把当时的全局默认复制为该 Codex Session 的独立设置：
 
-- 新安装的内置默认值是 `queue + 公开进度开启`。
+- 新安装的内置默认值是 `queue + 公开进度开启 + 最终回答 @提醒开启`。
 - 后续修改全局默认不会改变任何已有绑定群。
 - 群内 `/settings` 只修改当前 Session；群内 `/settings reset` 会复制当时的全局默认。
 - 旧部署中尚无 Session 设置记录的已有群继续保持安全默认 `steer + 公开进度关闭`，不会因升级被全局值改写。
@@ -129,12 +130,13 @@ Feed 标签是当前授权用户侧的会话分组，不是全体群成员共享
 
 首次启用共享 App Server：
 
-1. 运行 `start-bridge.ps1`；启动器会在配置的回环端口启动或复用经过 PID/可执行文件校验的 Codex App Server，并启动隐藏的常驻 Bridge supervisor。
-2. 运行 `configure-codex-desktop-relay.ps1`，把同一回环地址写入当前 Windows 用户的 `CODEX_APP_SERVER_WS_URL`。
-3. 完全退出并重新打开 Codex Desktop。环境变量只在新进程中生效；正在运行的 Desktop 不会被热切换。
-4. 若要撤销，运行 `configure-codex-desktop-relay.ps1 -Disable`，再完全重启 Codex Desktop。
+1. 运行 `start-bridge.ps1`；它会先通过独立的 `start-app-server.ps1` 启动或复用经过 PID、可执行文件和回环端口校验的 Codex App Server，再启动隐藏的 Bridge supervisor。
+2. Bridge 显示 connected 后运行 `configure-codex-desktop-relay.ps1`。脚本会再次验证 App Server，安装当前用户登录恢复任务，最后才把同一回环地址写入 `CODEX_APP_SERVER_WS_URL`。前置步骤失败时不会改变 Desktop。
+3. 运行 `doctor.ps1 -RequireRunning -RequireDesktopRelay`，确认 Desktop relay pointer、登录恢复任务、共享监听器和 Bridge 全部通过。
+4. 完全退出并重新打开 Codex Desktop。环境变量只在新进程中生效；正在运行的 Desktop 不会被热切换。
+5. 若要撤销，运行 `configure-codex-desktop-relay.ps1 -Disable`，再完全重启 Codex Desktop。撤销会先移除 Desktop 依赖，再移除登录任务。
 
-共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时不停止共享 App Server，因为 Codex Desktop 仍可能正在使用它。
+共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时不停止共享 App Server，因为 Codex Desktop 仍可能正在使用它。登录恢复任务 `FeishuCodexBridge-DesktopRelay` 不依赖飞书 App Secret：它先恢复 App Server，再在密文存在时尝试恢复 Bridge。若 App Server、本地安装目录或启动脚本不可用，稳定 bootstrap 会移除 Bridge 自己的 Desktop relay pointer，让下次启动的 Codex Desktop 回退到内置 App Server，而不是因连接拒绝而卡死。登录日志保存在 `%LOCALAPPDATA%\FeishuCodexBridge\bootstrap`。
 
 Bridge supervisor 是 `/add`、`/delete` 后自动重载的进程边界：Bridge 先确认 supervisor PID 仍存活，再写入 `restart.request` 并优雅退出；supervisor 等旧进程完全结束后才启动替代进程。若 supervisor 不可用，Bridge 会拒绝自停并保留现有群的服务，避免一次新增绑定使所有旧群同时离线。`status-bridge.ps1` 会同时显示 Bridge、supervisor 和共享 App Server 状态；正常停止使用 `stop-bridge.ps1`，不要直接结束其中任一进程。
 

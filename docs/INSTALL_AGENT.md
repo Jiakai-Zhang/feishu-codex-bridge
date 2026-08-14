@@ -19,10 +19,10 @@
 %LOCALAPPDATA%\FeishuCodexBridge\app
 ```
 
-Beta 版本必须使用明确的 release tag `v0.2.0-beta.1`，不要从未知分支复制文件：
+Beta 版本必须使用明确的 release tag `v0.3.0-beta.1`，不要从未知分支复制文件：
 
 ```powershell
-git clone --branch v0.2.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.3.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -101,7 +101,7 @@ Bot 和 User 身份均验证成功后执行：
 .\install.ps1
 ```
 
-脚本应自动发现必要标识，安装 `$HOME\.agents\skills\feishu-session-bind`，并设置用户级环境变量。若失败，先报告具体检查项；不要打印配置或身份字段。
+脚本应自动发现必要标识，安装 `$HOME\.agents\skills\feishu-session-bind`，并设置 `FEISHU_CODEX_BRIDGE_HOME`。新安装不得在 Bridge 和共享 App Server 验证成功前设置 `CODEX_APP_SERVER_WS_URL`。若失败，先报告具体检查项；不要打印配置或身份字段。
 
 ## 5. 安全录入 App Secret
 
@@ -117,22 +117,26 @@ Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','By
 
 ```powershell
 .\start-bridge.ps1
-.\doctor.ps1 -RequireRunning
+.\configure-codex-desktop-relay.ps1
+.\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-若检查通过，要求用户完全退出并重新打开 Codex Desktop，使它连接 Bridge 启动的同一个本机 App Server。此步骤需要用户授权；不要强制结束用户进程。
+必须确认 `configure-codex-desktop-relay.ps1` 的顺序检查全部成功：共享 App Server 已监听、当前用户登录恢复任务已安装、最后才写入 Desktop relay pointer。若任一前置步骤失败，应保持 Desktop 原启动方式并停止，不得手工补写环境变量。
+
+若检查通过，要求用户完全退出并重新打开 Codex Desktop，使它连接 Bridge 启动的同一个本机 App Server。此步骤需要用户授权；不要强制结束用户进程。说明登录恢复任务会在 Windows 重启后先恢复 App Server，再尝试恢复 Bridge；App Server 启动失败时会自动移除 Bridge 拥有的 pointer，让 Desktop fail open。
 
 Desktop 重启后再执行一次：
 
 ```powershell
 .\status-bridge.ps1
-.\doctor.ps1 -RequireRunning
+.\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
 最后引导用户完成两项真实验收：
 
 1. 飞书私聊 Bot 发送 `/add`，选择 Project/“独立”和现有任务；确认自动建群、命名、绑定并应用 `{主机名}-Codex` 标签。
 2. 分别从飞书群和 Codex Desktop 发送 Prompt；确认两端进入同一任务，最终回答均返回群。
+3. 让最终回答引用一个不超过 30 MB 的本地文件；确认最终回答后出现可点击的群内原生附件，且附件消息不额外 @owner。
 
 只有上述验证成功才报告部署完成。报告中列出版本、Bridge connected 状态、绑定数量和仍需注意的 Beta 限制，不列出任何身份标识或绝对任务路径。
 

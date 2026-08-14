@@ -15,6 +15,14 @@ import {
   externalTurnDeliveryId,
 } from "./codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
+import {
+  FEISHU_FILE_MAX_BYTES,
+  FEISHU_IMAGE_MAX_BYTES,
+  buildNativeAttachmentDeliveries,
+  classifyFeishuImageSize,
+  inspectFeishuNativeAttachment,
+  uploadFeishuNativeAttachment,
+} from "./feishu-native-attachment.mjs";
 import { FeishuFeedGroupManager } from "./feishu-feed-group.mjs";
 import { FeishuSessionChatManager } from "./feishu-session-chat.mjs";
 import { SessionAddFlow } from "./session-add-flow.mjs";
@@ -68,6 +76,7 @@ const supportedPromptImageExtensions = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".ico", ".tif", ".tiff", ".heic",
 ]);
 const maxFinalAnswerImages = 10;
+const maxFinalAnswerAttachments = 10;
 
 const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
@@ -145,7 +154,16 @@ function log(message) {
 }
 
 function safeError(error) {
-  if (error && typeof error === "object" && "code" in error) return `code=${String(error.code).slice(0, 80)}`;
+  const code = error?.response?.data?.code ?? error?.code ?? error?.cause?.response?.data?.code ?? error?.cause?.code;
+  const rawMessage = error?.response?.data?.msg ?? error?.message ?? error?.cause?.response?.data?.msg ?? error?.cause?.message;
+  const message = String(rawMessage || "")
+    .replace(/[A-Za-z]:[\\/][^\r\n]*/g, "<local-path>")
+    .replace(/(?:\\\\|\/\/)[^\s\\/]+[\\/][^\r\n]*/g, "<local-path>")
+    .slice(0, 180);
+  if (code !== undefined && code !== null) {
+    return `code=${String(code).slice(0, 80)}${message ? `; message=${message}` : ""}`;
+  }
+  if (message) return message;
   return error instanceof Error ? error.name : "unknown";
 }
 
@@ -183,7 +201,51 @@ async function persistCompleted(messageId) {
   await completedWriteTail;
 }
 
+async function resolveNativeFileDelivery(record) {
+  if (record.fileKey) return record;
+  const uploaded = await uploadFeishuNativeAttachment(channel.rawClient, record);
+  const updated = {
+    ...record,
+    fileKey: uploaded.fileKey,
+    fileName: uploaded.fileName,
+    fileSize: uploaded.fileSize,
+    modifiedAtMs: uploaded.modifiedAtMs,
+  };
+  await deliveryOutbox.put(updated);
+  return updated;
+}
+
 async function deliverPendingRecord(record) {
+  if (record.kind === "file") {
+    const binding = bindingsByChat.get(record.chatId);
+    if (!binding) throw new Error("Native attachment delivery has no configured group binding");
+    await inspectBinding(binding);
+    const delivery = await resolveNativeFileDelivery(record);
+    const content = JSON.stringify({ file_key: delivery.fileKey });
+    const response = delivery.messageId
+      ? await channel.rawClient.im.message.reply({
+        data: {
+          content,
+          msg_type: "file",
+          reply_in_thread: Boolean(delivery.threadId),
+          uuid: deliveryIdempotencyKey(delivery.deliveryId),
+        },
+        path: { message_id: delivery.messageId },
+      })
+      : await channel.rawClient.im.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: delivery.chatId,
+          content,
+          msg_type: "file",
+          uuid: deliveryIdempotencyKey(delivery.deliveryId),
+        },
+      });
+    if (response?.code !== undefined && response.code !== 0) {
+      throw new Error(`Feishu native attachment send failed with code ${response.code}`);
+    }
+    return response?.data?.message_id || response?.data?.message?.message_id;
+  }
   if (record.kind === "send") {
     const binding = bindingsByChat.get(record.chatId);
     if (!binding) throw new Error("Proactive delivery has no configured group binding");
@@ -229,11 +291,15 @@ async function retryPendingDeliveries() {
   deliveryRetryInFlight = true;
   try {
     for (const record of deliveryOutbox.list({ dueAt: Date.now() })) {
+      if (record.dependsOn && deliveryOutbox.has(record.dependsOn)) continue;
       try {
         await deliverPendingRecord(record);
         await persistCompleted(record.deliveryId);
         await deliveryOutbox.remove(record.deliveryId);
-        log(`deferred ${record.kind === "send" ? "proactive final answer" : "final reply"} delivered for ${record.deliveryId}`);
+        const label = record.kind === "file"
+          ? "native attachment"
+          : record.kind === "send" ? "proactive final answer" : "final reply";
+        log(`deferred ${label} delivered for ${record.deliveryId}`);
       } catch (error) {
         await deliveryOutbox.markFailure(record.deliveryId, error);
         log(`deferred delivery failed for ${record.deliveryId}: ${safeError(error)}`);
@@ -346,8 +412,9 @@ async function sendBindingWelcome({ chatId, groupName, feedGroupName, settings }
       "- 本群固定对应一个 Codex 任务",
       `- 普通消息默认：${inputMode}`,
       `- 公开进度：${settings?.publicProgress ? "开启" : "关闭"}`,
+      `- 最终回答提醒：${settings?.finalMention === false ? "关闭" : "开启（@你）"}`,
       "",
-      "Bridge 重载后，可直接发送 Prompt，无需 @Bot。使用 `/settings` 调整普通消息的 steer/queue 默认方式与公开进度回传。",
+      "Bridge 重载后，可直接发送 Prompt，无需 @Bot。使用 `/settings` 调整普通消息方式、公开进度和最终回答 @提醒。",
     ].join("\n"),
   });
 }
@@ -443,21 +510,35 @@ async function replyFailure(msg, error) {
   }
 }
 
-async function queueDelivery(record, successLog) {
-  if (completed.has(record.deliveryId)) return;
-  await deliveryOutbox.put(record);
+async function queueDeliveryBundle(records, successLog) {
+  const pendingRecords = (Array.isArray(records) ? records : [])
+    .filter((record) => record?.deliveryId && !completed.has(record.deliveryId));
+  if (pendingRecords.length === 0) return;
+  await deliveryOutbox.putMany(pendingRecords);
   if (!channelConnected) return;
-  try {
-    const pending = deliveryOutbox.list().find((item) => item.deliveryId === record.deliveryId);
-    if (!pending) return;
-    await deliverPendingRecord(pending);
-    await persistCompleted(record.deliveryId);
-    await deliveryOutbox.remove(record.deliveryId);
-    if (successLog) log(successLog);
-  } catch (error) {
-    await deliveryOutbox.markFailure(record.deliveryId, error);
-    log(`delivery deferred for ${record.deliveryId}: ${safeError(error)}`);
+  let deliveredAll = true;
+  for (const record of pendingRecords) {
+    if (record.dependsOn && deliveryOutbox.has(record.dependsOn)) {
+      deliveredAll = false;
+      continue;
+    }
+    try {
+      const pending = deliveryOutbox.list().find((item) => item.deliveryId === record.deliveryId);
+      if (!pending) continue;
+      await deliverPendingRecord(pending);
+      await persistCompleted(record.deliveryId);
+      await deliveryOutbox.remove(record.deliveryId);
+    } catch (error) {
+      deliveredAll = false;
+      await deliveryOutbox.markFailure(record.deliveryId, error);
+      log(`delivery deferred for ${record.deliveryId}: ${safeError(error)}`);
+    }
   }
+  if (deliveredAll && successLog) log(successLog);
+}
+
+async function queueDelivery(record, successLog) {
+  await queueDeliveryBundle([record], successLog);
 }
 
 async function enqueuePromptMessage(msg, binding, text) {
@@ -617,7 +698,7 @@ async function uploadPromptImages(resources) {
         throw new Error("unsupported prompt image path");
       }
       const stat = await fs.lstat(filePath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 10 * 1024 * 1024) {
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > FEISHU_IMAGE_MAX_BYTES) {
         throw new Error("prompt image does not satisfy Feishu upload limits");
       }
       const response = await channel.rawClient.im.image.create({
@@ -636,10 +717,39 @@ async function uploadPromptImages(resources) {
   return uploaded;
 }
 
-async function uploadFinalAnswerSegments(answer) {
-  const extracted = extractCodexAnswerMedia(answer, { maxImages: maxFinalAnswerImages });
+async function prepareFinalAnswerMedia(answer) {
+  const extracted = extractCodexAnswerMedia(answer, {
+    maxImages: maxFinalAnswerImages,
+    maxAttachments: maxFinalAnswerAttachments,
+  });
   const uploadedByPath = new Map();
   const segments = [];
+  const attachments = [];
+  const attachmentsByPath = new Map();
+
+  const addNativeAttachment = async ({ localPath, fileName }) => {
+    const existing = attachmentsByPath.get(localPath);
+    if (existing) return existing;
+    if (attachments.length >= maxFinalAnswerAttachments) {
+      throw new Error("final answer has too many native attachments");
+    }
+    const inspected = await inspectFeishuNativeAttachment(localPath, { name: fileName });
+    attachments.push(inspected);
+    attachmentsByPath.set(localPath, inspected);
+    return inspected;
+  };
+
+  for (const attachment of extracted.attachments) {
+    try {
+      await addNativeAttachment({ localPath: attachment.path, fileName: attachment.name });
+    } catch (error) {
+      segments.push(Object.freeze({
+        type: "text",
+        text: "（一个附件未能作为飞书群文件发送；可在绑定的 Codex 任务中查看。）",
+      }));
+      log(`final answer attachment could not be prepared: ${safeError(error)}`);
+    }
+  }
 
   for (const segment of extracted.segments) {
     if (segment.type === "text") {
@@ -647,15 +757,35 @@ async function uploadFinalAnswerSegments(answer) {
       continue;
     }
 
-    let imageKey = uploadedByPath.get(segment.path);
+    let stat;
     try {
+      if (!path.isAbsolute(segment.path)) throw new Error("unsupported final answer image path");
+      stat = await fs.lstat(segment.path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
+        throw new Error("final answer image must be a regular non-empty file");
+      }
+      const delivery = classifyFeishuImageSize(stat.size);
+      if (delivery === "too_large") {
+        segments.push(Object.freeze({
+          type: "text",
+          text: "（图片超过飞书群文件 30 MB 上限；可在绑定的 Codex 任务中查看。）",
+        }));
+        log(`final answer image exceeds native attachment limit (${stat.size} bytes)`);
+        continue;
+      }
+      if (delivery === "file") {
+        await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
+        segments.push(Object.freeze({
+          type: "text",
+          text: "（图片已作为群内原生附件发送。）",
+        }));
+        continue;
+      }
+
+      let imageKey = uploadedByPath.get(segment.path);
       if (!imageKey) {
-        if (!path.isAbsolute(segment.path) || !supportedPromptImageExtensions.has(path.extname(segment.path).toLowerCase())) {
+        if (!supportedPromptImageExtensions.has(path.extname(segment.path).toLowerCase())) {
           throw new Error("unsupported final answer image path");
-        }
-        const stat = await fs.lstat(segment.path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 10 * 1024 * 1024) {
-          throw new Error("final answer image does not satisfy Feishu upload limits");
         }
         const response = await channel.rawClient.im.image.create({
           data: {
@@ -670,11 +800,21 @@ async function uploadFinalAnswerSegments(answer) {
       }
       segments.push(Object.freeze({ type: "image", imageKey }));
     } catch (error) {
-      segments.push(Object.freeze({
-        type: "text",
-        text: "（图片未能上传到飞书；可在绑定的 Codex 任务中查看。）",
-      }));
-      log(`final answer image could not be embedded: ${safeError(error)}`);
+      try {
+        if (!stat || stat.size > FEISHU_FILE_MAX_BYTES) throw error;
+        await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
+        segments.push(Object.freeze({
+          type: "text",
+          text: "（图片未能内嵌，已改为群内原生附件。）",
+        }));
+        log(`final answer image fell back to a native attachment: ${safeError(error)}`);
+      } catch (fallbackError) {
+        segments.push(Object.freeze({
+          type: "text",
+          text: "（图片未能上传到飞书；可在绑定的 Codex 任务中查看。）",
+        }));
+        log(`final answer image could not be delivered: ${safeError(fallbackError)}`);
+      }
     }
   }
 
@@ -684,7 +824,10 @@ async function uploadFinalAnswerSegments(answer) {
   if (extracted.strippedMetadataBlockCount > 0) {
     log(`stripped ${extracted.strippedMetadataBlockCount} renderer metadata block(s) from final answer`);
   }
-  return Object.freeze(segments);
+  return Object.freeze({
+    segments: Object.freeze(segments),
+    attachments: Object.freeze(attachments),
+  });
 }
 
 async function processTurnProgress(record) {
@@ -727,6 +870,11 @@ async function processTurnProgress(record) {
   }
 }
 
+async function queueTurnDelivery(record, attachments, successLog) {
+  const attachmentRecords = buildNativeAttachmentDeliveries(record, attachments);
+  await queueDeliveryBundle([record, ...attachmentRecords], successLog);
+}
+
 async function processCompletedTurn(record) {
   const deliveryId = externalTurnDeliveryId(record.threadId, record.turnId);
   if (completed.has(deliveryId)) return;
@@ -734,25 +882,30 @@ async function processCompletedTurn(record) {
     void retryPendingDeliveries();
     return;
   }
+  const mentionOpenId = relaySettings.get(record.threadId).finalMention
+    ? config.agent.ownerOpenId
+    : undefined;
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
-    const answerSegments = await uploadFinalAnswerSegments(record.answer);
-    await queueDelivery({
+    const media = await prepareFinalAnswerMedia(record.answer);
+    const delivery = {
       kind: "send",
       deliveryId,
       chatId: record.chatId,
       threadId: record.threadId,
       post: buildGoalTurnPost({
         goal: record.goal,
-        answerSegments,
+        answerSegments: media.segments,
         completedAtMs: record.completedAtMs,
         durationMs: record.durationMs,
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        mentionOpenId,
       }),
       createdAt: Date.now(),
-    }, `Goal result delivered for ${deliveryId}`);
+    };
+    await queueTurnDelivery(delivery, media.attachments, `Goal result delivered for ${deliveryId}`);
     return;
   }
   if (sourcePromptEntries.length === 0) {
@@ -763,24 +916,26 @@ async function processCompletedTurn(record) {
     getInput: (messageId) => inputLedger.get(messageId),
     isFeishuClientId: isFeishuMessageClientId,
   });
-  const answerSegments = await uploadFinalAnswerSegments(record.answer);
+  const media = await prepareFinalAnswerMedia(record.answer);
   if (route.kind === "reply" && !route.showPromptTimeline) {
-    await queueDelivery({
+    const delivery = {
       kind: "reply",
       deliveryId,
       messageId: route.messageId,
       chatId: route.chatId,
       threadId: route.threadId,
       post: buildFinalAnswerReplyPost({
-        answerSegments,
+        answerSegments: media.segments,
         completedAtMs: record.completedAtMs,
         durationMs: record.durationMs,
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        mentionOpenId,
       }),
       createdAt: Date.now(),
-    }, `final answer delivered for Feishu turn ${record.turnId}`);
+    };
+    await queueTurnDelivery(delivery, media.attachments, `final answer delivered for Feishu turn ${record.turnId}`);
     return;
   }
   const promptEntries = [];
@@ -794,7 +949,7 @@ async function processCompletedTurn(record) {
       source: entry.source,
     }));
   }
-  await queueDelivery({
+  const delivery = {
     kind: route.kind,
     deliveryId,
     messageId: route.messageId,
@@ -802,7 +957,7 @@ async function processCompletedTurn(record) {
     threadId: route.threadId,
     post: buildExternalTurnPost({
       promptEntries,
-      answerSegments,
+      answerSegments: media.segments,
       promptAtMs: record.promptAtMs,
       completedAtMs: record.completedAtMs,
       durationMs: record.durationMs,
@@ -810,9 +965,15 @@ async function processCompletedTurn(record) {
       timeZone: config.sessionRelay.displayTimeZone,
       maxPromptChars: config.sessionRelay.promptPreviewChars,
       maxReplyChars: config.maxReplyChars,
+      mentionOpenId,
     }),
     createdAt: Date.now(),
-  }, `${route.kind === "reply" ? "cross-client final reply" : "proactive final answer"} delivered for ${deliveryId}`);
+  };
+  await queueTurnDelivery(
+    delivery,
+    media.attachments,
+    `${route.kind === "reply" ? "cross-client final reply" : "proactive final answer"} delivered for ${deliveryId}`,
+  );
 }
 
 const channel = createLarkChannel({

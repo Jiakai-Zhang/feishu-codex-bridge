@@ -60,6 +60,38 @@ test("persists rich-text reply payloads with uploaded images", async () => {
   });
 });
 
+test("persists an ordered final-answer and native-file delivery bundle", async () => {
+  await withOutbox(async (file) => {
+    const outbox = await DeliveryOutbox.open(file);
+    await outbox.putMany([
+      {
+        kind: "send",
+        deliveryId: "codex-turn:thread:turn",
+        chatId: "oc_1",
+        post: { zh_cn: { content: [[{ tag: "text", text: "answer" }]] } },
+        createdAt: 100,
+      },
+      {
+        kind: "file",
+        deliveryId: "codex-turn:thread:turn:attachment:1",
+        dependsOn: "codex-turn:thread:turn",
+        chatId: "oc_1",
+        localPath: "C:/output/report.pdf",
+        fileName: "report.pdf",
+        fileSize: 123,
+        createdAt: 101,
+      },
+    ]);
+
+    const [answer, attachment] = (await DeliveryOutbox.open(file)).list();
+    assert.equal(answer.kind, "send");
+    assert.equal(attachment.kind, "file");
+    assert.equal(attachment.dependsOn, answer.deliveryId);
+    assert.equal(attachment.fileName, "report.pdf");
+    assert.equal(attachment.fileSize, 123);
+  });
+});
+
 test("persists only reply-scoped public status delivery bypasses", async () => {
   await withOutbox(async (file) => {
     const outbox = await DeliveryOutbox.open(file);

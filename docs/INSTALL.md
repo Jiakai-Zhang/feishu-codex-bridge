@@ -1,6 +1,6 @@
 # Windows 安装指南（Codex Session Relay Beta）
 
-本版本把一个飞书群绑定到一个 Codex 任务。群内普通消息进入该任务，Codex 最终回答（包括从 Desktop 发起的回答）同步回群；支持可配置的 steer/queue 默认行为、可选公开进度、排队、停止、状态、模型、Plan 与 Goal。新安装默认使用 `queue + 公开进度开启`；公开进度只包含 Codex 标记为 commentary 的阶段说明，不包含隐藏思维链或 raw reasoning。
+本版本把一个飞书群绑定到一个 Codex 任务。群内普通消息进入该任务，Codex 最终回答（包括从 Desktop 发起的回答）同步回群；支持可配置的 steer/queue 默认行为、可选公开进度、最终回答 @提醒、排队、停止、状态、模型、Plan 与 Goal。新安装默认使用 `queue + 公开进度开启 + 最终回答 @提醒开启`；公开进度只包含 Codex 标记为 commentary 的阶段说明，不包含隐藏思维链或 raw reasoning，并且始终不会 @。
 
 > 当前仅支持 Windows + Codex Desktop。Bridge 依赖 Codex App Server 的实验性 WebSocket 接口，因此本版本按 Beta 发布，不建议作为无人值守的生产服务。
 
@@ -34,7 +34,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.2.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
+git clone --branch v0.3.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
 ```
@@ -68,7 +68,7 @@ npm ci
 - 从已验证的飞书 CLI 身份读取必要标识，但不在终端显示它们；
 - 生成被 Git 忽略的 `bridge.config.json`；
 - 安装用户级 `$feishu-session-bind` Skill；
-- 设置 `FEISHU_CODEX_BRIDGE_HOME` 与 Codex Desktop 共享 App Server 地址。
+- 设置 `FEISHU_CODEX_BRIDGE_HOME`。新安装此时**不会**设置 Codex Desktop 共享 App Server 地址。
 
 已有本机配置时脚本默认保留，不会覆盖。只有确认要替换后才使用 `-ForceConfig`。
 
@@ -86,10 +86,11 @@ npm ci
 
 ```powershell
 .\start-bridge.ps1
-.\doctor.ps1 -RequireRunning
+.\configure-codex-desktop-relay.ps1
+.\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-全部检查通过后，**完全退出并重新打开 Codex Desktop**。只关闭一个窗口不一定会结束后台进程；需要确保新进程读取 `CODEX_APP_SERVER_WS_URL`。
+`configure-codex-desktop-relay.ps1` 会先确认共享 App Server 已监听，再安装当前用户登录恢复任务，最后才写入 `CODEX_APP_SERVER_WS_URL`。任何前置步骤失败都会保留 Desktop 的原启动方式。全部检查通过后，**完全退出并重新打开 Codex Desktop**。只关闭一个窗口不一定会结束后台进程；需要确保新进程读取新的环境变量。
 
 然后进行验收：
 
@@ -98,7 +99,8 @@ npm ci
 3. Bridge 自动创建 `{Project名}/{任务名}` 或 `独立/{任务名}` 群，并应用 `{主机名}-Codex` 标签。
 4. 在只有你和 Bot 的新群中直接发普通消息，无需 `@Bot`；确认 Prompt 进入绑定任务且最终回答返回群。
 5. 在 Codex Desktop 中发送一次 Prompt；确认其最终回答也返回同一群。
-6. 在绑定群发送 `/settings` 查看并修改当前 Session；在 CLI Bot 私聊发送 `/settings` 查看并修改后续新绑定的默认值。确认全新安装显示 `queue + 公开进度开启`。新绑定会复制创建当时的默认快照，已有群不会跟随全局默认变化。
+6. 让 Codex 最终回答引用一个不超过 30 MB 的本地文件；确认最终回答后出现可点击的群内原生附件。本地图片不超过 10 MB 时应直接内嵌，超过 10 MB 时应降级为附件。
+7. 在绑定群发送 `/settings` 查看并修改当前 Session；使用 `/settings mention on|off` 控制最终回答是否 @你。公开进度始终不 @。在 CLI Bot 私聊发送 `/settings` 可修改后续新绑定的默认值。确认全新安装显示 `queue + 公开进度开启 + 最终回答提醒开启`。新绑定会复制创建当时的默认快照，已有群不会跟随全局默认变化。
 
 也可以在目标 Codex 任务里说“帮我把这个任务绑定到飞书”，让 `$feishu-session-bind` Skill 创建或复用群。
 
@@ -111,7 +113,7 @@ npm ci
 .\doctor.ps1 -RequireRunning
 ```
 
-Bridge supervisor 会在进程意外退出后重启 Bridge；Windows 注销或重启后仍需再次运行 `start-bridge.ps1`。
+Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop relay 后，当前用户每次登录时，`FeishuCodexBridge-DesktopRelay` 任务会先恢复共享 App Server，再恢复 Bridge；若 App Server 无法恢复，它会移除 Bridge 自己写入的 Desktop relay pointer，使 Codex Desktop 回退到内置 App Server。需要彻底撤销该集成时运行 `configure-codex-desktop-relay.ps1 -Disable`，再完整重启 Desktop。
 
 ## 更新
 

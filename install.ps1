@@ -214,14 +214,28 @@ if (-not $NoUserChanges) {
     Copy-Item -LiteralPath (Join-Path $skillSource 'scripts\request-binding.ps1') -Destination (Join-Path $skillTarget 'scripts\request-binding.ps1') -Force
     Write-Output 'Installed the user-level Codex session binding skill.'
 
-    $configureArguments = @{}
-    if ($ForceConfig) { $configureArguments['Force'] = $true }
-    & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1') @configureArguments
+    # Existing installations may already have the Desktop relay pointer. Repair
+    # those installations in place by adding fail-open logon recovery. A fresh
+    # install deliberately leaves Codex Desktop untouched until the App Secret,
+    # Bridge, and shared App Server have all been verified.
+    $effectiveConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $expectedRelayUrl = [string]$effectiveConfig.sessionRelay.appServerUrl
+    $currentRelayUrl = [Environment]::GetEnvironmentVariable(
+        'CODEX_APP_SERVER_WS_URL', [EnvironmentVariableTarget]::User)
+    if (-not [string]::IsNullOrWhiteSpace($currentRelayUrl) -and $currentRelayUrl -eq $expectedRelayUrl) {
+        try {
+            & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1')
+            Write-Output 'Migrated the existing Desktop relay activation to fail-open logon recovery.'
+        } catch {
+            Write-Warning 'The existing Desktop relay could not be made fail-open, so its pointer was disabled. The Bridge installation can continue; rerun configure-codex-desktop-relay.ps1 after correcting the reported startup issue.'
+        }
+    }
 }
 
 Write-Output ''
 Write-Output 'Local installation is prepared.'
 Write-Output 'Next: publish the Feishu app, complete user OAuth, run setup-channel-secret.ps1, then start-bridge.ps1.'
 if (-not $NoUserChanges) {
-    Write-Output 'Fully exit and reopen Codex Desktop before testing shared Session Relay behavior.'
+    Write-Output 'After the Bridge is connected, run configure-codex-desktop-relay.ps1, then fully exit and reopen Codex Desktop.'
+    Write-Output 'A fresh install does not change Codex Desktop until that final activation succeeds.'
 }

@@ -9,7 +9,7 @@ import {
   SessionRelaySettingsStore,
 } from "./session-relay-settings.mjs";
 
-test("uses queue and public-progress on for a new installation", async () => {
+test("uses queue, public progress, and final mention for a new installation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "relay-settings-"));
   try {
     const store = await SessionRelaySettingsStore.open(path.join(directory, "settings.json"));
@@ -31,15 +31,15 @@ test("persists independent settings per Session and resets to defaults", async (
     await store.update("thread-b", { publicProgress: false });
 
     const reopened = await SessionRelaySettingsStore.open(filePath);
-    assert.deepEqual(reopened.get("thread-a"), { inputMode: "steer", publicProgress: false });
-    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false });
+    assert.deepEqual(reopened.get("thread-a"), { inputMode: "steer", publicProgress: false, finalMention: true });
+    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false, finalMention: true });
     const document = JSON.parse(await readFile(filePath, "utf8"));
     assert.deepEqual(document.defaults, DEFAULT_SESSION_RELAY_SETTINGS);
     assert.deepEqual(document.sessionFallback, DEFAULT_SESSION_RELAY_SETTINGS);
     assert.equal(document.sessions.length, 2);
 
     assert.deepEqual(await reopened.reset("thread-a"), DEFAULT_SESSION_RELAY_SETTINGS);
-    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false });
+    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false, finalMention: true });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -53,11 +53,11 @@ test("copies global defaults only when a new Session binding is initialized", as
     const initialized = await store.initialize("thread-new");
     assert.deepEqual(initialized, {
       created: true,
-      settings: { inputMode: "queue", publicProgress: true },
+      settings: { inputMode: "queue", publicProgress: true, finalMention: true },
     });
 
     await store.updateDefaults({ inputMode: "steer", publicProgress: false });
-    assert.deepEqual(store.get("thread-new"), { inputMode: "queue", publicProgress: true });
+    assert.deepEqual(store.get("thread-new"), { inputMode: "queue", publicProgress: true, finalMention: true });
     assert.deepEqual(store.get("thread-existing-without-record"), DEFAULT_SESSION_RELAY_SETTINGS);
     assert.deepEqual(await store.reset("thread-new"), LEGACY_SESSION_RELAY_SETTINGS);
   } finally {
@@ -76,11 +76,11 @@ test("migrates the legacy top-level Session array without changing its overrides
     }]), "utf8");
     const store = await SessionRelaySettingsStore.open(filePath);
     assert.deepEqual(store.getDefaults(), LEGACY_SESSION_RELAY_SETTINGS);
-    assert.deepEqual(store.get("thread-old"), { inputMode: "queue", publicProgress: true });
+    assert.deepEqual(store.get("thread-old"), { inputMode: "queue", publicProgress: true, finalMention: true });
     assert.deepEqual(store.get("thread-unconfigured"), LEGACY_SESSION_RELAY_SETTINGS);
     await store.updateDefaults({ publicProgress: true });
     const document = JSON.parse(await readFile(filePath, "utf8"));
-    assert.equal(document.version, 2);
+    assert.equal(document.version, 3);
     assert.deepEqual(document.sessionFallback, LEGACY_SESSION_RELAY_SETTINGS);
     assert.equal(document.sessions.length, 1);
   } finally {
@@ -98,7 +98,7 @@ test("keeps version-one global defaults while retaining the legacy fallback for 
       sessions: [],
     }), "utf8");
     const store = await SessionRelaySettingsStore.open(filePath);
-    assert.deepEqual(store.getDefaults(), { inputMode: "queue", publicProgress: false });
+    assert.deepEqual(store.getDefaults(), { inputMode: "queue", publicProgress: false, finalMention: true });
     assert.deepEqual(store.get("existing-unrecorded-thread"), LEGACY_SESSION_RELAY_SETTINGS);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -125,6 +125,7 @@ test("rejects invalid setting values", async () => {
     const store = await SessionRelaySettingsStore.open(path.join(directory, "settings.json"));
     await assert.rejects(() => store.update("thread-a", { inputMode: "later" }), /steer or queue/);
     await assert.rejects(() => store.update("thread-a", { publicProgress: "yes" }), /must be boolean/);
+    await assert.rejects(() => store.update("thread-a", { finalMention: "yes" }), /must be boolean/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

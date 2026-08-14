@@ -36,7 +36,7 @@ function fixture({ bindings = [] } = {}) {
     settingsStore: {
       initialize: async (threadId) => {
         calls.push(["settings", threadId]);
-        return { created: true, settings: { inputMode: "queue", publicProgress: true } };
+        return { created: true, settings: { inputMode: "queue", publicProgress: true, finalMention: true } };
       },
       remove: async (threadId) => { calls.push(["settings-remove", threadId]); },
     },
@@ -55,7 +55,7 @@ test("creates, verifies, labels, persists, and welcomes a session group in order
   assert.deepEqual(calls.map(([name]) => name), [
     "label-ready", "create", "verify", "label", "settings", "persist", "welcome",
   ]);
-  assert.deepEqual(calls.at(-1)[2], { inputMode: "queue", publicProgress: true });
+  assert.deepEqual(calls.at(-1)[2], { inputMode: "queue", publicProgress: true, finalMention: true });
 });
 
 test("is idempotent when a task is already bound", async () => {

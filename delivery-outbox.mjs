@@ -4,7 +4,7 @@ function normalizeRecord(record) {
   if (!record || typeof record !== "object") {
     throw new TypeError("Delivery record must be an object");
   }
-  const kind = record.kind === "send" ? "send" : "reply";
+  const kind = record.kind === "send" || record.kind === "file" ? record.kind : "reply";
   const deliveryId = String(record.deliveryId || record.messageId || "");
   if (!deliveryId) throw new TypeError("Delivery record requires a deliveryId");
   const messageId = record.messageId ? String(record.messageId) : undefined;
@@ -12,6 +12,11 @@ function normalizeRecord(record) {
   if (kind === "reply" && !messageId) throw new TypeError("Reply delivery requires a messageId");
   if (kind === "send" && !post) {
     throw new TypeError("Send delivery requires a post payload");
+  }
+  const fileKey = record.fileKey ? String(record.fileKey) : undefined;
+  const localPath = record.localPath ? String(record.localPath) : undefined;
+  if (kind === "file" && !fileKey && !localPath) {
+    throw new TypeError("File delivery requires a fileKey or localPath");
   }
   return {
     deliveryId,
@@ -21,6 +26,12 @@ function normalizeRecord(record) {
     threadId: record.threadId ? String(record.threadId) : undefined,
     markdown: String(record.markdown || ""),
     post: post ? structuredClone(post) : undefined,
+    dependsOn: record.dependsOn ? String(record.dependsOn) : undefined,
+    fileKey,
+    localPath,
+    fileName: record.fileName ? String(record.fileName).slice(0, 200) : undefined,
+    fileSize: Number(record.fileSize) > 0 ? Number(record.fileSize) : undefined,
+    modifiedAtMs: Number(record.modifiedAtMs) > 0 ? Number(record.modifiedAtMs) : undefined,
     publicStatus: kind === "reply" && record.publicStatus === true,
     createdAt: Number(record.createdAt) || Date.now(),
     attempts: Math.max(0, Number(record.attempts) || 0),
@@ -67,11 +78,17 @@ export class DeliveryOutbox {
   }
 
   async put(record) {
-    const normalized = normalizeRecord(record);
-    const existing = this.records.get(normalized.deliveryId);
-    this.records.set(normalized.deliveryId, existing
-      ? { ...existing, ...normalized, attempts: existing.attempts, nextAttemptAt: existing.nextAttemptAt }
-      : normalized);
+    await this.putMany([record]);
+  }
+
+  async putMany(records) {
+    const normalizedRecords = records.map((record) => normalizeRecord(record));
+    for (const normalized of normalizedRecords) {
+      const existing = this.records.get(normalized.deliveryId);
+      this.records.set(normalized.deliveryId, existing
+        ? { ...existing, ...normalized, attempts: existing.attempts, nextAttemptAt: existing.nextAttemptAt }
+        : normalized);
+    }
     await this.persist();
   }
 

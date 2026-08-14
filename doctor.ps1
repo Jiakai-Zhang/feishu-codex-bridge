@@ -1,5 +1,6 @@
 param(
-    [switch]$RequireRunning
+    [switch]$RequireRunning,
+    [switch]$RequireDesktopRelay
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +23,20 @@ function Invoke-LarkJson {
         return (($lines | ForEach-Object { [string]$_ }) -join "`n") | ConvertFrom-Json
     } catch {
         return $null
+    }
+}
+
+function Test-LoopbackPort {
+    param([string]$HostName, [int]$Port)
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $task = $client.ConnectAsync($HostName, $Port)
+        if (-not $task.Wait(250)) { return $false }
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
     }
 }
 
@@ -114,8 +129,61 @@ if ($config) {
     $expectedAppServerUrl = [string]$config.sessionRelay.appServerUrl
     $configuredAppServerUrl = [Environment]::GetEnvironmentVariable('CODEX_APP_SERVER_WS_URL', [EnvironmentVariableTarget]::User)
     $appServerMatches = -not [string]::IsNullOrWhiteSpace($expectedAppServerUrl) -and $configuredAppServerUrl -eq $expectedAppServerUrl
-    Add-Check -Name 'Codex Desktop relay pointer' -Passed $appServerMatches `
-        -Detail $(if ($appServerMatches) { 'user environment is configured' } else { 'run configure-codex-desktop-relay.ps1 and restart Codex Desktop' })
+    $relayActivationDeferred = -not $RequireDesktopRelay -and [string]::IsNullOrWhiteSpace($configuredAppServerUrl)
+    $relayPointerReady = $appServerMatches -or $relayActivationDeferred
+    Add-Check -Name 'Codex Desktop relay pointer' -Passed $relayPointerReady `
+        -Detail $(if ($appServerMatches) {
+            'user environment is configured'
+        } elseif ($relayActivationDeferred) {
+            'not enabled yet; allowed before final Desktop relay activation'
+        } else {
+            'missing or points elsewhere; run configure-codex-desktop-relay.ps1 after the Bridge starts'
+        })
+
+    $taskName = 'FeishuCodexBridge-DesktopRelay'
+    $stableBootstrapPath = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap\desktop-relay-bootstrap.ps1'
+    $relayTaskReady = $false
+    try {
+        if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            throw 'Windows Task Scheduler commands are unavailable'
+        }
+        $relayTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $actionMatches = @($relayTask.Actions | Where-Object {
+            ([string]$_.Arguments).IndexOf($stableBootstrapPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        }).Count -gt 0
+        $relayTaskReady = $actionMatches -and [string]$relayTask.State -ne 'Disabled' -and
+            (Test-Path -LiteralPath $stableBootstrapPath -PathType Leaf)
+        if (-not $relayTaskReady) { throw 'the task action, state, or stable bootstrap file is invalid' }
+        $taskDetail = 'fail-open logon recovery is installed'
+    } catch {
+        $taskDetail = $_.Exception.Message
+    }
+    $relayTaskCheckPassed = $relayTaskReady -or $relayActivationDeferred
+    Add-Check -Name 'Desktop relay logon recovery' -Passed $relayTaskCheckPassed `
+        -Detail $(if ($relayTaskReady) {
+            $taskDetail
+        } elseif ($relayActivationDeferred) {
+            'not installed yet; allowed before final Desktop relay activation'
+        } else {
+            "not ready: $taskDetail"
+        })
+
+    $appServerListening = $false
+    try {
+        $appServerUri = [Uri]$expectedAppServerUrl
+        $appServerListening = Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port
+    } catch {
+        $appServerListening = $false
+    }
+    $listenerCheckPassed = $appServerListening -or $relayActivationDeferred
+    Add-Check -Name 'Shared App Server listener' -Passed $listenerCheckPassed `
+        -Detail $(if ($appServerListening) {
+            'verified loopback port is accepting connections'
+        } elseif ($relayActivationDeferred) {
+            'not started yet; allowed before final Desktop relay activation'
+        } else {
+            'not listening; run start-app-server.ps1 or start-bridge.ps1'
+        })
 
     $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
     $skillRoot = Join-Path $userProfile '.agents\skills\feishu-session-bind'

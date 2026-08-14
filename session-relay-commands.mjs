@@ -44,9 +44,9 @@ export function parseSettingsAction(input) {
   if (!text || text.toLowerCase() === "status") return Object.freeze({ action: "status" });
   if (text.toLowerCase() === "reset") return Object.freeze({ action: "reset" });
 
-  const match = /^(input|default|mode|progress|thinking|commentary)\s+(\S+)$/i.exec(text);
+  const match = /^(input|default|mode|progress|thinking|commentary|mention)\s+(\S+)$/i.exec(text);
   if (!match) {
-    usage("用法：`/settings`、`/settings input steer|queue`、`/settings progress on|off` 或 `/settings reset`");
+    usage("用法：`/settings`、`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off` 或 `/settings reset`");
   }
   const setting = match[1].toLowerCase();
   const value = match[2].toLowerCase();
@@ -54,8 +54,10 @@ export function parseSettingsAction(input) {
     if (!["steer", "queue"].includes(value)) usage("用法：`/settings input steer|queue`");
     return Object.freeze({ action: "input", value });
   }
-  if (!["on", "off"].includes(value)) usage("用法：`/settings progress on|off`");
-  return Object.freeze({ action: "progress", value: value === "on" });
+  if (!["on", "off"].includes(value)) {
+    usage(setting === "mention" ? "用法：`/settings mention on|off`" : "用法：`/settings progress on|off`");
+  }
+  return Object.freeze({ action: setting === "mention" ? "mention" : "progress", value: value === "on" });
 }
 
 function stateLabel(status) {
@@ -152,10 +154,13 @@ export function formatSessionSettings(settings, { changed = false } = {}) {
     "",
     `- 普通消息：${inputModeLabel(value.inputMode)}`,
     `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
+    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@你）"}`,
     "",
-    "命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings reset`",
+    "命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off`、`/settings reset`",
     "",
     "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session。",
+    "",
+    "> 最终回答提醒只在 Turn 的最终消息中 @你；公开进度始终不会 @。",
     "",
     "> “公开进度（非隐藏思维链）”只转发 Codex 标记为 commentary 的阶段说明；不会转发隐藏思维链、raw reasoning 或工具原始输出。",
   ].join("\n");
@@ -168,10 +173,13 @@ export function formatGlobalSessionSettings(settings, { changed = false } = {}) 
     "",
     `- 普通消息：${inputModeLabel(value.inputMode)}`,
     `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
+    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@你）"}`,
     "",
-    "私聊命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings reset`",
+    "私聊命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off`、`/settings reset`",
     "",
     "> 只在此后成功创建绑定时复制给新 Session；已有绑定群不会随全局默认变化。群内 `/settings` 仍只修改该 Session。",
+    "",
+    "> 最终回答提醒只在 Turn 的最终消息中 @你；公开进度始终不会 @。",
     "",
     "> “公开进度（非隐藏思维链）”不会转发隐藏思维链、raw reasoning 或工具原始输出。",
   ].join("\n");
@@ -218,6 +226,7 @@ export function formatSessionStatus(status, { queueEntries = [], relaySettings }
     `- 模式：${statusModeLabel(status)}`,
     `- 普通消息：${inputModeLabel(relaySettings?.inputMode)}`,
     `- 公开进度：${relaySettings?.publicProgress ? "开启" : "关闭"}`,
+    `- 最终回答提醒：${relaySettings?.finalMention === false ? "关闭" : "开启（@你）"}`,
   );
   if (usage) {
     lines.push(`- 上下文累计：${Number(usage.totalTokens || 0).toLocaleString("zh-CN")} tokens`);
@@ -402,7 +411,9 @@ async function executeSettings(command, context) {
   }
   const patch = request.action === "input"
     ? { inputMode: request.value }
-    : { publicProgress: request.value };
+    : request.action === "progress"
+      ? { publicProgress: request.value }
+      : { finalMention: request.value };
   return formatSessionSettings(await settingsStore.update(threadId, patch), { changed: true });
 }
 
@@ -416,7 +427,9 @@ export async function executeGlobalSettingsCommand(command, { settingsStore } = 
   }
   const patch = request.action === "input"
     ? { inputMode: request.value }
-    : { publicProgress: request.value };
+    : request.action === "progress"
+      ? { publicProgress: request.value }
+      : { finalMention: request.value };
   return formatGlobalSessionSettings(await settingsStore.updateDefaults(patch), { changed: true });
 }
 

@@ -3,11 +3,13 @@ import { promises as fs } from "node:fs";
 export const DEFAULT_SESSION_RELAY_SETTINGS = Object.freeze({
   inputMode: "queue",
   publicProgress: true,
+  finalMention: true,
 });
 
 export const LEGACY_SESSION_RELAY_SETTINGS = Object.freeze({
   inputMode: "steer",
   publicProgress: false,
+  finalMention: true,
 });
 
 function normalizeInputMode(value) {
@@ -18,6 +20,10 @@ export function normalizeSessionRelaySettings(value = {}) {
   return Object.freeze({
     inputMode: normalizeInputMode(value?.inputMode),
     publicProgress: value?.publicProgress === true,
+    // This setting was introduced after the first settings schema. Missing
+    // values intentionally opt in so existing bindings gain the requested
+    // final-answer notification without being recreated.
+    finalMention: value?.finalMention !== false,
   });
 }
 
@@ -37,6 +43,9 @@ function validatePatch(patch) {
   }
   if (Object.hasOwn(patch, "publicProgress") && typeof patch.publicProgress !== "boolean") {
     throw new TypeError("Session public progress setting must be boolean");
+  }
+  if (Object.hasOwn(patch, "finalMention") && typeof patch.finalMention !== "boolean") {
+    throw new TypeError("Session final mention setting must be boolean");
   }
 }
 
@@ -150,7 +159,7 @@ export class SessionRelaySettingsStore {
 
   async persist() {
     const snapshot = JSON.stringify({
-      version: 2,
+      version: 3,
       defaults: this.getDefaults(),
       sessionFallback: normalizeSessionRelaySettings(this.sessionFallback),
       sessions: this.list(),
