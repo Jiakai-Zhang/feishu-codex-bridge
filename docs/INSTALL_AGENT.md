@@ -63,7 +63,7 @@ npm ci
 .\lark-cli.ps1 auth status --json --verify
 ```
 
-不得把完整 JSON 转发给用户，只总结 Bot/User 是否可用、是否验证成功、是否缺 Feed scope。
+不得把完整 JSON 转发给用户，只总结 Bot/User 是否可用、是否验证成功、是否缺 Feed 或长回答文档 scope。
 
 如果没有应用，询问用户是否允许飞书 CLI 创建一个专用于当前电脑 Codex Bridge 的企业自建应用。确认后，后台启动：
 
@@ -83,9 +83,9 @@ npm ci
 
 接着要求用户按照 `docs/FEISHU_APP_SETUP.md` 在开发者后台启用 Bot、添加权限、订阅 `im.message.receive_v1`、设置可用范围并发布版本。用户说“已发布”后，用 `auth status --json --verify` 验证 Bot；不能仅凭口头确认判定完成。
 
-## 3. 用户 Feed OAuth
+## 3. 用户 Feed 与长回答文档 OAuth
 
-若 `im:feed_group_v1:read` 或 `im:feed_group_v1:write` 缺失：
+若 `im:feed_group_v1:read`、`im:feed_group_v1:write`、`docx:document:create` 或 `docx:document:write_only` 缺失：
 
 1. 执行 `auth login --scope ... --no-wait --json`。
 2. 保存返回的短期 device code，不在回复中显示。
