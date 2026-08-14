@@ -68,6 +68,23 @@ test("extracts local file links as native attachments without exposing their pat
   assert.match(result.segments[0].text, /session-relay\.mjs:640/);
 });
 
+test("extracts local videos for native Feishu file delivery", () => {
+  const result = extractCodexAnswerMedia([
+    "演示视频：[查看结果](/C:/private/output/demo.mp4)",
+    "补充视频：[第二段](C:/private/output/second.webm)",
+  ].join("\n"), { maxAttachments: Number.MAX_SAFE_INTEGER });
+
+  assert.deepEqual(result.attachments.map(({ name, path: localPath }) => ({
+    name,
+    extension: path.win32.extname(localPath),
+  })), [
+    { name: "查看结果", extension: ".mp4" },
+    { name: "第二段", extension: ".webm" },
+  ]);
+  assert.equal(result.omittedAttachmentCount, 0);
+  assert.doesNotMatch(result.segments[0].text, /C:\\private|C:\/private/);
+});
+
 test("bounds distinct native attachments and reports omitted artifacts", () => {
   const result = extractCodexAnswerMedia([
     "[one](/C:/private/one.pdf)",

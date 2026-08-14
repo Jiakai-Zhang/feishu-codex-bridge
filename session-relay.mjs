@@ -24,6 +24,13 @@ import {
   uploadFeishuNativeAttachment,
 } from "./feishu-native-attachment.mjs";
 import { FeishuFeedGroupManager } from "./feishu-feed-group.mjs";
+import {
+  buildLongAnswerDocumentMarkdown,
+  buildLongAnswerDocumentTitle,
+  FeishuLongAnswerDocumentManager,
+  LongAnswerDocumentStore,
+  shouldCreateLongAnswerDocument,
+} from "./feishu-long-answer-document.mjs";
 import { FeishuSessionChatManager } from "./feishu-session-chat.mjs";
 import { SessionAddFlow } from "./session-add-flow.mjs";
 import { SessionBindingInbox } from "./session-binding-inbox.mjs";
@@ -64,6 +71,7 @@ const deliveryOutboxPath = path.join(runtimeDir, "session-relay-pending-deliveri
 const inputLedgerPath = path.join(runtimeDir, "session-relay-input-ledger.json");
 const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json");
 const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
+const longAnswerDocumentsPath = path.join(runtimeDir, "session-relay-long-answer-documents.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
@@ -75,8 +83,7 @@ const bindingsByChat = new Map(config.sessionRelay.bindings.map((binding) => [bi
 const supportedPromptImageExtensions = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".ico", ".tif", ".tiff", ".heic",
 ]);
-const maxFinalAnswerImages = 10;
-const maxFinalAnswerAttachments = 10;
+const maxFinalAnswerMediaItems = Number.MAX_SAFE_INTEGER;
 
 const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
@@ -91,6 +98,14 @@ const inputLedger = await SessionInputLedger.open(inputLedgerPath);
 const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
   legacyInstall: config.sessionRelay.bindings.length > 0,
 });
+const longAnswerDocuments = await LongAnswerDocumentStore.open(longAnswerDocumentsPath);
+const longAnswerDocumentManager = config.larkCliEntry
+  ? new FeishuLongAnswerDocumentManager({
+      nodeExecutable: config.nodeExecutable,
+      larkCliEntry: config.larkCliEntry,
+      cwd: scriptDir,
+    })
+  : undefined;
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => inputLedger.put({
@@ -719,34 +734,35 @@ async function uploadPromptImages(resources) {
 
 async function prepareFinalAnswerMedia(answer) {
   const extracted = extractCodexAnswerMedia(answer, {
-    maxImages: maxFinalAnswerImages,
-    maxAttachments: maxFinalAnswerAttachments,
+    maxImages: maxFinalAnswerMediaItems,
+    maxAttachments: maxFinalAnswerMediaItems,
   });
+  const documentMarkdown = buildLongAnswerDocumentMarkdown(extracted.segments);
   const uploadedByPath = new Map();
   const segments = [];
+  const deliveryNotices = [];
   const attachments = [];
   const attachmentsByPath = new Map();
 
   const addNativeAttachment = async ({ localPath, fileName }) => {
     const existing = attachmentsByPath.get(localPath);
     if (existing) return existing;
-    if (attachments.length >= maxFinalAnswerAttachments) {
-      throw new Error("final answer has too many native attachments");
-    }
     const inspected = await inspectFeishuNativeAttachment(localPath, { name: fileName });
     attachments.push(inspected);
     attachmentsByPath.set(localPath, inspected);
     return inspected;
+  };
+  const addDeliveryNotice = (text) => {
+    const notice = Object.freeze({ type: "text", text });
+    segments.push(notice);
+    deliveryNotices.push(notice);
   };
 
   for (const attachment of extracted.attachments) {
     try {
       await addNativeAttachment({ localPath: attachment.path, fileName: attachment.name });
     } catch (error) {
-      segments.push(Object.freeze({
-        type: "text",
-        text: "（一个附件未能作为飞书群文件发送；可在绑定的 Codex 任务中查看。）",
-      }));
+      addDeliveryNotice("（一个附件未能作为飞书群文件发送；可在绑定的 Codex 任务中查看。）");
       log(`final answer attachment could not be prepared: ${safeError(error)}`);
     }
   }
@@ -766,19 +782,13 @@ async function prepareFinalAnswerMedia(answer) {
       }
       const delivery = classifyFeishuImageSize(stat.size);
       if (delivery === "too_large") {
-        segments.push(Object.freeze({
-          type: "text",
-          text: "（图片超过飞书群文件 30 MB 上限；可在绑定的 Codex 任务中查看。）",
-        }));
+        addDeliveryNotice("（图片超过飞书群文件 30 MB 上限；可在绑定的 Codex 任务中查看。）");
         log(`final answer image exceeds native attachment limit (${stat.size} bytes)`);
         continue;
       }
       if (delivery === "file") {
         await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
-        segments.push(Object.freeze({
-          type: "text",
-          text: "（图片已作为群内原生附件发送。）",
-        }));
+        addDeliveryNotice("（图片已作为群内原生附件发送。）");
         continue;
       }
 
@@ -803,16 +813,10 @@ async function prepareFinalAnswerMedia(answer) {
       try {
         if (!stat || stat.size > FEISHU_FILE_MAX_BYTES) throw error;
         await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
-        segments.push(Object.freeze({
-          type: "text",
-          text: "（图片未能内嵌，已改为群内原生附件。）",
-        }));
+        addDeliveryNotice("（图片未能内嵌，已改为群内原生附件。）");
         log(`final answer image fell back to a native attachment: ${safeError(error)}`);
       } catch (fallbackError) {
-        segments.push(Object.freeze({
-          type: "text",
-          text: "（图片未能上传到飞书；可在绑定的 Codex 任务中查看。）",
-        }));
+        addDeliveryNotice("（图片未能上传到飞书；可在绑定的 Codex 任务中查看。）");
         log(`final answer image could not be delivered: ${safeError(fallbackError)}`);
       }
     }
@@ -826,8 +830,56 @@ async function prepareFinalAnswerMedia(answer) {
   }
   return Object.freeze({
     segments: Object.freeze(segments),
+    deliveryNotices: Object.freeze(deliveryNotices),
     attachments: Object.freeze(attachments),
+    documentMarkdown,
   });
+}
+
+async function prepareFinalAnswerDelivery(record) {
+  const media = await prepareFinalAnswerMedia(record.answer);
+  if (!shouldCreateLongAnswerDocument(record.answer, config.maxReplyChars)) return media;
+  if (!longAnswerDocumentManager || !media.documentMarkdown) {
+    log("long final answer could not be moved to a Feishu document; using the normal reply fallback");
+    return media;
+  }
+
+  try {
+    let document = longAnswerDocuments.get(record.threadId, record.turnId);
+    if (!document) {
+      const created = await longAnswerDocumentManager.create({
+        title: buildLongAnswerDocumentTitle(record.completedAtMs, config.sessionRelay.displayTimeZone),
+        markdown: media.documentMarkdown,
+      });
+      document = await longAnswerDocuments.put({
+        threadId: record.threadId,
+        turnId: record.turnId,
+        url: created.url,
+        createdAt: Date.now(),
+      });
+    }
+    const imageSegments = media.segments.filter((segment) => segment?.type === "image");
+    return Object.freeze({
+      ...media,
+      segments: Object.freeze([
+        Object.freeze({
+          type: "text",
+          text: `回答较长，已整理为飞书云文档：[打开完整结果](${document.url})`,
+        }),
+        ...media.deliveryNotices,
+        ...imageSegments,
+      ]),
+      longAnswerDocument: true,
+    });
+  } catch (error) {
+    log(`long final answer document creation failed; using the normal reply fallback: ${safeError(error)}`);
+    return media;
+  }
+}
+
+async function finishLongAnswerDocumentDelivery(record, media) {
+  if (!media?.longAnswerDocument) return;
+  await longAnswerDocuments.remove(record.threadId, record.turnId);
 }
 
 async function processTurnProgress(record) {
@@ -887,7 +939,7 @@ async function processCompletedTurn(record) {
     : undefined;
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
-    const media = await prepareFinalAnswerMedia(record.answer);
+    const media = await prepareFinalAnswerDelivery(record);
     const delivery = {
       kind: "send",
       deliveryId,
@@ -906,6 +958,7 @@ async function processCompletedTurn(record) {
       createdAt: Date.now(),
     };
     await queueTurnDelivery(delivery, media.attachments, `Goal result delivered for ${deliveryId}`);
+    await finishLongAnswerDocumentDelivery(record, media);
     return;
   }
   if (sourcePromptEntries.length === 0) {
@@ -916,7 +969,7 @@ async function processCompletedTurn(record) {
     getInput: (messageId) => inputLedger.get(messageId),
     isFeishuClientId: isFeishuMessageClientId,
   });
-  const media = await prepareFinalAnswerMedia(record.answer);
+  const media = await prepareFinalAnswerDelivery(record);
   if (route.kind === "reply" && !route.showPromptTimeline) {
     const delivery = {
       kind: "reply",
@@ -936,6 +989,7 @@ async function processCompletedTurn(record) {
       createdAt: Date.now(),
     };
     await queueTurnDelivery(delivery, media.attachments, `final answer delivered for Feishu turn ${record.turnId}`);
+    await finishLongAnswerDocumentDelivery(record, media);
     return;
   }
   const promptEntries = [];
@@ -974,6 +1028,7 @@ async function processCompletedTurn(record) {
     media.attachments,
     `${route.kind === "reply" ? "cross-client final reply" : "proactive final answer"} delivered for ${deliveryId}`,
   );
+  await finishLongAnswerDocumentDelivery(record, media);
 }
 
 const channel = createLarkChannel({

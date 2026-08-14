@@ -10,6 +10,35 @@
 - 飞书控制台：[自建应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - 交给 Codex 安装：[安装 Agent Prompt](docs/INSTALL_AGENT_PROMPT.md)
 
+### 依赖与飞书授权速查
+
+本机依赖：Windows 10/11、PowerShell、Git、Node.js `>=22.13.0`、npm，以及已经登录的 Codex Desktop/CLI。仓库依赖必须在固定版本目录中通过 `npm ci` 安装，其中包含 `@larksuite/channel` 与 `@larksuite/cli`；Bridge 不需要 OpenAI API Key。Session Relay 还要求 Codex Desktop 与 Bridge 连接同一个本机 App Server。
+
+飞书自建应用需要启用机器人，并在开发者后台添加、审批和发布以下应用权限：
+
+| 权限 | 用途 |
+| --- | --- |
+| `im:message` | 发送、回复最终消息和互动卡片 |
+| `im:message.p2p_msg` | 接收 Bot 私聊命令，例如 `/add` |
+| `im:message.group_msg` | 接收群内未 `@Bot` 的普通消息 |
+| `im:chat:readonly` | 读取绑定群基本信息 |
+| `im:chat.members:read` | 校验群内严格只有 owner 与当前 Bot |
+| `im:chat:create` | 自动创建专属 Session 群 |
+| `im:resource` | 上传消息图片、视频和其他文件 |
+| `docx:document:create` | 以当前用户身份创建长回答云文档 |
+| `docx:document:write_only` | 把完整 Markdown 回答写入新文档 |
+
+事件订阅必须使用长连接并包含 `im.message.receive_v1`。权限或事件有任何变化，都要创建并发布新的应用版本；只保存草稿不会对线上 Bot 生效。若企业要求管理员审批，必须等待审批通过。
+
+以下是当前用户 OAuth scope，不是 App Secret；同样要先在应用权限中启用，再由当前用户在浏览器授权：
+
+- Feed 标签（如启用）：`im:feed_group_v1:read`、`im:feed_group_v1:write`。
+- 长回答云文档：`docx:document:create`、`docx:document:write_only`。
+
+可用 `lark-cli.ps1 auth status --json --verify` 和 `doctor.ps1` 验证，但不要把完整认证 JSON 贴到聊天、Issue 或日志中。App Secret 只允许通过 `setup-channel-secret.ps1` 在本机可见窗口输入并用 Windows DPAPI 保存；配置、token、用户/群/任务标识都不得提交到 Git。
+
+当最终文字超过 `maxReplyChars` 时，Bridge 会把去除本机路径和渲染器元数据后的完整 Markdown 写入当前用户的飞书云文档，并在原卡片/回复中发送链接；创建文档失败时自动退回原有文本投递。回答中的本地图片会内嵌发送，视频及其他文件会作为飞书原生附件排队投递，不再限制媒体条目数。受飞书接口限制，单张内嵌图片最大 10 MB，原生文件（包括视频）最大 30 MB；超限文件不会上传，完整结果仍保留在绑定的 Codex Session 中。
+
 最短用法：
 
 ```text

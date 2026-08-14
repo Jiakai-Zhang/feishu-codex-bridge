@@ -49,6 +49,8 @@ npm ci
 - `im:chat.members:read`：验证群内只有绑定用户与 Bot；
 - `im:chat:create`：创建专属绑定群；
 - `im:resource`：上传、下载消息图片与文件。
+- `docx:document:create`：以当前用户身份创建长回答云文档；
+- `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 
 如果后台提示管理员审批，等待企业管理员批准后再继续。Bot 权限必须在开发者后台添加并重新发布应用；反复执行用户 OAuth 不能补上 Bot 权限。
 
@@ -70,23 +72,25 @@ npm ci
 
 只检查结果中的 Bot 是否 `available=true` 且 `verified=true`。不要把完整 JSON（其中含应用和用户标识）粘贴到聊天或 Issue。
 
-## D. 授权当前用户管理 Feed 标签
+## D. 授权当前用户使用 Feed 标签和长回答文档
 
-群标签由用户身份调用 Feed API，因此需要单独授予：
+群标签和长回答云文档都由用户身份调用，因此需要单独授予：
 
 - `im:feed_group_v1:read`
 - `im:feed_group_v1:write`
+- `docx:document:create`
+- `docx:document:write_only`
 
 人工直接操作时可运行：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
 ```
 
 Agent 应使用可暂停的设备授权流程：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write" --no-wait --json
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only" --no-wait --json
 .\lark-cli.ps1 auth qrcode "<verification URL>" --output feishu-oauth.png
 ```
 
@@ -96,7 +100,7 @@ Agent 把验证网址和生成的二维码显示给用户后结束当前回合�
 .\lark-cli.ps1 auth login --device-code "<device code>" --json
 ```
 
-二维码图片与 device code 都是临时安装产物，不得提交到 Git。最后再次运行 `auth status --json --verify`，确认用户身份可用，并运行仓库的 `doctor.ps1` 检查两个 Feed scope。
+二维码图片与 device code 都是临时安装产物，不得提交到 Git。最后再次运行 `auth status --json --verify`，确认用户身份可用，并运行仓库的 `doctor.ps1` 检查 Feed 与文档 scope。
 
 ## E. App Secret 的第二份用途
 

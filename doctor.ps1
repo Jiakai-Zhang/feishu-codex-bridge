@@ -260,6 +260,12 @@ if ($config) {
         $feedReady = $missingFeedScopes.Count -eq 0
         Add-Check -Name 'Feishu Feed label OAuth scopes' -Passed $feedReady `
             -Detail $(if ($feedReady) { 'read and write scopes granted' } else { "missing: $($missingFeedScopes -join ', ')" })
+
+        $requiredDocumentScopes = @('docx:document:create', 'docx:document:write_only')
+        $missingDocumentScopes = @($requiredDocumentScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
+        $documentsReady = $missingDocumentScopes.Count -eq 0
+        Add-Check -Name 'Feishu long-answer document OAuth scopes' -Passed $documentsReady `
+            -Detail $(if ($documentsReady) { 'create and write scopes granted' } else { "missing: $($missingDocumentScopes -join ', ')" })
     }
 
     if ($RequireRunning) {
