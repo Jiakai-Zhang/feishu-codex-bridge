@@ -5,13 +5,27 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw 'bridge.config.json not found.'
 }
 $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+$mode = if ([string]::IsNullOrWhiteSpace([string]$config.mode)) { 'project-agent' } else { [string]$config.mode }
 $runtimeDir = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 $pidPath = Join-Path $runtimeDir 'bridge.pid'
 $stopPath = Join-Path $runtimeDir 'stop.request'
-$bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'channel-bridge.mjs'))
+$supervisorPidPath = Join-Path $runtimeDir 'bridge-supervisor.pid'
+$supervisorStopPath = Join-Path $runtimeDir 'supervisor-stop.request'
+
+$supervisorPid = $null
+if (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf) {
+    $supervisorPid = [int](Get-Content -Raw -LiteralPath $supervisorPidPath)
+}
+$bridgeName = if ($mode -eq 'session-relay') { 'session-relay.mjs' } else { 'channel-bridge.mjs' }
+$bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $bridgeName))
 
 if (-not (Test-Path -LiteralPath $pidPath)) {
-    Write-Output 'Bridge is not running.'
+    if ($supervisorPid -and (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
+        New-Item -ItemType File -Force -Path $supervisorStopPath | Out-Null
+        Write-Output 'Bridge is between supervised runs; requested supervisor stop.'
+    } else {
+        Write-Output 'Bridge is not running.'
+    }
     exit 0
 }
 
@@ -26,11 +40,16 @@ if (-not $isBridge) {
 $process = Get-Process -Id $bridgePid -ErrorAction SilentlyContinue
 
 New-Item -ItemType File -Force -Path $stopPath | Out-Null
+if ($supervisorPid) {
+    New-Item -ItemType File -Force -Path $supervisorStopPath | Out-Null
+}
 $deadline = [DateTime]::UtcNow.AddSeconds(20)
 while ([DateTime]::UtcNow -lt $deadline) {
     if (-not (Get-Process -Id $bridgePid -ErrorAction SilentlyContinue)) {
-        Write-Output "Bridge stopped gracefully (PID $bridgePid)."
-        exit 0
+        if (-not $supervisorPid -or -not (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
+            Write-Output "Bridge stopped gracefully (PID $bridgePid)."
+            exit 0
+        }
     }
     Start-Sleep -Milliseconds 250
 }

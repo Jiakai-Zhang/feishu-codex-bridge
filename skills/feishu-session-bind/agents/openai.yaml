@@ -1,0 +1,6 @@
+interface:
+  display_name: "绑定飞书任务群"
+  short_description: "为当前 Codex 任务创建、标记并绑定专属飞书群"
+  default_prompt: "使用 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书群。"
+policy:
+  allow_implicit_invocation: true

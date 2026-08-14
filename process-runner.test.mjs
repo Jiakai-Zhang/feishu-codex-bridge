@@ -62,3 +62,16 @@ test("normal close keeps the real exit code", async () => {
   assert.equal(result.logicalCompletionSeen, false);
   assert.equal(result.forcedAfterLogicalCompletion, false);
 });
+
+test("writes an explicit UTF-8 buffer to child stdin without transcoding", async () => {
+  const child = fakeChild();
+  const chunks = [];
+  child.stdin.on("data", (chunk) => chunks.push(chunk));
+  child.stdin.on("end", () => {
+    child.exitCode = 0;
+    child.emit("close", 0);
+  });
+  const input = Buffer.from("飞书 Project 任务", "utf8");
+  await runProcess("codex", [], { input, spawnProcess: () => child });
+  assert.deepEqual(Buffer.concat(chunks), input);
+});

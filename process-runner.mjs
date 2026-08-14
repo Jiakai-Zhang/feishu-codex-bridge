@@ -182,6 +182,7 @@ export function runProcess(executable, args, {
       else rejectOnce(error);
     });
     child.on("close", (code) => settle(code));
-    child.stdin.end(input ?? "", "utf8");
+    if (Buffer.isBuffer(input) || input instanceof Uint8Array) child.stdin.end(input);
+    else child.stdin.end(input ?? "", "utf8");
   });
 }

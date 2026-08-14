@@ -1,13 +1,26 @@
 {
+  "schemaVersion": 4,
+  "mode": "session-relay",
   "appId": "cli_your_feishu_app_id",
-  "threadId": "your_initial_codex_thread_id",
-  "allowedSenderOpenId": "ou_your_feishu_open_id",
-  "workspace": "C:\\path\\to\\your\\codex-workspace",
-  "nodeExecutable": "C:\\path\\to\\node.exe",
-  "larkCliEntry": "C:\\path\\to\\node_modules\\@larksuite\\cli\\scripts\\run.js",
+  "workspace": "C:\\path\\to\\bridge-runtime-root",
+  "agent": {
+    "ownerOpenId": "ou_your_feishu_open_id"
+  },
+  "sessionRelay": {
+    "nameSync": "none",
+    "appServerUrl": "ws://127.0.0.1:47321/rpc",
+    "displayTimeZone": "Asia/Shanghai",
+    "promptPreviewChars": 4000,
+    "feedGroup": {
+      "enabled": true,
+      "agentName": "Codex"
+    },
+    "bindings": []
+  },
+  "nodeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+  "larkCliEntry": ".\\node_modules\\@larksuite\\cli\\scripts\\run.js",
   "codexExecutable": "C:\\path\\to\\codex.exe",
-  "sandboxMode": "danger-full-access",
-  "streamSegmentMs": 480000,
+  "sandboxMode": "workspace-write",
   "completionPollMs": 30000,
   "completionStableMs": 15000,
   "httpTimeoutMs": 20000,

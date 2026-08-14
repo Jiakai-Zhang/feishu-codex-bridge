@@ -1,0 +1,102 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
+
+export function classifyFeishuImageSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size <= 0) return "invalid";
+  if (size <= FEISHU_IMAGE_MAX_BYTES) return "image";
+  if (size <= FEISHU_FILE_MAX_BYTES) return "file";
+  return "too_large";
+}
+
+export function safeNativeAttachmentName(value, localPath) {
+  const requested = String(value || "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const fallback = path.win32.basename(String(localPath || "")) || path.basename(String(localPath || ""));
+  const fallbackExtension = path.win32.extname(fallback);
+  const requestedWithExtension = requested && fallbackExtension && !path.win32.extname(requested)
+    ? `${requested}${fallbackExtension}`
+    : requested;
+  const name = (requestedWithExtension || fallback || "Codex-attachment.bin")
+    .replace(/[\\/]/g, "_")
+    .trim();
+  return (name || "Codex-attachment.bin").slice(0, 200);
+}
+
+export async function inspectFeishuNativeAttachment(localPath, {
+  name,
+  fsImpl = fs,
+} = {}) {
+  const target = String(localPath || "");
+  if (!path.isAbsolute(target)) throw new Error("native attachment path must be absolute");
+  const stat = await fsImpl.lstat(target);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("native attachment must be a regular non-symlink file");
+  }
+  if (stat.size <= 0) throw new Error("native attachment must not be empty");
+  if (stat.size > FEISHU_FILE_MAX_BYTES) {
+    throw new Error("native attachment exceeds the Feishu 30 MB file limit");
+  }
+  return Object.freeze({
+    localPath: target,
+    fileName: safeNativeAttachmentName(name, target),
+    fileSize: stat.size,
+    modifiedAtMs: Number(stat.mtimeMs) || undefined,
+  });
+}
+
+export async function uploadFeishuNativeAttachment(client, attachment, {
+  fsImpl = fs,
+} = {}) {
+  if (!client?.im?.v1?.file?.create) throw new Error("Feishu file upload client is unavailable");
+  const inspected = await inspectFeishuNativeAttachment(attachment?.localPath, {
+    name: attachment?.fileName,
+    fsImpl,
+  });
+  const expectedSize = Number(attachment?.fileSize);
+  if (Number.isFinite(expectedSize) && expectedSize > 0 && inspected.fileSize !== expectedSize) {
+    throw new Error("native attachment changed after it was queued");
+  }
+  const response = await client.im.v1.file.create({
+    data: {
+      file_type: "stream",
+      file_name: inspected.fileName,
+      file: await fsImpl.readFile(inspected.localPath),
+    },
+  });
+  if (response?.code !== undefined && response.code !== 0) {
+    throw new Error(`Feishu file upload failed with code ${response.code}`);
+  }
+  const fileKey = response?.file_key || response?.data?.file_key;
+  if (!fileKey) throw new Error("Feishu file upload returned no file_key");
+  return Object.freeze({
+    ...inspected,
+    fileKey: String(fileKey),
+  });
+}
+
+export function buildNativeAttachmentDeliveries(baseRecord, attachments) {
+  const source = Array.isArray(attachments) ? attachments : [];
+  const records = [];
+  const baseDeliveryId = String(baseRecord?.deliveryId || "codex-attachment");
+  const createdAt = Number(baseRecord?.createdAt) || Date.now();
+  source.forEach((attachment, index) => {
+    const deliveryId = `${baseDeliveryId}:attachment:${index + 1}`;
+    records.push(Object.freeze({
+      kind: "file",
+      deliveryId,
+      dependsOn: baseDeliveryId,
+      messageId: baseRecord?.kind === "reply" ? baseRecord.messageId : undefined,
+      chatId: String(baseRecord?.chatId || ""),
+      threadId: baseRecord?.threadId ? String(baseRecord.threadId) : undefined,
+      localPath: String(attachment?.localPath || ""),
+      fileName: safeNativeAttachmentName(attachment?.fileName, attachment?.localPath),
+      fileSize: Number(attachment?.fileSize) || undefined,
+      modifiedAtMs: Number(attachment?.modifiedAtMs) || undefined,
+      createdAt: createdAt + index + 1,
+    }));
+  });
+  return Object.freeze(records);
+}
