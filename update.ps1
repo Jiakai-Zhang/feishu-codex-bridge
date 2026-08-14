@@ -201,6 +201,14 @@ if ([string]::IsNullOrWhiteSpace([string]$config.workspace)) {
 }
 $runtimeDirectory = Join-Path ([IO.Path]::GetFullPath([string]$config.workspace)) 'work\feishu-codex-bridge'
 New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
+$expectedDesktopRelayUrl = [string]$config.sessionRelay.appServerUrl
+$currentDesktopRelayUrl = [Environment]::GetEnvironmentVariable(
+    'CODEX_APP_SERVER_WS_URL', [EnvironmentVariableTarget]::User)
+if ($TestMode -and -not [string]::IsNullOrWhiteSpace($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL)) {
+    $currentDesktopRelayUrl = $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL
+}
+$desktopRelayWasEnabled = -not [string]::IsNullOrWhiteSpace($expectedDesktopRelayUrl) -and
+    $currentDesktopRelayUrl -eq $expectedDesktopRelayUrl
 
 $previousCommit = Invoke-Git -Arguments @('rev-parse', '--verify', 'HEAD') -Capture
 Invoke-Git -Arguments @('fetch', '--quiet', 'origin', "refs/tags/${Version}:refs/tags/${Version}")
@@ -216,6 +224,7 @@ if ($previousCommit -eq $targetCommit) {
     }
     $doctorArguments = @{}
     if ($bridgeWasRunning) { $doctorArguments['RequireRunning'] = $true }
+    if ($desktopRelayWasEnabled) { $doctorArguments['RequireDesktopRelay'] = $true }
     & (Join-Path $repositoryRoot 'doctor.ps1') @doctorArguments
     exit 0
 }
@@ -244,9 +253,17 @@ try {
 
     if ($shouldStart) {
         & (Join-Path $repositoryRoot 'start-bridge.ps1')
-        & (Join-Path $repositoryRoot 'doctor.ps1') -RequireRunning
+        if ($desktopRelayWasEnabled) {
+            & (Join-Path $repositoryRoot 'doctor.ps1') -RequireRunning -RequireDesktopRelay
+        } else {
+            & (Join-Path $repositoryRoot 'doctor.ps1') -RequireRunning
+        }
     } else {
-        & (Join-Path $repositoryRoot 'doctor.ps1')
+        if ($desktopRelayWasEnabled) {
+            & (Join-Path $repositoryRoot 'doctor.ps1') -RequireDesktopRelay
+        } else {
+            & (Join-Path $repositoryRoot 'doctor.ps1')
+        }
     }
 
     $installedCommit = Invoke-Git -Arguments @('rev-parse', '--verify', 'HEAD') -Capture
@@ -275,6 +292,22 @@ try {
         }
         if ($bridgeWasRunning -or $StartBridge) {
             & (Join-Path $repositoryRoot 'start-bridge.ps1')
+        }
+        if ($desktopRelayWasEnabled) {
+            $previousStarter = Join-Path $repositoryRoot 'start-app-server.ps1'
+            if (Test-Path -LiteralPath $previousStarter -PathType Leaf) {
+                & $previousStarter | Out-Null
+                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1')
+            } elseif ($bridgeWasRunning -or $StartBridge) {
+                # v0.2 has no standalone starter. start-bridge.ps1 above has
+                # already restored its App Server, so the old pointer is safe.
+                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1')
+            } else {
+                # Never roll back to an enabled v0.2 pointer when no listener
+                # was restored. Preserve Desktop availability over the unsafe
+                # pointer while leaving the previous release and data intact.
+                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1') -Disable
+            }
         }
     } catch {
         $rollbackError = $_.Exception.Message

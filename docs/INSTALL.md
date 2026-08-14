@@ -34,7 +34,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
+git clone --branch v0.3.1-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
 ```
@@ -90,7 +90,7 @@ npm ci
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-`configure-codex-desktop-relay.ps1` 会先确认共享 App Server 已监听，再安装当前用户登录恢复任务，最后才写入 `CODEX_APP_SERVER_WS_URL`。任何前置步骤失败都会保留 Desktop 的原启动方式。全部检查通过后，**完全退出并重新打开 Codex Desktop**。只关闭一个窗口不一定会结束后台进程；需要确保新进程读取新的环境变量。
+`configure-codex-desktop-relay.ps1` 会先确认共享 App Server 的进程与监听器，再安装并立即启动当前用户的连续 watchdog，写入 `CODEX_APP_SERVER_WS_URL`，并等待相同 activation 的 ready heartbeat。任一步骤失败都会撤销 Bridge-owned pointer，使 Desktop 回退到原启动方式。全部检查通过后，**完全退出并重新打开 Codex Desktop**。只关闭一个窗口不一定会结束后台进程；需要确保新进程读取新的环境变量。
 
 然后进行验收：
 
@@ -113,7 +113,7 @@ npm ci
 .\doctor.ps1 -RequireRunning
 ```
 
-Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop relay 后，当前用户每次登录时，`FeishuCodexBridge-DesktopRelay` 任务会先恢复共享 App Server，再恢复 Bridge；若 App Server 无法恢复，它会移除 Bridge 自己写入的 Desktop relay pointer，使 Codex Desktop 回退到内置 App Server。需要彻底撤销该集成时运行 `configure-codex-desktop-relay.ps1 -Disable`，再完整重启 Desktop。
+Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop relay 后，当前用户登录时启动 `FeishuCodexBridge-DesktopRelay-Watchdog`，随后每 3 秒检查共享 App Server。监听器消失时它先移除 Bridge 自己写入的 pointer，再尝试恢复；只有进程与监听器重新验证后才恢复 pointer。需要彻底撤销该集成时运行 `configure-codex-desktop-relay.ps1 -Disable`，再完整重启 Desktop；官方脚本不会删除用户自建守护。
 
 ## 更新
 
@@ -125,7 +125,24 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 .\update.ps1 -Version <目标 release tag>
 ```
 
-Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止则保持停止。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止则保持停止。升级前若 Desktop relay 已启用，`doctor.ps1 -RequireDesktopRelay` 也会成为升级成功条件。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+
+### 从 v0.2 启动故障恢复并升级
+
+`v0.2.0-beta.1` 会直接持久化 `CODEX_APP_SERVER_WS_URL`，系统重启后若 App Server 没有恢复，Codex Desktop 可能报 `connect ECONNREFUSED 127.0.0.1:<port>` 并无法进入主界面。这条恢复路径不依赖 Desktop，可以直接在旧安装目录的 PowerShell 中执行：
+
+```powershell
+.\configure-codex-desktop-relay.ps1 -Disable
+.\update.ps1 -Version v0.3.1-beta.1 -StartBridge
+.\configure-codex-desktop-relay.ps1
+.\doctor.ps1 -RequireRunning -RequireDesktopRelay
+```
+
+第一条命令先恢复 Desktop 的可启动性；升级、Bridge 与 watchdog 全部验证成功后，再完全退出并重新打开 Codex Desktop。若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
+
+### 已有自建守护的升级
+
+激活器会只读识别可能指向 Codex App Server/relay 的自建进程、计划任务和 Windows 服务，但不会停止、删除、重命名或覆盖它们。官方 watchdog 使用独立任务名和单实例锁，并复用由配置中同一 Codex 可执行文件提供的已验证监听器。升级后先运行严格 Doctor；确认官方 watchdog heartbeat 与监听器所有权均通过，再自行决定是否撤销旧守护。无法可靠识别的任意自定义脚本也不会被自动删除，因此升级不会以“清理冲突”为由修改用户的守护实现。
 
 `v0.1.0-beta.1` 尚未内置升级器。第一次升级到本版本时，在旧安装目录中运行以下固定-tag 引导；下载的脚本位于系统临时目录，不会写入旧工作树：
 

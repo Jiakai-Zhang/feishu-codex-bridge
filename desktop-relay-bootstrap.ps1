@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $logRoot = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap'
 $logPath = Join-Path $logRoot 'bootstrap.log'
+$statePath = Join-Path $logRoot 'desktop-relay-state.json'
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
 function Write-BootstrapLog {
@@ -38,16 +39,35 @@ function Disable-OwnedDesktopRelayPointer {
     $variableName = 'CODEX_APP_SERVER_WS_URL'
     $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
     if ([string]::IsNullOrWhiteSpace($current)) { return }
+
+    $expectedUrl = $null
     try {
-        $uri = [Uri]$current
-        $owned = $uri.Scheme -eq 'ws' -and
-            $uri.Host -in @('127.0.0.1', 'localhost', '::1') -and
-            $uri.Port -gt 0 -and
-            $uri.AbsolutePath -eq '/rpc'
+        if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            $relayState = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+            $expectedUrl = [string]$relayState.expectedUrl
+        }
     } catch {
-        $owned = $false
+        $expectedUrl = $null
     }
-    if (-not $owned) { return }
+    if ([string]::IsNullOrWhiteSpace($expectedUrl)) {
+        try {
+            $configuredHome = [Environment]::GetEnvironmentVariable(
+                'FEISHU_CODEX_BRIDGE_HOME', [EnvironmentVariableTarget]::User)
+            if (-not [string]::IsNullOrWhiteSpace($configuredHome)) {
+                $configPath = Join-Path ([IO.Path]::GetFullPath($configuredHome)) 'bridge.config.json'
+                if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+                    $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+                    $expectedUrl = [string]$config.sessionRelay.appServerUrl
+                }
+            }
+        } catch {
+            $expectedUrl = $null
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($expectedUrl) -or $current -ne $expectedUrl) {
+        Write-BootstrapLog -Message 'Bootstrap could not prove ownership of the configured Desktop relay pointer; it was left unchanged.'
+        return
+    }
     [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
     Send-EnvironmentChanged
     Write-BootstrapLog -Message 'Removed the unavailable owned Desktop relay pointer so Codex Desktop can fail open.'
@@ -75,5 +95,16 @@ if (-not (Test-Path -LiteralPath $startupScript -PathType Leaf)) {
     exit 0
 }
 
-& $startupScript
-exit $LASTEXITCODE
+try {
+    & $startupScript
+    $startupExitCode = $LASTEXITCODE
+    if ($startupExitCode -ne 0) {
+        Write-BootstrapLog -Message "The continuous Desktop relay watchdog exited with code $startupExitCode."
+        Disable-OwnedDesktopRelayPointer
+    }
+    exit $startupExitCode
+} catch {
+    Write-BootstrapLog -Message ("The continuous Desktop relay watchdog failed: " + $_.Exception.Message)
+    Disable-OwnedDesktopRelayPointer
+    exit 1
+}

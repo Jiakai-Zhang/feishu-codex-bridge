@@ -2,7 +2,7 @@
 
 这个 Windows 本地桥接不使用 OpenAI API Key。它复用当前电脑的 ChatGPT/Codex 登录态，通过飞书 Channel SDK 把成员消息送入本机 Codex，并把结果发回飞书。
 
-> **v0.3.0-beta.1 / Codex 专用测试版**：当前正式支持的产品入口是 Windows 上的个人 Session Relay。它依赖 Codex App Server 的实验性 WebSocket 接口；保留的 Project Agent/多人协作代码不是本次发布合同。
+> **v0.3.1-beta.1 / Codex 专用测试版**：当前正式支持的产品入口是 Windows 上的个人 Session Relay。它依赖 Codex App Server 的实验性 WebSocket 接口；保留的 Project Agent/多人协作代码不是本次发布合同。
 
 ## 安装
 
@@ -13,7 +13,7 @@
 最短用法：
 
 ```text
-请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.3.0-beta.1 帮我安装部署这个应用。
+请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.3.1-beta.1 帮我安装部署这个应用。
 ```
 
 仓库根目录 `AGENTS.md` 会把安装代理引导到可验证的 `docs/INSTALL_AGENT.md` 流程，并在飞书应用发布、OAuth、App Secret 安全输入和 Codex Desktop 完整重启等人工节点停下来。安装脚本会固定依赖版本、生成本机配置、安装 `$feishu-session-bind` Skill，并用 `doctor.ps1` 验证结果。
@@ -131,12 +131,12 @@ Feed 标签是当前授权用户侧的会话分组，不是全体群成员共享
 首次启用共享 App Server：
 
 1. 运行 `start-bridge.ps1`；它会先通过独立的 `start-app-server.ps1` 启动或复用经过 PID、可执行文件和回环端口校验的 Codex App Server，再启动隐藏的 Bridge supervisor。
-2. Bridge 显示 connected 后运行 `configure-codex-desktop-relay.ps1`。脚本会再次验证 App Server，安装当前用户登录恢复任务，最后才把同一回环地址写入 `CODEX_APP_SERVER_WS_URL`。前置步骤失败时不会改变 Desktop。
-3. 运行 `doctor.ps1 -RequireRunning -RequireDesktopRelay`，确认 Desktop relay pointer、登录恢复任务、共享监听器和 Bridge 全部通过。
+2. Bridge 显示 connected 后运行 `configure-codex-desktop-relay.ps1`。脚本会再次验证 App Server，安装并立即启动当前用户的连续 watchdog，再把同一回环地址写入 `CODEX_APP_SERVER_WS_URL`；只有 watchdog 的 ready heartbeat 到达后才算激活成功。前置步骤失败时会撤销 pointer，让 Desktop 保持 fail-open。
+3. 运行 `doctor.ps1 -RequireRunning -RequireDesktopRelay`，确认 Desktop relay pointer、连续 watchdog、新鲜 heartbeat、共享监听器所有权和 Bridge 全部通过。
 4. 完全退出并重新打开 Codex Desktop。环境变量只在新进程中生效；正在运行的 Desktop 不会被热切换。
-5. 若要撤销，运行 `configure-codex-desktop-relay.ps1 -Disable`，再完全重启 Codex Desktop。撤销会先移除 Desktop 依赖，再移除登录任务。
+5. 若要撤销，运行 `configure-codex-desktop-relay.ps1 -Disable`，再完全重启 Codex Desktop。撤销会先阻止 watchdog 回写并移除 Desktop 依赖，再移除官方任务；任何自建守护都不会被脚本删除。
 
-共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时不停止共享 App Server，因为 Codex Desktop 仍可能正在使用它。登录恢复任务 `FeishuCodexBridge-DesktopRelay` 不依赖飞书 App Secret：它先恢复 App Server，再在密文存在时尝试恢复 Bridge。若 App Server、本地安装目录或启动脚本不可用，稳定 bootstrap 会移除 Bridge 自己的 Desktop relay pointer，让下次启动的 Codex Desktop 回退到内置 App Server，而不是因连接拒绝而卡死。登录日志保存在 `%LOCALAPPDATA%\FeishuCodexBridge\bootstrap`。
+共享服务只监听 loopback；配置加载器拒绝非本机 WebSocket 地址。停止 Bridge 时不停止共享 App Server，因为 Codex Desktop 仍可能正在使用它。官方任务 `FeishuCodexBridge-DesktopRelay-Watchdog` 不依赖飞书 App Secret：它在登录后常驻，每 3 秒检查监听器；监听器消失时先移除 Bridge 自己的 Desktop relay pointer，再尝试恢复 App Server，只有 PID、可执行文件、命令行和端口重新验证后才恢复 pointer。稳定 bootstrap 只会清理由本地 activation state 精确记录的 URL，不会删除其他软件的 loopback pointer。激活时若发现可能的自建守护进程、计划任务或服务，只记录兼容提示并保留它们；官方 watchdog 会复用已经通过验证的同一 App Server，用户可在严格 Doctor 通过后自行决定是否撤销旧守护。日志和 heartbeat 保存在 `%LOCALAPPDATA%\FeishuCodexBridge\bootstrap`。
 
 Bridge supervisor 是 `/add`、`/delete` 后自动重载的进程边界：Bridge 先确认 supervisor PID 仍存活，再写入 `restart.request` 并优雅退出；supervisor 等旧进程完全结束后才启动替代进程。若 supervisor 不可用，Bridge 会拒绝自停并保留现有群的服务，避免一次新增绑定使所有旧群同时离线。`status-bridge.ps1` 会同时显示 Bridge、supervisor 和共享 App Server 状态；正常停止使用 `stop-bridge.ps1`，不要直接结束其中任一进程。
 

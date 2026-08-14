@@ -140,9 +140,13 @@ if ($config) {
             'missing or points elsewhere; run configure-codex-desktop-relay.ps1 after the Bridge starts'
         })
 
-    $taskName = 'FeishuCodexBridge-DesktopRelay'
-    $stableBootstrapPath = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap\desktop-relay-bootstrap.ps1'
+    $taskName = 'FeishuCodexBridge-DesktopRelay-Watchdog'
+    $bootstrapRoot = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap'
+    $stableBootstrapPath = Join-Path $bootstrapRoot 'desktop-relay-bootstrap.ps1'
+    $relayStatePath = Join-Path $bootstrapRoot 'desktop-relay-state.json'
+    $watchdogStatusPath = Join-Path $bootstrapRoot 'desktop-relay-watchdog-status.json'
     $relayTaskReady = $false
+    $watchdogHeartbeatReady = $false
     try {
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
             throw 'Windows Task Scheduler commands are unavailable'
@@ -154,13 +158,32 @@ if ($config) {
         $relayTaskReady = $actionMatches -and [string]$relayTask.State -ne 'Disabled' -and
             (Test-Path -LiteralPath $stableBootstrapPath -PathType Leaf)
         if (-not $relayTaskReady) { throw 'the task action, state, or stable bootstrap file is invalid' }
-        $taskDetail = 'fail-open logon recovery is installed'
+
+        if (-not (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) {
+            throw 'the Desktop relay activation state is missing'
+        }
+        if (-not (Test-Path -LiteralPath $watchdogStatusPath -PathType Leaf)) {
+            throw 'the watchdog heartbeat is missing'
+        }
+        $relayState = Get-Content -Raw -LiteralPath $relayStatePath | ConvertFrom-Json
+        $watchdogStatus = Get-Content -Raw -LiteralPath $watchdogStatusPath | ConvertFrom-Json
+        $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+        $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
+        $watchdogHeartbeatReady = [bool]$relayState.enabled -and
+            [string]$relayState.expectedUrl -eq $expectedAppServerUrl -and
+            [string]$watchdogStatus.activationId -eq [string]$relayState.activationId -and
+            [string]$watchdogStatus.state -eq 'ready' -and
+            $heartbeatAgeSeconds -ge -5 -and $heartbeatAgeSeconds -le 20
+        if (-not $watchdogHeartbeatReady) {
+            throw 'the watchdog heartbeat is stale, degraded, or belongs to another activation'
+        }
+        $taskDetail = 'continuous fail-open watchdog is installed and publishing a fresh heartbeat'
     } catch {
         $taskDetail = $_.Exception.Message
     }
-    $relayTaskCheckPassed = $relayTaskReady -or $relayActivationDeferred
-    Add-Check -Name 'Desktop relay logon recovery' -Passed $relayTaskCheckPassed `
-        -Detail $(if ($relayTaskReady) {
+    $relayTaskCheckPassed = ($relayTaskReady -and $watchdogHeartbeatReady) -or $relayActivationDeferred
+    Add-Check -Name 'Desktop relay continuous watchdog' -Passed $relayTaskCheckPassed `
+        -Detail $(if ($relayTaskReady -and $watchdogHeartbeatReady) {
             $taskDetail
         } elseif ($relayActivationDeferred) {
             'not installed yet; allowed before final Desktop relay activation'
@@ -169,20 +192,40 @@ if ($config) {
         })
 
     $appServerListening = $false
+    $appServerProcessVerified = $false
     try {
         $appServerUri = [Uri]$expectedAppServerUrl
         $appServerListening = Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port
+        $appServerPidPath = Join-Path $runtimeDir 'codex-app-server.pid'
+        if ($appServerListening -and (Test-Path -LiteralPath $appServerPidPath -PathType Leaf)) {
+            $appServerProcessId = 0
+            $pidText = (Get-Content -Raw -LiteralPath $appServerPidPath).Trim()
+            if ([int]::TryParse($pidText, [ref]$appServerProcessId)) {
+                $appServerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $appServerProcessId" -ErrorAction SilentlyContinue
+                if ($appServerProcess) {
+                    $expectedCodexPath = [IO.Path]::GetFullPath($codexPath)
+                    $actualCodexPath = if ($appServerProcess.ExecutablePath) {
+                        [IO.Path]::GetFullPath([string]$appServerProcess.ExecutablePath)
+                    } else { '' }
+                    $commandLine = [string]$appServerProcess.CommandLine
+                    $appServerProcessVerified = $actualCodexPath -ieq $expectedCodexPath -and
+                        $commandLine -match '(?i)\bapp-server\b' -and
+                        $commandLine -match [regex]::Escape(":$($appServerUri.Port)")
+                }
+            }
+        }
     } catch {
         $appServerListening = $false
+        $appServerProcessVerified = $false
     }
-    $listenerCheckPassed = $appServerListening -or $relayActivationDeferred
+    $listenerCheckPassed = ($appServerListening -and $appServerProcessVerified) -or $relayActivationDeferred
     Add-Check -Name 'Shared App Server listener' -Passed $listenerCheckPassed `
-        -Detail $(if ($appServerListening) {
-            'verified loopback port is accepting connections'
+        -Detail $(if ($appServerListening -and $appServerProcessVerified) {
+            'verified Codex App Server process owns the accepting loopback listener'
         } elseif ($relayActivationDeferred) {
             'not started yet; allowed before final Desktop relay activation'
         } else {
-            'not listening; run start-app-server.ps1 or start-bridge.ps1'
+            'listener is missing or not owned by the configured Codex executable'
         })
 
     $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)

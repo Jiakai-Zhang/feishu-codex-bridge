@@ -50,10 +50,10 @@ New-Item -ItemType Directory -Force -Path $runtime | Out-Null
 Add-Content -LiteralPath (Join-Path $runtime 'install-ran.log') -Value 'ok'
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'doctor.ps1') -Content @'
-param([switch]$RequireRunning)
+param([switch]$RequireRunning, [switch]$RequireDesktopRelay)
 $config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
 $runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
-Add-Content -LiteralPath (Join-Path $runtime 'doctor-ran.log') -Value ([string]$RequireRunning)
+Add-Content -LiteralPath (Join-Path $runtime 'doctor-ran.log') -Value "running=$RequireRunning;relay=$RequireDesktopRelay"
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'start-bridge.ps1') -Content @'
 $config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
@@ -64,6 +64,16 @@ Add-Content -LiteralPath (Join-Path $runtime 'start-ran.log') -Value 'ok'
 $config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
 $runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 Add-Content -LiteralPath (Join-Path $runtime 'stop-ran.log') -Value 'ok'
+'@
+    Write-Utf8File -Path (Join-Path $seedRoot 'start-app-server.ps1') -Content @'
+$config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
+$runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
+Add-Content -LiteralPath (Join-Path $runtime 'app-server-start-ran.log') -Value 'ok'
+'@
+    Write-Utf8File -Path (Join-Path $seedRoot 'configure-codex-desktop-relay.ps1') -Content @'
+$config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
+$runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
+Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value 'ok'
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'release-marker.txt') -Content "one`n"
 
@@ -92,15 +102,22 @@ Add-Content -LiteralPath (Join-Path $runtime 'stop-ran.log') -Value 'ok'
     & git clone --quiet --branch v9.0.0-test.1 $originRoot $installRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not clone the test installation.' }
 
-    $config = [ordered]@{ mode = 'session-relay'; workspace = $runtimeWorkspace }
+    $relayUrl = 'ws://127.0.0.1:47991/rpc'
+    $config = [ordered]@{
+        mode = 'session-relay'
+        workspace = $runtimeWorkspace
+        sessionRelay = [ordered]@{ appServerUrl = $relayUrl }
+    }
     Write-Utf8File -Path (Join-Path $installRoot 'bridge.config.json') -Content (($config | ConvertTo-Json) + "`n")
     $runtimeDirectory = Join-Path $runtimeWorkspace 'work\feishu-codex-bridge'
     New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'channel-secret.dpapi') -Content 'encrypted-smoke-value'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-settings.json') -Content '{"schemaVersion":2}'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-prompt-queue.json') -Content '[]'
+    Write-Utf8File -Path (Join-Path $runtimeDirectory 'custom-guardian.marker') -Content 'preserve external guardian'
 
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST = '1'
+    $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $relayUrl
     & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -StartBridge -TestMode
     $tagAfterUpgrade = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
     if ($tagAfterUpgrade -ne 'v9.0.0-test.2') { throw 'The updater did not switch to the requested tag.' }
@@ -111,6 +128,13 @@ Add-Content -LiteralPath (Join-Path $runtime 'stop-ran.log') -Value 'ok'
         if (-not (Test-Path -LiteralPath (Join-Path $runtimeDirectory $stateName) -PathType Leaf)) {
             throw "The updater did not preserve $stateName."
         }
+    }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $runtimeDirectory 'custom-guardian.marker')).Trim() -ne 'preserve external guardian') {
+        throw 'The updater changed external guardian state.'
+    }
+    $doctorLog = Get-Content -Raw -LiteralPath (Join-Path $runtimeDirectory 'doctor-ran.log')
+    if ($doctorLog -notmatch 'running=True;relay=True') {
+        throw 'The updater did not require strict Desktop relay verification for an enabled v0.2-style relay.'
     }
     $backupManifests = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDirectory 'upgrade-backups') -Filter manifest.json -Recurse -File)
     if ($backupManifests.Count -lt 1) { throw 'The updater did not create a recovery manifest.' }
@@ -152,6 +176,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'stop-ran.log') -Value 'ok'
     Write-Output 'Updater smoke test passed, including automatic rollback.'
 } finally {
     Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST -ErrorAction SilentlyContinue
+    Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL -ErrorAction SilentlyContinue
     if ($KeepTemp) {
         Write-Output "Kept smoke-test directory: $testRoot"
     } else {

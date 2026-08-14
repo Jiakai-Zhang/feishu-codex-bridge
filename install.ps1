@@ -215,9 +215,9 @@ if (-not $NoUserChanges) {
     Write-Output 'Installed the user-level Codex session binding skill.'
 
     # Existing installations may already have the Desktop relay pointer. Repair
-    # those installations in place by adding fail-open logon recovery. A fresh
-    # install deliberately leaves Codex Desktop untouched until the App Secret,
-    # Bridge, and shared App Server have all been verified.
+    # those installations in place by adding the continuous fail-open watchdog.
+    # A fresh install deliberately leaves Codex Desktop untouched until the App
+    # Secret, Bridge, and shared App Server have all been verified.
     $effectiveConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
     $expectedRelayUrl = [string]$effectiveConfig.sessionRelay.appServerUrl
     $currentRelayUrl = [Environment]::GetEnvironmentVariable(
@@ -225,9 +225,9 @@ if (-not $NoUserChanges) {
     if (-not [string]::IsNullOrWhiteSpace($currentRelayUrl) -and $currentRelayUrl -eq $expectedRelayUrl) {
         try {
             & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1')
-            Write-Output 'Migrated the existing Desktop relay activation to fail-open logon recovery.'
+            Write-Output 'Migrated the existing Desktop relay activation to the continuous fail-open watchdog.'
         } catch {
-            Write-Warning 'The existing Desktop relay could not be made fail-open, so its pointer was disabled. The Bridge installation can continue; rerun configure-codex-desktop-relay.ps1 after correcting the reported startup issue.'
+            Write-Warning 'The existing Desktop relay could not be continuously guarded, so its pointer was disabled. The Bridge installation can continue; rerun configure-codex-desktop-relay.ps1 after correcting the reported startup issue.'
         }
     }
 }

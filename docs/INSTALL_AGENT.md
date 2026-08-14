@@ -19,10 +19,10 @@
 %LOCALAPPDATA%\FeishuCodexBridge\app
 ```
 
-Beta 版本必须使用明确的 release tag `v0.3.0-beta.1`，不要从未知分支复制文件：
+Beta 版本必须使用明确的 release tag `v0.3.1-beta.1`，不要从未知分支复制文件：
 
 ```powershell
-git clone --branch v0.3.0-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.3.1-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -121,9 +121,9 @@ Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','By
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-必须确认 `configure-codex-desktop-relay.ps1` 的顺序检查全部成功：共享 App Server 已监听、当前用户登录恢复任务已安装、最后才写入 Desktop relay pointer。若任一前置步骤失败，应保持 Desktop 原启动方式并停止，不得手工补写环境变量。
+必须确认 `configure-codex-desktop-relay.ps1` 的顺序检查全部成功：共享 App Server 已验证、连续 watchdog 任务已安装、pointer 已写入且相同 activation 的 ready heartbeat 已到达。若任一步骤失败，脚本必须撤销 Bridge-owned pointer，使 Desktop 保持 fail-open；不得手工补写环境变量。
 
-若检查通过，要求用户完全退出并重新打开 Codex Desktop，使它连接 Bridge 启动的同一个本机 App Server。此步骤需要用户授权；不要强制结束用户进程。说明登录恢复任务会在 Windows 重启后先恢复 App Server，再尝试恢复 Bridge；App Server 启动失败时会自动移除 Bridge 拥有的 pointer，让 Desktop fail open。
+若检查通过，要求用户完全退出并重新打开 Codex Desktop，使它连接 Bridge 启动的同一个本机 App Server。此步骤需要用户授权；不要强制结束用户进程。说明连续 watchdog 会在 Windows 登录后常驻，每 3 秒检查一次；监听器消失时先移除 Bridge 拥有的 pointer，再尝试恢复 App Server，验证成功后才恢复 pointer。
 
 Desktop 重启后再执行一次：
 
@@ -144,6 +144,10 @@ Desktop 重启后再执行一次：
 
 用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不要创建或修改飞书应用，也不要重新索取 App Secret。若工作树有改动，停止并请用户先保存；不得 reset、clean、stash 或覆盖。
 
+若当前为 `v0.2.0-beta.1` 且 Codex Desktop 报 `ECONNREFUSED 127.0.0.1:<port>`，先确认该端口确实没有监听。随后运行旧版自带的 `configure-codex-desktop-relay.ps1 -Disable` 解除会阻塞 Desktop 的 pointer，再继续固定 tag 升级；升级成功并启动 Bridge 后，必须运行新版 `configure-codex-desktop-relay.ps1` 重新激活连续 watchdog。不要要求用户先把已故障的 Desktop 启动起来。
+
+升级前同时只读检查是否存在名称或命令行中指向 Codex App Server、relay、watchdog/guardian 的自建进程、计划任务或 Windows 服务。不得停止、删除、改名或覆盖它们。新版激活器也会给出不含名称和命令行的类别提示，并与自建守护并存；只有新版严格 Doctor 通过后，才建议用户另行审阅是否撤销旧守护。
+
 已有 `update.ps1` 时，只运行固定目标版本：
 
 ```powershell
@@ -152,4 +156,4 @@ Desktop 重启后再执行一次：
 
 若从不含升级器的 `v0.1.0-beta.1` 首次升级到 `v0.2.0-beta.1`，按照 `docs/INSTALL.md#更新` 从该固定 tag 的 raw URL 下载 `update.ps1` 到系统临时目录，并用 `-InstallRoot` 指向现有安装目录。不要从 `main` 或未固定分支下载脚本。
 
-升级器负责停止/恢复 Bridge、创建本机恢复备份、切换 tag、运行 `npm ci`、保留原配置和 DPAPI 密文、更新 Skill，并在失败时回滚。成功后核对 `git describe --tags --exact-match`、`status-bridge.ps1` 与 `doctor.ps1 -RequireRunning`；只报告版本和检查结论，不输出恢复目录、配置、身份标识或任务路径。只有目标 release notes 明确要求时才让用户完整重启 Codex Desktop。
+升级器负责停止/恢复 Bridge、创建本机恢复备份、切换 tag、运行 `npm ci`、保留原配置和 DPAPI 密文、更新 Skill，并在失败时回滚。若升级前 Desktop relay 已启用，升级器必须把 `doctor.ps1 -RequireDesktopRelay` 作为成功条件。成功后核对 `git describe --tags --exact-match`、`status-bridge.ps1` 与 `doctor.ps1 -RequireRunning -RequireDesktopRelay`；只报告版本和检查结论，不输出恢复目录、配置、身份标识或任务路径。pointer 未变化且 Desktop 已正常运行时无需仅因代码升级而重启；若升级前为恢复启动而执行了 `-Disable`，重新激活后必须让用户完整重启一次 Desktop。
