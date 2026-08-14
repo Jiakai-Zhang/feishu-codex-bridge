@@ -1,3 +1,8 @@
+param(
+    [ValidateRange(15, 300)]
+    [int]$ReadyTimeoutSeconds = 90
+)
+
 $ErrorActionPreference = 'Stop'
 
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
@@ -78,7 +83,7 @@ if (-not $supervisorProcess) {
     [System.IO.File]::WriteAllText($supervisorPidPath, [string]$supervisorProcess.Id)
 }
 
-$deadline = [DateTime]::UtcNow.AddSeconds(25)
+$deadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
 while ([DateTime]::UtcNow -lt $deadline) {
     $supervisorProcess.Refresh()
     if ($supervisorProcess.HasExited) {
@@ -98,4 +103,4 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
 }
 
-throw "Bridge did not become ready within 25 seconds. Check $stderrPath and $stdoutPath"
+throw "Bridge did not become ready within $ReadyTimeoutSeconds seconds. Check $stderrPath and $stdoutPath"

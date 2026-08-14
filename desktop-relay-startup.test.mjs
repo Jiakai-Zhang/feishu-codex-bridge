@@ -88,6 +88,13 @@ test("Bridge delegates shared App Server ownership to the standalone starter", a
   );
 });
 
+test("Bridge readiness wait covers authenticated Channel startup", async () => {
+  const source = await readScript("start-bridge.ps1");
+  assert.match(source, /\[int\]\$ReadyTimeoutSeconds = 90/);
+  assert.match(source, /AddSeconds\(\$ReadyTimeoutSeconds\)/);
+  assert.match(source, /within \$ReadyTimeoutSeconds seconds/);
+});
+
 test("standalone App Server startup is serialized and verifies ownership", async () => {
   const source = await readScript("start-app-server.ps1");
   assert.match(source, /FeishuCodexBridgeAppServer-/);
