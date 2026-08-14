@@ -21,6 +21,7 @@ const catalog = {
 
 function fixture() {
   const provisions = [];
+  const projectCreations = [];
   const flow = new SessionAddFlow({
     loadCatalog: async () => catalog,
     provision: async (threadId, options) => {
@@ -37,9 +38,20 @@ function fixture() {
       cwd,
       kind: "independent",
     }),
+    createProject: async ({ name, project }) => {
+      projectCreations.push({ name, project });
+      return {
+        id: "thread-new-project",
+        title: name,
+        cwd: project.rootPaths[0],
+        kind: "project",
+        projectId: project.id,
+        projectName: project.name,
+      };
+    },
     now: () => 10_000,
   });
-  return { flow, provisions };
+  return { flow, provisions, projectCreations };
 }
 
 test("walks through Project then existing session selection", async () => {
@@ -48,8 +60,8 @@ test("walks through Project then existing session selection", async () => {
   const project = await flow.handle({ conversationId: "chat-a", text: "2" });
   const selected = await flow.handle({ conversationId: "chat-a", text: "1" });
 
-  assert.match(started.reply, /1\. \*\*独立\*\*/);
-  assert.match(started.reply, /2\. Alpha/);
+  assert.match(started.reply, /`1` \*\*独立\*\*/);
+  assert.match(started.reply, /`2` Alpha/);
   assert.match(project.reply, /Project task/);
   assert.match(selected.reply, /HOST-Codex/);
   assert.equal(selected.restart, true);
@@ -76,4 +88,150 @@ test("keeps unknown messages outside an add flow available to Session Relay", as
   await flow.handle({ conversationId: "chat-a", text: "/add" });
   assert.equal((await flow.handle({ conversationId: "chat-a", text: "/cancel" })).handled, true);
   assert.equal(flow.has("chat-a"), false);
+});
+
+test("rescans an empty Project and keeps the wizard on the refreshed task list", async () => {
+  let loads = 0;
+  const provisions = [];
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => {
+      loads += 1;
+      return {
+        projects: [{
+          id: "project-a",
+          name: "Alpha",
+          rootPaths: ["C:\\alpha"],
+          sessions: loads === 1 ? [] : [projectSession],
+        }],
+        independent: [],
+      };
+    },
+    provision: async (threadId) => {
+      provisions.push(threadId);
+      return { alreadyBound: true };
+    },
+    createIndependent: async () => undefined,
+    createProject: async () => undefined,
+    now: () => 10_000,
+  });
+
+  await flow.handle({ conversationId: "chat-empty", text: "/add" });
+  const empty = await flow.handle({ conversationId: "chat-empty", text: "2" });
+  assert.match(empty.reply, /^`1` \*\*重新扫描\*\*$/m);
+  assert.match(empty.reply, /^`2` \*\*返回 Project 列表\*\*$/m);
+  assert.match(empty.reply, /^`3` \*\*新建任务\*\*$/m);
+
+  const rescanned = await flow.handle({ conversationId: "chat-empty", text: "1" });
+  assert.match(rescanned.reply, /重新扫描完成，发现 1 个可绑定任务/);
+  assert.match(rescanned.reply, /Project task/);
+  const selected = await flow.handle({ conversationId: "chat-empty", text: "1" });
+  assert.equal(selected.restart, false);
+  assert.deepEqual(provisions, ["thread-project"]);
+});
+
+test("returns from an empty Project to the Project list", async () => {
+  const emptyCatalog = {
+    projects: [{ id: "project-a", name: "Alpha", rootPaths: ["C:\\alpha"], sessions: [] }],
+    independent: [],
+  };
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => emptyCatalog,
+    provision: async () => undefined,
+    createIndependent: async () => undefined,
+    createProject: async () => undefined,
+    now: () => 10_000,
+  });
+
+  await flow.handle({ conversationId: "chat-back", text: "/add" });
+  await flow.handle({ conversationId: "chat-back", text: "2" });
+  const returned = await flow.handle({ conversationId: "chat-back", text: "2" });
+
+  assert.match(returned.reply, /^### 创建 Session 群$/m);
+  assert.match(returned.reply, /^`2` Alpha$/m);
+});
+
+test("creates and binds a task from an empty Project without editing Project state", async () => {
+  const projectCatalog = {
+    projects: [{ id: "project-a", name: "Alpha", rootPaths: ["C:\\alpha"], sessions: [] }],
+    independent: [],
+  };
+  const creations = [];
+  const provisions = [];
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => projectCatalog,
+    provision: async (threadId, options) => {
+      provisions.push({ threadId, options });
+      return {
+        alreadyBound: false,
+        groupName: "Alpha/New Project task",
+        feedGroupName: "HOST-Codex",
+      };
+    },
+    createIndependent: async () => undefined,
+    createProject: async ({ name, project }) => {
+      creations.push({ name, projectId: project.id });
+      return {
+        id: "thread-created",
+        title: name,
+        cwd: project.rootPaths[0],
+        kind: "project",
+        projectId: project.id,
+        projectName: project.name,
+      };
+    },
+    now: () => 10_000,
+  });
+
+  await flow.handle({ conversationId: "chat-create", text: "/add" });
+  await flow.handle({ conversationId: "chat-create", text: "2" });
+  const namePrompt = await flow.handle({ conversationId: "chat-create", text: "3" });
+  const created = await flow.handle({ conversationId: "chat-create", text: "New Project task" });
+
+  assert.match(namePrompt.reply, /Project \*\*Alpha\*\*/);
+  assert.deepEqual(creations, [{ name: "New Project task", projectId: "project-a" }]);
+  assert.equal(provisions[0].threadId, "thread-created");
+  assert.equal(provisions[0].options.session.kind, "project");
+  assert.match(created.reply, /不会自动为外部创建的任务写入原生 Project 分组/);
+  assert.equal(created.restart, true);
+});
+
+test("renders and accepts multi-digit choices without Feishu ordered-list markers", async () => {
+  const sessions = Array.from({ length: 12 }, (_, index) => ({
+    id: `thread-${index + 1}`,
+    title: `Session ${index + 1}`,
+    displayTitle: `Session ${index + 1}`,
+    updatedAtMs: 2_000,
+  }));
+  const projects = Array.from({ length: 12 }, (_, index) => ({
+    id: `project-${index + 1}`,
+    name: `Project ${index + 1}`,
+    sessions: index === 8 ? sessions : [],
+  }));
+  const provisions = [];
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => ({ projects, independent: [] }),
+    provision: async (threadId) => {
+      provisions.push(threadId);
+      return {
+        alreadyBound: false,
+        groupName: "Project 9/Session 10",
+        feedGroupName: "HOST-Codex",
+      };
+    },
+    createIndependent: async () => undefined,
+    createProject: async () => undefined,
+    now: () => 10_000,
+  });
+
+  const projectMenu = await flow.handle({ conversationId: "chat-many", text: "/add" });
+  assert.match(projectMenu.reply, /^`10` Project 9$/m);
+  assert.doesNotMatch(projectMenu.reply, /^10\. /m);
+
+  const sessionMenu = await flow.handle({ conversationId: "chat-many", text: "10" });
+  assert.match(sessionMenu.reply, /^### Project 9：选择 Codex 任务$/m);
+  assert.match(sessionMenu.reply, /^`10` Session 10（/m);
+  assert.doesNotMatch(sessionMenu.reply, /^10\. /m);
+
+  await flow.handle({ conversationId: "chat-many", text: "10" });
+  assert.deepEqual(provisions, ["thread-10"]);
 });
