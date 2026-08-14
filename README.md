@@ -112,6 +112,8 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会创建私有群、校验成员、应用个人 Agent 标签并写入固定绑定。也可以在目标 Codex 对话里调用 `$feishu-session-bind`，或直接说“帮我把当前 Session 绑定到飞书群”。
 
+Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。Project 暂时为空时，向导会提供“重新扫描”“返回 Project 列表”和“新建任务”。
+
 绑定完成后，在新群直接发送普通文本即可，无需 `@Bot`。Session Relay 不提供 `/new`、`/use` 或全局“当前任务”切换；每个群始终指向自己的 Session。
 
 ### 2. 群内命令

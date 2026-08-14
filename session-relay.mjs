@@ -418,6 +418,44 @@ async function createIndependentSession({ name, cwd }) {
   });
 }
 
+async function createProjectSession({ name, project }) {
+  let realCwd;
+  for (const root of Array.isArray(project?.rootPaths) ? project.rootPaths : []) {
+    const requested = String(root || "").trim();
+    if (!requested || !path.isAbsolute(requested)) continue;
+    try {
+      const candidate = await fs.realpath(path.resolve(requested));
+      const stat = await fs.stat(candidate);
+      if (!stat.isDirectory()) continue;
+      realCwd = candidate;
+      break;
+    } catch {
+      // Try the next Desktop Project root without exposing local paths to Feishu.
+    }
+  }
+  if (!realCwd) {
+    throw new SessionRelayError(
+      "project_cwd_unavailable",
+      "The selected Desktop Project has no available registered working directory",
+    );
+  }
+  const thread = await startCodexProjectThread({
+    codexExecutable: config.codexExecutable,
+    cwd: realCwd,
+    name,
+    sandboxMode: config.sandboxMode,
+    appServerUrl: config.sessionRelay.appServerUrl,
+  });
+  return Object.freeze({
+    id: thread.id,
+    title: thread.name,
+    cwd: realCwd,
+    kind: "project",
+    projectId: project.id,
+    projectName: project.name,
+  });
+}
+
 async function verifyCreatedGroup({ binding, groupName }) {
   const [chatInfo, members, bots] = await Promise.all([
     channel.getChatInfo(binding.groupChatId),
@@ -477,6 +515,8 @@ function publicBindingFailure(error) {
       return "该 Codex 任务已经绑定飞书群，没有重复创建。";
     case "independent_cwd_invalid":
       return "独立任务的工作目录必须是本机已存在的绝对目录，请重新发送 `/add`。";
+    case "project_cwd_unavailable":
+      return "所选 Project 没有可用的已登记工作目录，因此没有创建任务或群。请先在 Codex Desktop 修复 Project 目录，再重新发送 `/add`。";
     case "created_group_verification_failed":
       return "新群没有通过“仅你 + 当前 Bot”的成员校验，因此没有写入绑定。";
     case "binding_persist_failed":
@@ -1233,6 +1273,7 @@ const sessionAddFlow = new SessionAddFlow({
   loadCatalog: async () => desktopCatalog.load({ bindings: await bindingRegistry.list() }),
   provision: provisionSession,
   createIndependent: createIndependentSession,
+  createProject: createProjectSession,
 });
 
 const bindingRemover = new SessionBindingRemover({

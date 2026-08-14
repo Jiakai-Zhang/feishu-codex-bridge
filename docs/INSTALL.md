@@ -95,7 +95,7 @@ npm ci
 然后进行验收：
 
 1. 在飞书中私聊该应用机器人，发送 `/add`。
-2. 按编号选择 Codex Project（或“独立”）和任务。
+2. 按编号选择 Codex Project（或“独立”）和任务；若 Project 暂时为空，可在同一向导中重新扫描、返回 Project 列表，或输入名称在该 Project 的首个有效工作目录中新建任务。
 3. Bridge 自动创建 `{Project名}/{任务名}` 或 `独立/{任务名}` 群，并应用 `{主机名}-Codex` 标签。
 4. 在只有你和 Bot 的新群中直接发普通消息，无需 `@Bot`；确认 Prompt 进入绑定任务且最终回答返回群。
 5. 在 Codex Desktop 中发送一次 Prompt；确认其最终回答也返回同一群。

@@ -1,8 +1,12 @@
+import { execFile as nodeExecFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import { normalizeCodexCwd } from "./codex-session-store.mjs";
+
+const execFile = promisify(nodeExecFile);
 
 function cleanLabel(value, fallback = "未命名任务") {
   const label = String(value || "")
@@ -75,12 +79,82 @@ function localProjects(state) {
   });
 }
 
+function canonicalFsPath(value) {
+  const normalized = normalizeCodexCwd(value).trim();
+  if (!normalized) return "";
+  const resolved = path.resolve(normalized);
+  const root = path.parse(resolved).root;
+  return (resolved.length > root.length ? resolved.replace(/[\\/]+$/g, "") : resolved).toLowerCase();
+}
+
+function pathScopeScore(candidate, root) {
+  if (!candidate || !root) return -1;
+  if (candidate === root) return root.length;
+  return candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
+    ? root.length
+    : -1;
+}
+
+async function readGitWorktrees(root) {
+  try {
+    const { stdout } = await execFile("git", ["-C", root, "worktree", "list", "--porcelain", "-z"], {
+      windowsHide: true,
+      encoding: "utf8",
+      maxBuffer: 2_000_000,
+      timeout: 2_000,
+    });
+    return String(stdout || "")
+      .split(/\0|\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length));
+  } catch {
+    return [];
+  }
+}
+
+async function buildProjectScopes(projects, listProjectWorktrees) {
+  return Promise.all(projects.map(async (project) => {
+    const discovered = await Promise.all(project.rootPaths.map(async (root) => {
+      try {
+        const worktrees = await listProjectWorktrees(root);
+        return Array.isArray(worktrees) ? worktrees : [];
+      } catch {
+        return [];
+      }
+    }));
+    const roots = new Set([...project.rootPaths, ...discovered.flat()]
+      .map(canonicalFsPath)
+      .filter(Boolean));
+    return Object.freeze({ project, roots: Object.freeze([...roots]) });
+  }));
+}
+
+function inferProjectFromCwd(cwd, scopes) {
+  const candidate = canonicalFsPath(cwd);
+  let bestScore = -1;
+  let bestProject;
+  let ambiguous = false;
+  for (const scope of scopes) {
+    const score = Math.max(-1, ...scope.roots.map((root) => pathScopeScore(candidate, root)));
+    if (score < 0) continue;
+    if (score > bestScore) {
+      bestScore = score;
+      bestProject = scope.project;
+      ambiguous = false;
+    } else if (score === bestScore && bestProject?.id !== scope.project.id) {
+      ambiguous = true;
+    }
+  }
+  return ambiguous ? undefined : bestProject;
+}
+
 function readLiveThreads(stateDbPath) {
   const db = new DatabaseSync(stateDbPath, { readOnly: true });
   try {
     return db.prepare(
       `select id, name, title, preview, cwd, updated_at, updated_at_ms, recency_at, recency_at_ms
-       from threads where archived = 0
+       from threads
+       where archived = 0 and coalesce(thread_source, 'user') = 'user'
        order by coalesce(recency_at_ms, updated_at_ms, recency_at * 1000, updated_at * 1000, 0) desc`,
     ).all();
   } finally {
@@ -108,12 +182,14 @@ export class CodexDesktopCatalog {
     sessionIndexPath = path.join(codexHome, "session_index.jsonl"),
     readFile = fs.readFile,
     readThreads = readLiveThreads,
+    listProjectWorktrees = readGitWorktrees,
   } = {}) {
     this.globalStatePath = globalStatePath;
     this.stateDbPath = stateDbPath;
     this.sessionIndexPath = sessionIndexPath;
     this.readFile = readFile;
     this.readThreads = readThreads;
+    this.listProjectWorktrees = listProjectWorktrees;
   }
 
   async load({ bindings = [] } = {}) {
@@ -124,6 +200,7 @@ export class CodexDesktopCatalog {
     const state = JSON.parse(stateText);
     const projects = localProjects(state);
     const projectsById = new Map(projects.map((project) => [project.id, project]));
+    const projectScopes = await buildProjectScopes(projects, this.listProjectWorktrees);
     const assignments = state?.["thread-project-assignments"] || {};
     const projectless = new Set(Array.isArray(state?.["projectless-thread-ids"])
       ? state["projectless-thread-ids"]
@@ -138,12 +215,17 @@ export class CodexDesktopCatalog {
         indexedNames.get(thread.id) || thread.name || thread.preview || thread.title,
       );
       const assignment = assignments?.[thread.id];
-      const project = assignment?.projectKind === "local"
+      let project = assignment?.projectKind === "local"
         ? projectsById.get(assignment.projectId)
         : undefined;
       let kind;
       if (project) kind = "project";
       else if (projectless.has(thread.id)) kind = "independent";
+      else if (!assignment) {
+        project = inferProjectFromCwd(thread.cwd, projectScopes);
+        if (project) kind = "project";
+        else continue;
+      }
       else continue;
       const session = Object.freeze({
         id: thread.id,
