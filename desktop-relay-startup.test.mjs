@@ -29,9 +29,7 @@ test("Desktop relay activation verifies listener and watchdog before completion"
   const source = await readScript("configure-codex-desktop-relay.ps1");
   const startIndex = source.indexOf("start-app-server.ps1");
   const taskIndex = source.indexOf("Register-ScheduledTask -TaskName $taskName");
-  const pointerIndex = source.lastIndexOf(
-    "[Environment]::SetEnvironmentVariable($variableName, $url.AbsoluteUri",
-  );
+  const pointerIndex = source.lastIndexOf("desktopRelayPointerScript -Url $url.AbsoluteUri");
   const startTaskIndex = source.indexOf("Start-ScheduledTask -TaskName $taskName");
   const heartbeatIndex = source.indexOf("$watchdogStatus.state -eq 'ready'");
   assert.ok(startIndex >= 0);
@@ -41,6 +39,7 @@ test("Desktop relay activation verifies listener and watchdog before completion"
   assert.ok(heartbeatIndex > startTaskIndex);
   assert.match(source, /FeishuCodexBridge-DesktopRelay-Watchdog/);
   assert.match(source, /did not publish a ready heartbeat within 20 seconds/);
+  assert.match(source, /Start the Bridge and wait for its authenticated Channel connection/);
 });
 
 test("Desktop relay disable path removes dependency before official tasks", async () => {
@@ -131,6 +130,26 @@ test("Bridge delegates shared App Server ownership to the standalone starter", a
     source,
     /-ArgumentList @\('app-server', '--listen'/,
   );
+  const pointerDisableIndex = source.indexOf("desktopRelayPointerScript -Url", source.indexOf("$appServerInfo = $null"));
+  const appServerIndex = source.indexOf("start-app-server.ps1", pointerDisableIndex);
+  const pointerEnableIndex = source.lastIndexOf("desktopRelayPointerScript -Url");
+  assert.ok(pointerDisableIndex >= 0);
+  assert.ok(appServerIndex > pointerDisableIndex);
+  assert.ok(pointerEnableIndex > appServerIndex);
+});
+
+test("Bridge stop pauses the watchdog and removes the owned Desktop pointer", async () => {
+  const stopSource = await readScript("stop-bridge.ps1");
+  const supervisorSource = await readScript("bridge-supervisor.ps1");
+  const watchdogSource = await readScript("start-at-login.ps1");
+  const pointerSource = await readScript("desktop-relay-pointer.ps1");
+  assert.match(stopSource, /function Disable-DesktopRelayPointer[\s\S]*-Disable/);
+  assert.match(stopSource, /Disable-DesktopRelayPointer[\s\S]*Bridge stopped gracefully/);
+  assert.match(supervisorSource, /finally \{[\s\S]*desktopRelayPointerScript[\s\S]*-Disable/);
+  assert.match(watchdogSource, /bridgeEnabled[\s\S]*State 'paused'/);
+  assert.match(watchdogSource, /Bridge was stopped intentionally; Desktop relay recovery is paused/);
+  assert.match(pointerSource, /Write-BridgeState[\s\S]*BridgeEnabled \$false/);
+  assert.match(pointerSource, /Desktop relay recovery is not configured; the pointer remains disabled/);
 });
 
 test("Bridge readiness wait covers authenticated Channel startup", async () => {

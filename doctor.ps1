@@ -135,9 +135,9 @@ if ($config) {
         -Detail $(if ($appServerMatches) {
             'user environment is configured'
         } elseif ($relayActivationDeferred) {
-            'not enabled yet; allowed before final Desktop relay activation'
+            'disabled while the Bridge is stopped or before final Desktop relay activation'
         } else {
-            'missing or points elsewhere; run configure-codex-desktop-relay.ps1 after the Bridge starts'
+            'missing or points elsewhere; start the Bridge, then configure Desktop relay if recovery is not installed'
         })
 
     $taskName = 'FeishuCodexBridge-DesktopRelay-Watchdog'
@@ -169,7 +169,9 @@ if ($config) {
         $watchdogStatus = Get-Content -Raw -LiteralPath $watchdogStatusPath | ConvertFrom-Json
         $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
         $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
-        $watchdogHeartbeatReady = [bool]$relayState.enabled -and
+        $bridgeEnabledProperty = $relayState.PSObject.Properties['bridgeEnabled']
+        $bridgeEnabled = -not $bridgeEnabledProperty -or [bool]$bridgeEnabledProperty.Value
+        $watchdogHeartbeatReady = [bool]$relayState.enabled -and $bridgeEnabled -and
             [string]$relayState.expectedUrl -eq $expectedAppServerUrl -and
             [string]$watchdogStatus.activationId -eq [string]$relayState.activationId -and
             [string]$watchdogStatus.state -eq 'ready' -and
@@ -186,7 +188,7 @@ if ($config) {
         -Detail $(if ($relayTaskReady -and $watchdogHeartbeatReady) {
             $taskDetail
         } elseif ($relayActivationDeferred) {
-            'not installed yet; allowed before final Desktop relay activation'
+            'paused or not installed; allowed while the Bridge is stopped or before final activation'
         } else {
             "not ready: $taskDetail"
         })
@@ -223,7 +225,7 @@ if ($config) {
         -Detail $(if ($appServerListening -and $appServerProcessVerified) {
             'verified Codex App Server process owns the accepting loopback listener'
         } elseif ($relayActivationDeferred) {
-            'not started yet; allowed before final Desktop relay activation'
+            'not required while the Bridge is stopped or before final Desktop relay activation'
         } else {
             'listener is missing or not owned by the configured Codex executable'
         })

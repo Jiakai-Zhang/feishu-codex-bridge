@@ -11,6 +11,12 @@ $pidPath = Join-Path $runtimeDir 'bridge.pid'
 $stopPath = Join-Path $runtimeDir 'stop.request'
 $supervisorPidPath = Join-Path $runtimeDir 'bridge-supervisor.pid'
 $supervisorStopPath = Join-Path $runtimeDir 'supervisor-stop.request'
+$desktopRelayPointerScript = Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1'
+
+function Disable-DesktopRelayPointer {
+    if ($mode -ne 'session-relay') { return }
+    & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
+}
 
 $supervisorPid = $null
 if (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf) {
@@ -22,8 +28,10 @@ $bridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $bridgeName))
 if (-not (Test-Path -LiteralPath $pidPath)) {
     if ($supervisorPid -and (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
         New-Item -ItemType File -Force -Path $supervisorStopPath | Out-Null
+        Disable-DesktopRelayPointer
         Write-Output 'Bridge is between supervised runs; requested supervisor stop.'
     } else {
+        Disable-DesktopRelayPointer
         Write-Output 'Bridge is not running.'
     }
     exit 0
@@ -34,6 +42,7 @@ $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgePid" -Err
 $isBridge = $processInfo -and $processInfo.Name -eq 'node.exe' -and [string]$processInfo.CommandLine -like "*$bridge*"
 if (-not $isBridge) {
     Remove-Item -LiteralPath $pidPath -Force
+    Disable-DesktopRelayPointer
     Write-Output 'Bridge was not running; removed the stale PID file without touching the unrelated process.'
     exit 0
 }
@@ -47,6 +56,7 @@ $deadline = [DateTime]::UtcNow.AddSeconds(20)
 while ([DateTime]::UtcNow -lt $deadline) {
     if (-not (Get-Process -Id $bridgePid -ErrorAction SilentlyContinue)) {
         if (-not $supervisorPid -or -not (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)) {
+            Disable-DesktopRelayPointer
             Write-Output "Bridge stopped gracefully (PID $bridgePid)."
             exit 0
         }

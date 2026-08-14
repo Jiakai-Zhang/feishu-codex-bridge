@@ -45,6 +45,13 @@ function Read-RelayState {
     }
 }
 
+function Test-BridgeRelayEnabled {
+    param([Parameter(Mandatory)][object]$RelayState)
+    $property = $RelayState.PSObject.Properties['bridgeEnabled']
+    if (-not $property) { return $true }
+    return [bool]$property.Value
+}
+
 function Write-WatchdogStatus {
     param(
         [Parameter(Mandatory)][object]$RelayState,
@@ -241,6 +248,19 @@ try {
             [string]$relayState.expectedUrl -ne $appServerUri.AbsoluteUri) {
             Write-WatchdogLog -Message 'Desktop relay activation was removed or changed; watchdog is stopping.'
             break
+        }
+
+        if (-not (Test-BridgeRelayEnabled -RelayState $relayState)) {
+            Set-DesktopRelayPointer -ExpectedUrl $appServerUri.AbsoluteUri -Enabled $false
+            Write-WatchdogStatus -RelayState $relayState -State 'paused' `
+                -Detail 'Bridge is stopped; Desktop pointer and recovery are paused'
+            if ($lastHealth -ne 'paused') {
+                Write-WatchdogLog -Message 'Bridge was stopped intentionally; Desktop relay recovery is paused.'
+            }
+            $lastHealth = 'paused'
+            $bridgeRecoveryChecked = $false
+            Start-Sleep -Seconds $CheckIntervalSeconds
+            continue
         }
 
         $portListening = Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port

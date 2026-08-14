@@ -22,6 +22,7 @@ $supervisorStopPath = Join-Path $runtimeDir 'supervisor-stop.request'
 $supervisorStdoutPath = Join-Path $runtimeDir 'bridge-supervisor.stdout.log'
 $supervisorStderrPath = Join-Path $runtimeDir 'bridge-supervisor.stderr.log'
 $supervisorScript = Join-Path $PSScriptRoot 'bridge-supervisor.ps1'
+$desktopRelayPointerScript = Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1'
 $node = [string]$config.nodeExecutable
 $mode = if ([string]::IsNullOrWhiteSpace([string]$config.mode)) { 'project-agent' } else { [string]$config.mode }
 switch ($mode) {
@@ -35,6 +36,7 @@ New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 
 $appServerInfo = $null
 if ($mode -eq 'session-relay') {
+    & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
     $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
     if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
         throw 'The shared Codex App Server startup returned no verified process.'
@@ -48,6 +50,9 @@ if (Test-Path -LiteralPath $pidPath) {
         $existingProcess.Name -eq 'node.exe' -and
         [string]$existingProcess.CommandLine -like "*$expectedBridge*"
     if ($isBridge) {
+        if ($mode -eq 'session-relay') {
+            & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) | Out-Null
+        }
         Write-Output "Bridge is already running (PID $existingPid)."
         exit 0
     }
@@ -96,6 +101,9 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
     if ($process -and (Test-Path -LiteralPath $stdoutPath) -and
         (Select-String -LiteralPath $stdoutPath -Pattern 'READY: Channel SDK connected' -Quiet)) {
+        if ($mode -eq 'session-relay') {
+            & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) | Out-Null
+        }
         $appServerSuffix = if ($mode -eq 'session-relay') { "; shared App Server PID=$($appServerInfo.ProcessId)" } else { '' }
         Write-Output "Bridge is connected (PID $($process.Id), supervisor PID=$($supervisorProcess.Id), mode $mode$appServerSuffix)."
         exit 0
