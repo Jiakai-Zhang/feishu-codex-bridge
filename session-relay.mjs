@@ -56,6 +56,11 @@ import {
 import { SessionPromptQueue } from "./session-prompt-queue.mjs";
 import { loadSessionRelayConfig } from "./session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "./session-relay-settings.mjs";
+import {
+  buildSessionStreamCard,
+  buildSessionStreamCardFollowups,
+  SessionStreamCardStore,
+} from "./session-stream-card.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const configPath = path.join(scriptDir, "bridge.config.json");
@@ -72,6 +77,7 @@ const inputLedgerPath = path.join(runtimeDir, "session-relay-input-ledger.json")
 const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json");
 const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
 const longAnswerDocumentsPath = path.join(runtimeDir, "session-relay-long-answer-documents.json");
+const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
@@ -106,15 +112,23 @@ const longAnswerDocumentManager = config.larkCliEntry
       cwd: scriptDir,
     })
   : undefined;
+const streamCards = await SessionStreamCardStore.open(streamCardsPath);
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
-  onAccepted: async (queued, result) => inputLedger.put({
-    messageId: queued.messageId,
-    chatId: queued.chatId,
-    threadId: queued.feishuThreadId,
-    kind: `queued:${result?.kind || "accepted"}`,
-    createdAt: queued.createdAt,
-  }),
+  onAccepted: async (queued, result) => {
+    await inputLedger.put({
+      messageId: queued.messageId,
+      chatId: queued.chatId,
+      threadId: queued.feishuThreadId,
+      kind: `queued:${result?.kind || "accepted"}`,
+      createdAt: queued.createdAt,
+    });
+    await tryEnsureTurnStreamCard({
+      threadId: queued.sessionThreadId,
+      turnId: result?.turnId,
+      chatId: queued.chatId,
+    });
+  },
   onError: (error, queued) => log(
     `queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`,
   ),
@@ -556,6 +570,84 @@ async function queueDelivery(record, successLog) {
   await queueDeliveryBundle([record], successLog);
 }
 
+async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
+  if (!threadId || !turnId || !chatId) return undefined;
+  if (!relaySettings.get(threadId).publicProgress || !channelConnected) return undefined;
+  const existing = streamCards.get(threadId, turnId);
+  if (existing) return existing;
+  const binding = bindingsByChat.get(chatId);
+  if (!binding || binding.threadId !== threadId) return undefined;
+  await inspectBinding(binding);
+  const deliveryId = `codex-stream-card:${threadId}:${turnId}`;
+  const startedAtMs = Date.now();
+  const response = await channel.rawClient.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: chatId,
+      content: JSON.stringify(buildSessionStreamCard({ startedAtMs, nowMs: startedAtMs })),
+      msg_type: "interactive",
+      uuid: deliveryIdempotencyKey(deliveryId),
+    },
+  });
+  if (response?.code !== undefined && response.code !== 0) {
+    throw new Error(`Feishu stream card creation failed with code ${response.code}`);
+  }
+  const messageId = response?.data?.message_id || response?.data?.message?.message_id;
+  if (!messageId) throw new Error("Feishu stream card creation returned no message id");
+  const created = await streamCards.start({
+    threadId,
+    turnId,
+    chatId,
+    messageId,
+    createdAt: startedAtMs,
+  });
+  log("created one persistent stream card for a Codex turn");
+  return created;
+}
+
+async function tryEnsureTurnStreamCard(record) {
+  try {
+    return await ensureTurnStreamCard(record);
+  } catch (error) {
+    log(`stream card could not be created: ${safeError(error)}`);
+    return undefined;
+  }
+}
+
+async function tryFinalizeTurnStreamCard(record, answerSegments) {
+  const current = streamCards.get(record.threadId, record.turnId);
+  if (!current || !channelConnected) return false;
+  try {
+    await channel.updateCard(current.messageId, buildSessionStreamCard({
+      answer: record.answer,
+      answerSegments,
+      completedAtMs: record.completedAtMs,
+      durationMs: record.durationMs,
+      tokenUsage: record.tokenUsage,
+      timeZone: config.sessionRelay.displayTimeZone,
+      maxAnswerChars: config.maxReplyChars,
+    }));
+    log("final answer replaced progress in the original stream card");
+    return true;
+  } catch (error) {
+    log(`stream card final update failed; using durable final delivery: ${safeError(error)}`);
+    return false;
+  }
+}
+
+async function queueStreamCardFollowups(baseRecord, attachments, mentionOpenId) {
+  const records = buildSessionStreamCardFollowups(baseRecord, attachments, mentionOpenId);
+  await queueDeliveryBundle(records, records.length > 0 ? "stream card follow-up delivery completed" : undefined);
+}
+
+async function tryCompleteTurnStreamCard(record, baseDelivery, media, mentionOpenId) {
+  if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
+  await queueStreamCardFollowups(baseDelivery, media.attachments, mentionOpenId);
+  await persistCompleted(baseDelivery.deliveryId);
+  await streamCards.remove(record.threadId, record.turnId);
+  return true;
+}
+
 async function enqueuePromptMessage(msg, binding, text) {
   return promptQueue.enqueue({
     messageId: msg.messageId,
@@ -614,6 +706,11 @@ async function processPromptMessage(msg, binding, content) {
       threadId: msg.threadId,
       kind: result.kind,
       createdAt: Date.now(),
+    });
+    await tryEnsureTurnStreamCard({
+      threadId: binding.threadId,
+      turnId: result.turnId,
+      chatId: msg.chatId,
     });
     if (result.kind === "steered") {
       await queueDelivery({
@@ -894,6 +991,25 @@ async function processTurnProgress(record) {
     return;
   }
   try {
+    const current = await tryEnsureTurnStreamCard(record);
+    if (current) {
+      const updated = await streamCards.appendProgress(record.threadId, record.turnId, {
+        sequence: record.sequence,
+        text: record.text,
+        createdAtMs: record.createdAtMs,
+      });
+      try {
+        await channel.updateCard(updated.messageId, buildSessionStreamCard({
+          progress: updated.progress,
+          startedAtMs: updated.createdAt,
+          nowMs: Date.now(),
+        }));
+        log("public Codex progress updated in the original stream card");
+        return;
+      } catch (error) {
+        log(`stream card progress update failed; sending a fallback progress post: ${safeError(error)}`);
+      }
+    }
     await inspectBinding(binding);
     const deliveryId = `codex-progress:${record.threadId}:${record.turnId}:${record.itemId}`;
     const response = await channel.rawClient.im.message.create({
@@ -957,11 +1073,17 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
+    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+      await finishLongAnswerDocumentDelivery(record, media);
+      return;
+    }
     await queueTurnDelivery(delivery, media.attachments, `Goal result delivered for ${deliveryId}`);
     await finishLongAnswerDocumentDelivery(record, media);
+    await streamCards.remove(record.threadId, record.turnId);
     return;
   }
   if (sourcePromptEntries.length === 0) {
+    await streamCards.remove(record.threadId, record.turnId);
     log(`completed turn ${deliveryId} had no user prompt or Goal; skipped`);
     return;
   }
@@ -988,8 +1110,13 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
+    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+      await finishLongAnswerDocumentDelivery(record, media);
+      return;
+    }
     await queueTurnDelivery(delivery, media.attachments, `final answer delivered for Feishu turn ${record.turnId}`);
     await finishLongAnswerDocumentDelivery(record, media);
+    await streamCards.remove(record.threadId, record.turnId);
     return;
   }
   const promptEntries = [];
@@ -1023,12 +1150,17 @@ async function processCompletedTurn(record) {
     }),
     createdAt: Date.now(),
   };
+  if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+    await finishLongAnswerDocumentDelivery(record, media);
+    return;
+  }
   await queueTurnDelivery(
     delivery,
     media.attachments,
     `${route.kind === "reply" ? "cross-client final reply" : "proactive final answer"} delivered for ${deliveryId}`,
   );
   await finishLongAnswerDocumentDelivery(record, media);
+  await streamCards.remove(record.threadId, record.turnId);
 }
 
 const channel = createLarkChannel({
