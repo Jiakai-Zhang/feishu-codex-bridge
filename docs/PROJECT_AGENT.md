@@ -2,6 +2,8 @@
 
 > **实验性保留代码，不属于当前 Beta 发布合同。** 当前安装和支持路径是 [个人 Session Relay](SESSION_RELAY.md)。本文件供继续开发 `mode=project-agent` 与多人协作协议时参考，不应当作现有安装指南。
 
+Project Agent 和多人协作实现位于 `src/experimental/collaboration/`，相关测试位于 `tests/**/experimental/collaboration/`。根目录的 `channel-bridge.mjs` 只是为现有 Supervisor、安装和更新流程保留的兼容启动器。仓库级协作 Skill 继续保留在 `.agents/skills/feishu-agent-collaboration/`，因为该路径是 Codex 的 Project Skill 发现边界。
+
 ## 设计目标
 
 每位成员运行自己的飞书应用 Bot、Bridge 和 Codex。一个协作群严格绑定一个共同 GitHub 仓库，每位成员只把该群绑定到自己机器上的一个 Bridge Project：
@@ -238,7 +240,7 @@ metadata 保存类别、标题、repository IDs、作者、时间和 SHA-256 rev
 
 ```powershell
 npm test
-node --check .\channel-bridge.mjs
+node --check .\src\experimental\collaboration\app\channel-bridge.mjs
 ```
 
 测试覆盖配置边界、群路由、协议身份、任务状态机、Skill 收件箱、精确 Git push/fetch/fast-forward、落点选择、审计链、可靠发件箱和 Project/worktree 校验。
