@@ -4,12 +4,14 @@ import {
   executeGlobalSettingsCommand,
   executeSessionCommand,
   formatGoalStatus,
+  formatAttachmentDraft,
   formatGlobalSessionSettings,
   formatModelView,
   formatPromptQueue,
   formatSessionSettings,
   formatSessionStatus,
   parseQueueAction,
+  parseAttachmentsAction,
   parseSessionCommand,
   parseSettingsAction,
 } from "./session-relay-commands.mjs";
@@ -30,6 +32,8 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   });
   assert.deepEqual(parseQueueAction("run tests"), { action: "enqueue", text: "run tests" });
   assert.deepEqual(parseQueueAction("remove 2"), { action: "remove", position: 2 });
+  assert.deepEqual(parseAttachmentsAction("clear"), { action: "clear" });
+  assert.deepEqual(parseSessionCommand("/attachments"), { name: "attachments", args: "", raw: "/attachments" });
   assert.deepEqual(parseQueueAction("-- clear the cache"), { action: "enqueue", text: "clear the cache" });
   assert.deepEqual(parseSettingsAction("input queue"), { action: "input", value: "queue" });
   assert.deepEqual(parseSettingsAction("thinking on"), { action: "progress", value: true });
@@ -61,6 +65,7 @@ test("formats status, model, and Goal state without exposing reasoning or local 
   assert.match(status, /Fast/);
   assert.match(status, /Plan/);
   assert.match(status, /下一轮队列：1 条/);
+  assert.match(status, /待提交附件：0 个/);
   assert.match(status, /下一条：run all tests/);
   assert.match(status, /普通消息：排队新 Turn/);
   assert.match(status, /公开进度：开启/);
@@ -100,6 +105,13 @@ test("formats status, model, and Goal state without exposing reasoning or local 
   assert.match(queue, /等待：2 条/);
   assert.match(queue, /当前回答完成/);
   assert.ok(queue.indexOf("first queued prompt") < queue.indexOf("second queued prompt"));
+
+  const attachments = formatAttachmentDraft([{
+    attachments: [{ name: "input.xlsx" }, { name: "notes.pdf" }],
+  }]);
+  assert.match(attachments, /当前暂存 2 个附件/);
+  assert.match(attachments, /input\.xlsx/);
+  assert.match(attachments, /下一条普通文字 Prompt/);
 
   const relaySettings = formatSessionSettings({ inputMode: "steer", publicProgress: false, finalMention: true });
   assert.match(relaySettings, /调整当前回答（steer）/);
@@ -177,6 +189,25 @@ test("queues, lists, removes, and clears prompts through the persistent queue co
   entries.push({ text: "one" }, { text: "two" });
   assert.match(await executeSessionCommand(parseSessionCommand("/queue clear"), context), /已删除 2 条/);
   assert.equal(entries.length, 0);
+});
+
+test("lists and clears staged attachments without submitting a Codex prompt", async () => {
+  const records = [{
+    messageId: "om_file",
+    attachments: [{ name: "input.xlsx" }, { name: "notes.pdf" }],
+  }];
+  const attachmentDraftStore = {
+    list: () => records.map((record) => structuredClone(record)),
+    clear: async () => records.splice(0),
+  };
+  const context = {
+    controller: {},
+    threadId: "thread-id",
+    attachmentDraftStore,
+  };
+  assert.match(await executeSessionCommand(parseSessionCommand("/attachments"), context), /input\.xlsx/);
+  assert.match(await executeSessionCommand(parseSessionCommand("/attachments clear"), context), /已放弃 2 个附件/);
+  assert.equal(records.length, 0);
 });
 
 test("views, updates, and resets persistent Session relay settings", async () => {

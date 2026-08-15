@@ -19,7 +19,18 @@
 
 ## 消息如何进入 Session
 
-owner 在绑定群发送普通文本，无需 `@Bot`。Bridge 去除真实 Bot mention 后，把文本作为该 Session 的输入。
+owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 去除真实 Bot mention 和飞书内部资源 key 后，把内容作为该 Session 的输入：
+
+- 图片使用 App Server 原生 `localImage` 输入，可与同一条富文本中的说明一起发送；
+- PDF、Office 文档、压缩包、音视频和其他普通文件先流式下载到 Bridge 受控缓存，再按 Codex Desktop 自身持久化文件 Prompt 的格式加入输入：`Files mentioned by the user`、安全文件名、受控缓存绝对路径和 `My request for Codex`。模型因此可以直接读取原文件，Desktop 可按原生文件消息呈现；
+- 纯普通文件消息不会立即启动 Codex，而是成为当前 Session 的附件草稿；可以连续上传多个文件，第一条普通文字 Prompt 会原子地取走全部草稿附件并提交一次；
+- 已有附件草稿时，后续纯图片消息也加入同一草稿；没有草稿时，单独图片仍按原行为立即成为 Prompt；同一条富文本中的文字和图片仍立即一起提交；
+- `/status`、`/model` 等 Bridge 命令不会消费草稿；`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
+- 草稿、排队记录和附件元数据都会持久保存，Bridge 重启后不会丢失或退化成空 Prompt；同一 Session 的入站消息串行处理，避免连续上传与首条文字发生竞态；
+- 默认限制为单文件 30 MiB，单条消息或整份草稿最多 10 个资源、总计 60 MiB；缓存默认保留 7 天且最多占用 1 GiB，可通过 `sessionRelay.inboundAttachments` 调整；
+- 最终 Prompt 回显只显示图片或安全附件名，不显示飞书资源 key 与本机绝对路径。
+
+稳定版 App Server 的通用 Turn 输入只有 `text`、`image` 和 `localImage`；实验 schema 中的 `mention` 用于 `app://` 应用调用，不是普通本地文件。Bridge 因此不会把普通文件作为裸 `mention` 发送，也不会再生成 `<feishu_bridge_local_attachments>`。旧 XML 解析仅为兼容已存在的历史 Turn。
 
 每个 Session 可独立选择普通消息模式：
 
@@ -60,7 +71,7 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 本轮 Token 使用 App Server 会话累计 usage 的差值计算，覆盖同一 Turn 中的多次模型调用。断线补发缺少 usage 快照时会显示“暂不可用”，不会按文本长度估算。
 
-## 长回答、图片与附件
+## 长回答、图片与附件输出
 
 固定版 `v0.3.1-beta.1` 已支持本地图片与原生附件。当前 `main` 进一步统一了长回答和媒体投递：
 
@@ -74,13 +85,13 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 超限、空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
 - 飞书消息不会包含本机绝对路径；附件消息也不会额外提醒 owner。
 
-文档能力需要用户 OAuth `docx:document:create` 与 `docx:document:write_only`。媒体上传需要应用权限 `im:resource`。
+文档能力需要用户 OAuth `docx:document:create` 与 `docx:document:write_only`。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载 owner 消息资源由现有 `im:message` 权限覆盖。
 
 ## Session 命令
 
 ### `/status`
 
-查看 Bridge 连接、Session idle/active 状态、当前 Turn、等待标志、队列、模型、推理强度、速度、Plan、Token 和 Goal 摘要。命令只读取本机状态，不调用模型。
+查看 Bridge 连接、Session idle/active 状态、当前 Turn、等待标志、队列、待提交附件、模型、推理强度、速度、Plan、Token 和 Goal 摘要。命令只读取本机状态，不调用模型，也不会消费暂存附件。
 
 ### `/stop`
 
@@ -101,6 +112,19 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - Prompt 恰好以 `status`、`clear` 或 `remove` 开头时，使用 `/queue -- <Prompt>`。
 - `/queue remove <序号>`：删除一条。
 - `/queue clear`：清空所有待执行项，不中止当前 Turn。
+
+若当前 Session 有暂存附件，`/queue <Prompt>` 会把这些附件和该 Prompt 一起排入同一个独立新 Turn；单独的 `/queue`、`remove` 或 `clear` 不消费附件草稿。
+
+### `/attachments`
+
+```text
+/attachments
+/attachments clear
+```
+
+- `/attachments`：查看当前 Session 已暂存的附件数量和安全文件名。
+- `/attachments clear`：放弃尚未提交的全部附件，不影响正在运行的 Turn 或已有 Prompt 队列。
+- 附件消息可以连续上传；发送第一条普通文字 Prompt 后，Bridge 才把整份草稿一次性交给 Codex。
 
 ### `/settings`
 
@@ -190,7 +214,7 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 ## 持久状态与投递
 
-- 每个 Session 的设置、Prompt FIFO、输入账本和最终投递状态保存在本机运行目录。
+- 每个 Session 的设置、待提交附件草稿、Prompt FIFO、输入账本和最终投递状态保存在本机运行目录。
 - 所有最终答案先写入持久发件箱，再调用飞书发送。
 - 最终答案使用按 Turn 派生的确定性投递 ID；网络重试不会重复运行 Codex。
 - 主动发送最终结果前仍会重新校验群成员。
@@ -238,6 +262,14 @@ watchdog 默认每 3 秒检查监听器。监听器消失时先移除 Bridge 拥
     "appServerUrl": "ws://127.0.0.1:47321/rpc",
     "displayTimeZone": "Asia/Shanghai",
     "promptPreviewChars": 4000,
+    "inboundAttachments": {
+      "enabled": true,
+      "maxItems": 10,
+      "maxFileBytes": 31457280,
+      "maxTotalBytes": 62914560,
+      "retentionHours": 168,
+      "maxCacheBytes": 1073741824
+    },
     "feedGroup": {
       "enabled": true,
       "agentName": "Codex"

@@ -100,7 +100,9 @@ npm ci
 4. 在只有你和 Bot 的新群中直接发普通消息，无需 `@Bot`；确认 Prompt 进入绑定任务且最终回答返回群。
 5. 在 Codex Desktop 中发送一次 Prompt；确认其最终回答也返回同一群。
 6. 让 Codex 最终回答引用一个不超过 30 MB 的本地文件；确认最终回答后出现可点击的群内原生附件。本地图片不超过 10 MB 时应直接内嵌，超过 10 MB 时应降级为附件。
-7. 在绑定群发送 `/settings` 查看并修改当前 Session；使用 `/settings mention on|off` 控制最终回答是否 @你。公开进度始终不 @。在 CLI Bot 私聊发送 `/settings` 可修改后续新绑定的默认值。确认全新安装显示 `queue + 公开进度开启 + 最终回答提醒开启`。新绑定会复制创建当时的默认快照，已有群不会跟随全局默认变化。
+7. 在绑定群先后上传两个小型普通附件；确认 Bot 分别回复“附件已暂存”，`/status` 显示正确累计数，且 `/model` 等命令不会消费附件。随后发送一条普通文字 Prompt，确认 Codex 在一次输入中收到并能实际读取全部附件，Desktop 按原生文件消息显示安全附件名。再单独发送一张图片，确认没有附件草稿时图片会立即进入 Codex 原生视觉输入。可通过 App Server 诊断确认底层输入使用 Desktop 文件 Prompt 格式；飞书最终 Prompt 回显不得出现 `<feishu_bridge_local_attachments>`、飞书资源 key 或本机绝对路径。
+8. 可再上传一个附件并运行 `/attachments clear`，确认草稿被放弃且没有启动 Codex。
+9. 在绑定群发送 `/settings` 查看并修改当前 Session；使用 `/settings mention on|off` 控制最终回答是否 @你。公开进度始终不 @。在 CLI Bot 私聊发送 `/settings` 可修改后续新绑定的默认值。确认全新安装显示 `queue + 公开进度开启 + 最终回答提醒开启`。新绑定会复制创建当时的默认快照，已有群不会跟随全局默认变化。
 
 也可以在目标 Codex 任务里说“帮我把这个任务绑定到飞书”，让 `$feishu-session-bind` Skill 创建或复用群。
 
@@ -117,7 +119,7 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 
 ## 更新
 
-升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，再优雅停止 Bridge，并在本机运行目录备份 `bridge.config.json`、DPAPI 密文、Session 设置、队列、输入账本和投递状态。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交、恢复备份并重新启动原版本；不会执行 `git reset`、`git clean` 或覆盖用户代码。
+升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，再优雅停止 Bridge，并在本机运行目录备份 `bridge.config.json`、DPAPI 密文、Session 设置、待提交附件草稿、队列、输入账本和投递状态。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交、恢复备份并重新启动原版本；不会执行 `git reset`、`git clean` 或覆盖用户代码。
 
 从 `v0.2.0-beta.1` 开始，后续升级使用：
 
