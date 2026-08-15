@@ -15,6 +15,7 @@ export function createCollaborationOrchestrator({
   collaborationGit, projectContext, getThread, collaborationInbox,
   teamTaskStore, enqueueWork, taskLeaseStore, executor, selectThread,
   replyCommand, listProjectThreads, isChannelConnected,
+  updateActiveWork,
 }) {
   const collaborationInboxInFlight = new Set();
 

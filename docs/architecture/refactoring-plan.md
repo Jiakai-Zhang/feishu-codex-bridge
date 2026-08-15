@@ -101,6 +101,11 @@ stable persistent controller and connection tests retain the active behavior.
 
 Evaluate TypeScript or checked JSDoc only after boundaries and file topology stabilize. A type-system migration must be a separate decision and must not be combined with directory moves or behavioral refactoring.
 
+Completed evaluation: [`static-analysis-evaluation.md`](static-analysis-evaluation.md)
+records the measured baseline. ESLint is adopted as a zero-warning semantic
+gate; repository-wide checked JSDoc and TypeScript are deferred in favor of an
+incremental, suppression-free type path at stable adapter/store boundaries.
+
 ## Rules for every phase
 
 1. One architectural intention per PR.
