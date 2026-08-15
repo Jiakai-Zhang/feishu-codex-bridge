@@ -220,7 +220,7 @@ export function formatPromptTime(timestampMs, timeZone = "Asia/Shanghai") {
   }).format(new Date(normalizeTimestampMs(timestampMs)));
 }
 
-export function formatAnswerDuration(durationMs) {
+function formatAnswerDuration(durationMs) {
   const milliseconds = Number(durationMs);
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "暂不可用";
   if (milliseconds > 0 && milliseconds < 1_000) return "<1秒";

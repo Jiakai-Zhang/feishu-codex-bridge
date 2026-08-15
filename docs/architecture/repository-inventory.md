@@ -98,7 +98,7 @@ wrappers.
 | Stable Desktop relay lifecycle | `configure-codex-desktop-relay.ps1`, `desktop-relay-bootstrap.ps1`, `desktop-relay-pointer.ps1` | Pointer ownership and fail-open behavior are compatibility surfaces verified by `desktop-relay-startup.test.mjs` and doctor checks |
 | Stable install/update/auth | `doctor.ps1`, `install.ps1`, `setup-channel-secret.ps1`, `update.ps1` | Public installation contract; must preserve DPAPI, config, runtime state, rollback, and command-line parameters |
 | Stable adapters and validation | `lark-cli.ps1`, `install-smoke.ps1`, `update-smoke.ps1` | `lark-cli.ps1` is selected dynamically through configuration/docs; smoke scripts are direct validation entry points, and update smoke is invoked by `update-script.test.mjs` |
-| Removal candidate | `restart-after-current-turn.ps1` | No code, documentation, test, install, or update reference. It reads `bridge.config.json`, waits on the runtime PID, writes a restart log, and invokes `start-bridge.ps1`; verify that no released scheduled task or updater still calls it before deletion. |
+| Resolved removal candidate | None | `restart-after-current-turn.ps1` was removed after confirming that released tags, current install/update scripts, Windows scheduled tasks, and Windows services never invoked it. Session binding reloads use the Supervisor-owned `restart.request` handshake instead. |
 
 ## Tests, skills, configuration, and documentation
 
