@@ -8,7 +8,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check:repository": "node ./scripts/check-repository.mjs",
+    "check": "npm run check:repository && npm test"
   },
   "dependencies": {
     "@larksuite/channel": "0.4.1",

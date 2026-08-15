@@ -14,7 +14,8 @@ async function git(cwd, args) {
 }
 
 async function withProject(callback) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-project-"));
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-project-"));
+  const root = await fs.realpath(temporaryRoot);
   const repo = path.join(root, "repo");
   const worktreeRoot = path.join(root, "worktrees");
   await fs.mkdir(repo);

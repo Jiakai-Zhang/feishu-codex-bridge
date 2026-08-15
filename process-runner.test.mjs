@@ -16,16 +16,28 @@ function fakeChild() {
   return child;
 }
 
+async function awaitWithin(promise, timeoutMs = 1_000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs} ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 test("durable completion resolves even when an exited child never emits close", async () => {
   const child = fakeChild();
   child.exitCode = 0;
   const answer = "durably persisted answer";
-  const result = await runProcess("codex", [], {
+  const result = await awaitWithin(runProcess("codex", [], {
     spawnProcess: () => child,
     stopProcessTreeImpl: async () => {},
     completionProbe: async () => ({ answer }),
     completionPollMs: 5,
-  });
+  }));
 
   assert.equal(result.code, 0);
   assert.equal(result.logicalCompletionSeen, true);
@@ -44,7 +56,7 @@ test("turn.completed settles after the grace period without a close event", asyn
     onStdoutLine: (line) => JSON.parse(line).type === "turn.completed",
   });
   child.stdout.write(`${JSON.stringify({ type: "turn.completed" })}\n`);
-  const result = await resultPromise;
+  const result = await awaitWithin(resultPromise);
 
   assert.equal(result.code, 1);
   assert.equal(result.logicalCompletionSeen, true);
