@@ -23,6 +23,11 @@ Create a repository inventory that classifies file families as:
 
 For every removal candidate, record imports, script/document references, persisted data dependencies, and test coverage. Classification does not authorize deletion.
 
+Phase 1 inventory: [`repository-inventory.md`](repository-inventory.md). It
+accounts for all tracked production modules and operational scripts, records the
+actual local dependency graph, identifies shared ownership decisions, and gives
+evidence requirements for every removal candidate.
+
 Expected family mapping:
 
 | Current family | Target area |
@@ -36,7 +41,11 @@ Expected family mapping:
 
 ## Phase 2: mechanical directory migration
 
-Move production modules under `src/`, tests under `tests/`, examples under `config/`, and development tooling under `scripts/`. This phase should change paths and imports only.
+Move stable and shared production modules under `src/`, their tests under
+`tests/`, examples under `config/`, and development tooling under `scripts/`.
+Retained experimental production modules stay in their current locations until
+Phase 3 establishes the experimental boundary. This phase should change paths
+and imports only.
 
 Operational PowerShell entry points are part of the installation contract. If implementation scripts move, keep backward-compatible root wrappers until a versioned migration removes them.
 
