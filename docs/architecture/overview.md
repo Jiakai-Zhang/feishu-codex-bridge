@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository grew from a Windows relay prototype into a Session-oriented bridge with persistent delivery, attachments, cards, Desktop recovery, and an experimental collaboration stack. Most production modules and tests are still flat in the repository root. That layout is intentionally treated as legacy: it remains valid until dedicated mechanical migration PRs move it.
+The repository grew from a Windows relay prototype into a Session-oriented bridge with persistent delivery, attachments, cards, Desktop recovery, and an experimental collaboration stack. Stable Session Relay and shared production modules now live under domain-oriented `src/` directories, with their tests under `tests/`. Root `session-relay.mjs` and `request-session-binding.mjs` files remain compatibility launchers for installed scripts and Skills. Experimental collaboration modules remain flat until the dedicated Phase 3 isolation.
 
 The stable product is the personal Session Relay. Project Agent and multi-agent collaboration are experimental and are not part of the stable release contract.
 

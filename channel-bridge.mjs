@@ -14,7 +14,7 @@ import {
 import { CollaborationGitHandoff, writeCollaborationRegistration } from "./collaboration-git.mjs";
 import { buildLandingPlan, effectiveReceiveMode, resolveLandingChoice } from "./collaboration-landing.mjs";
 import { CollaborationRequestInbox } from "./collaboration-request-inbox.mjs";
-import { startCodexProjectThread } from "./codex-app-server.mjs";
+import { startCodexProjectThread } from "./src/codex/codex-app-server.mjs";
 import { AuditLog } from "./audit-log.mjs";
 import {
   buildCapacityMarkdown,
@@ -25,7 +25,7 @@ import {
   formatTimestamp,
   readLatestRolloutSnapshot,
 } from "./codex-status.mjs";
-import { DeliveryOutbox, deliveryIdempotencyKey } from "./delivery-outbox.mjs";
+import { DeliveryOutbox, deliveryIdempotencyKey } from "./src/persistence/delivery-outbox.mjs";
 import { inspectDesktopProject } from "./desktop-project-state.mjs";
 import { createExecutor } from "./executor-registry.mjs";
 import { buildKnowledgeArtifactMarkdown, buildKnowledgeListMarkdown, parseKnowledgeCommand } from "./knowledge-commands.mjs";
@@ -55,7 +55,7 @@ import {
 import { loadBridgeConfig, sdkGroupAllowlist } from "./team-config.mjs";
 import { TeamTaskStore } from "./team-task-store.mjs";
 import { TaskLeaseStore } from "./task-lease-store.mjs";
-import { ThreadWorkQueue } from "./thread-work-queue.mjs";
+import { ThreadWorkQueue } from "./src/runtime/thread-work-queue.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const config = await loadBridgeConfig(path.join(scriptDir, "bridge.config.json"));
