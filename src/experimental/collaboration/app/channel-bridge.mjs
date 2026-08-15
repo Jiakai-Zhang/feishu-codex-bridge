@@ -587,6 +587,7 @@ const {
   replyCommand,
   listProjectThreads,
   isChannelConnected: () => channelConnected,
+  updateActiveWork,
 });
 
 const { buildStatusMarkdown, buildCurrentMarkdown } = createStatusRenderer({

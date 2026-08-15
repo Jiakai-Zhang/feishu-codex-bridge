@@ -14,7 +14,8 @@ function canonical(value) {
 }
 
 function recordHash(record) {
-  const { hash: ignored, ...unsigned } = record;
+  const unsigned = { ...record };
+  delete unsigned.hash;
   return createHash("sha256").update(canonical(unsigned), "utf8").digest("hex");
 }
 
