@@ -25,6 +25,10 @@ import {
 } from "./feishu-native-attachment.mjs";
 import { FeishuFeedGroupManager } from "./feishu-feed-group.mjs";
 import {
+  FeishuInboundAttachmentStore,
+  prepareFeishuPrompt,
+} from "./feishu-inbound-attachment.mjs";
+import {
   buildLongAnswerDocumentMarkdown,
   buildLongAnswerDocumentTitle,
   FeishuLongAnswerDocumentManager,
@@ -33,6 +37,10 @@ import {
 } from "./feishu-long-answer-document.mjs";
 import { FeishuSessionChatManager } from "./feishu-session-chat.mjs";
 import { SessionAddFlow } from "./session-add-flow.mjs";
+import {
+  SessionAttachmentDraftStore,
+  shouldStageAttachmentPrompt,
+} from "./session-attachment-drafts.mjs";
 import { SessionBindingInbox } from "./session-binding-inbox.mjs";
 import { SessionBindingProvisioner } from "./session-binding-provisioner.mjs";
 import { SessionBindingRemover } from "./session-binding-remover.mjs";
@@ -61,6 +69,7 @@ import {
   buildSessionStreamCardFollowups,
   SessionStreamCardStore,
 } from "./session-stream-card.mjs";
+import { ThreadWorkQueue } from "./thread-work-queue.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const configPath = path.join(scriptDir, "bridge.config.json");
@@ -78,6 +87,8 @@ const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json")
 const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
 const longAnswerDocumentsPath = path.join(runtimeDir, "session-relay-long-answer-documents.json");
 const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json");
+const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
+const attachmentDraftsPath = path.join(runtimeDir, "session-relay-attachment-drafts.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
@@ -113,6 +124,14 @@ const longAnswerDocumentManager = config.larkCliEntry
     })
   : undefined;
 const streamCards = await SessionStreamCardStore.open(streamCardsPath);
+const inboundAttachmentStore = new FeishuInboundAttachmentStore(
+  inboundAttachmentsPath,
+  config.sessionRelay.inboundAttachments,
+);
+const attachmentDrafts = await SessionAttachmentDraftStore.open(attachmentDraftsPath, {
+  maxItems: config.sessionRelay.inboundAttachments.maxItems,
+  maxTotalBytes: config.sessionRelay.inboundAttachments.maxTotalBytes,
+});
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => {
@@ -133,6 +152,19 @@ const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
     `queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`,
   ),
 });
+await attachmentDrafts.reconcile({
+  isPromptAccepted: (messageId) => inputLedger.has(messageId) || promptQueue.has(messageId),
+});
+await inboundAttachmentStore.prune({
+  protectedMessageIds: [
+    ...promptQueue.list().map(({ messageId }) => messageId),
+    ...attachmentDrafts.protectedMessageIds(),
+  ],
+  protectedAttachmentPaths: [
+    ...promptQueue.list().flatMap(({ attachments }) => attachments.map(({ localPath }) => localPath)),
+    ...attachmentDrafts.protectedAttachmentPaths(),
+  ],
+}).catch((error) => log(`inbound attachment cache cleanup deferred: ${safeError(error)}`));
 for (const queued of promptQueue.list()) {
   if (inputLedger.has(queued.messageId)) continue;
   await inputLedger.put({
@@ -177,6 +209,7 @@ let channelConnected = false;
 let deliveryRetryInFlight = false;
 const inFlightMessageIds = new Set();
 const turnOutputTails = new Map();
+const inboundWorkQueue = new ThreadWorkQueue();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -206,6 +239,25 @@ function dispatchAllQueuedPrompts() {
   void promptQueue.dispatchAll().catch((error) => {
     log(`queued prompt retry scan deferred: ${safeError(error)}`);
   });
+}
+
+function inboundAttachmentPruneProtection(extraMessageIds = []) {
+  const queued = promptQueue.list();
+  return {
+    protectedMessageIds: [
+      ...extraMessageIds,
+      ...queued.map(({ messageId }) => messageId),
+      ...attachmentDrafts.protectedMessageIds(),
+    ],
+    protectedAttachmentPaths: [
+      ...queued.flatMap(({ attachments }) => (attachments || []).map(({ localPath }) => localPath)),
+      ...attachmentDrafts.protectedAttachmentPaths(),
+    ],
+  };
+}
+
+async function pruneInboundAttachmentCache(extraMessageIds = []) {
+  await inboundAttachmentStore.prune(inboundAttachmentPruneProtection(extraMessageIds));
 }
 
 function enqueueTurnOutput(threadId, work) {
@@ -559,12 +611,34 @@ function publicFailure(error) {
       return "群绑定尚未就绪：飞书群名与 Codex 任务名无法保持一致。本消息没有进入 Codex。";
     case "input_too_long":
       return `消息超过当前 ${config.maxInputChars} 字符上限，本消息没有进入 Codex。`;
+    case "attachment_disabled":
+      return "当前 Bridge 配置未启用飞书图片与附件输入；本消息没有进入 Codex。";
+    case "attachment_unsupported":
+      return "这条飞书消息包含当前接口无法下载的资源类型（例如表情包或合并转发子消息）；本消息没有进入 Codex。请改为发送普通图片或文件。";
+    case "attachment_cache_unsafe":
+      return "Bridge 的本机附件缓存目录未通过安全检查；本消息没有进入 Codex。请在本机检查 Bridge 运行目录。";
+    case "attachment_too_many":
+      return `单条消息最多接收 ${config.sessionRelay.inboundAttachments.maxItems} 个图片或附件；请拆分后重新发送。`;
+    case "attachment_too_large":
+      return `单个图片或附件不能超过 ${Math.floor(config.sessionRelay.inboundAttachments.maxFileBytes / 1024 / 1024)} MiB；请压缩或拆分后重新发送。`;
+    case "attachment_total_too_large":
+      return `单条消息的图片和附件总计不能超过 ${Math.floor(config.sessionRelay.inboundAttachments.maxTotalBytes / 1024 / 1024)} MiB；请拆分后重新发送。`;
+    case "attachment_draft_full":
+      return `当前暂存区最多接收 ${config.sessionRelay.inboundAttachments.maxItems} 个附件。请先发送文字 Prompt，或使用 \`/attachments clear\` 清空后重试。`;
+    case "attachment_draft_total_too_large":
+      return `当前暂存附件总计不能超过 ${Math.floor(config.sessionRelay.inboundAttachments.maxTotalBytes / 1024 / 1024)} MiB。请先发送文字 Prompt，或使用 \`/attachments clear\` 清空后重试。`;
+    case "attachment_draft_busy":
+      return "上一条文字 Prompt 正在接收暂存附件，请稍后重试；附件不会被改投到其他任务。";
+    case "attachment_draft_conflict":
+      return "这条飞书附件消息已经关联到另一份暂存记录，没有重复加入。";
+    case "attachment_download_failed":
+      return "Bridge 无法下载这条飞书附件。请确认应用已开通并发布 `im:message`（或 `im:message:readonly`），且消息未设为保密、群未开启防泄密模式；然后重新发送附件。";
     case "session_busy":
       return "绑定的 Codex 任务在等待时限内没有恢复空闲。请等待当前回答完成或中断后重试。";
     case "codex_app_server_unavailable":
       return "本机共享 Codex 服务当前未连接。请先重新启动 Bridge，再重试本消息。";
     case "unsupported_message":
-      return "当前 Session Relay 只接收文本消息。";
+      return "当前 Session Relay 接收文本、图片和普通附件；暂不支持这种飞书消息类型。";
     default:
       return "Codex 本轮处理失败，未能生成最终回复。请稍后重试。";
   }
@@ -688,13 +762,14 @@ async function tryCompleteTurnStreamCard(record, baseDelivery, media, mentionOpe
   return true;
 }
 
-async function enqueuePromptMessage(msg, binding, text) {
+async function enqueuePromptMessage(msg, binding, text, attachments = []) {
   return promptQueue.enqueue({
     messageId: msg.messageId,
     sessionThreadId: binding.threadId,
     chatId: msg.chatId,
     feishuThreadId: msg.threadId,
     text,
+    attachments,
     createdAt: Date.now(),
   }, {
     afterPersist: async (queued) => inputLedger.put({
@@ -707,14 +782,18 @@ async function enqueuePromptMessage(msg, binding, text) {
   });
 }
 
-async function processPromptMessage(msg, binding, content) {
+async function processPromptMessage(msg, binding, prompt) {
   const startedAt = Date.now();
+  let accepted = false;
   log(`accepted relay message ${msg.messageId}`);
   try {
+    const content = String(prompt?.text || "");
+    const attachments = Array.isArray(prompt?.attachments) ? prompt.attachments : [];
     const settings = relaySettings.get(binding.threadId);
     if (settings.inputMode === "queue") {
       await inspectBinding(binding);
-      const queued = await enqueuePromptMessage(msg, binding, content);
+      const queued = await enqueuePromptMessage(msg, binding, content, attachments);
+      accepted = true;
       await queueDelivery({
         kind: "reply",
         deliveryId: `default-queue:${msg.messageId}`,
@@ -733,13 +812,15 @@ async function processPromptMessage(msg, binding, content) {
       }, `default queue acknowledged for ${msg.messageId}`);
       dispatchQueuedPrompts(binding.threadId);
       log(`queued relay message ${msg.messageId}; position=${queued.position}; elapsedMs=${Date.now() - startedAt}`);
-      return;
+      return true;
     }
     const result = await sessionController.submitPrompt({
       threadId: binding.threadId,
       text: content,
+      attachments,
       clientUserMessageId: msg.messageId,
     });
+    accepted = true;
     await inputLedger.put({
       messageId: msg.messageId,
       chatId: msg.chatId,
@@ -776,9 +857,80 @@ async function processPromptMessage(msg, binding, content) {
       }, `turn boundary notice delivered for ${msg.messageId}`);
     }
     log(`${result.kind} relay message ${msg.messageId} on turn ${result.turnId}; elapsedMs=${Date.now() - startedAt}`);
+    return true;
   } catch (error) {
     log(`relay message ${msg.messageId} failed: ${safeError(error)}`);
-    await replyFailure(msg, error);
+    if (!accepted) await replyFailure(msg, error);
+    else log(`relay message ${msg.messageId} was accepted before a follow-up operation failed`);
+    return accepted;
+  }
+}
+
+async function stageAttachmentMessage(msg, binding, prompt) {
+  await inspectBinding(binding);
+  const staged = await attachmentDrafts.stage({
+    messageId: msg.messageId,
+    sessionThreadId: binding.threadId,
+    chatId: msg.chatId,
+    feishuThreadId: msg.threadId,
+    attachments: prompt.attachments,
+    createdAt: Date.now(),
+  });
+  await inputLedger.put({
+    messageId: msg.messageId,
+    chatId: msg.chatId,
+    threadId: msg.threadId,
+    kind: "attachment:staged",
+    createdAt: Date.now(),
+  });
+  const names = staged.record.attachments
+    .map(({ name }) => String(name || "未命名附件").replace(/[\r\n`]/g, " "))
+    .map((name) => `- ${name}`);
+  await queueDelivery({
+    kind: "reply",
+    deliveryId: `attachment-staged:${msg.messageId}`,
+    messageId: msg.messageId,
+    chatId: msg.chatId,
+    threadId: msg.threadId,
+    markdown: [
+      `### ${staged.alreadyStaged ? "附件已经暂存" : "附件已暂存"}`,
+      "",
+      ...names,
+      "",
+      `当前累计：${staged.attachmentCount} 个附件。`,
+      "",
+      "继续发送附件可以追加；发送第一条普通文字 Prompt 后，Bridge 会把全部暂存附件合并为一次 Codex 输入。",
+      "",
+      "> `/status`、`/model` 等命令不会消费附件；使用 `/attachments` 查看，或 `/attachments clear` 放弃。",
+    ].join("\n"),
+    publicStatus: true,
+    createdAt: Date.now(),
+  }, `staged ${staged.record.attachments.length} inbound attachment(s) from ${msg.messageId}`);
+}
+
+async function processPreparedPrompt(msg, binding, prompt) {
+  const hasPendingDraft = attachmentDrafts.hasPending(binding.threadId);
+  if (shouldStageAttachmentPrompt(prompt, { hasPendingDraft })) {
+    await stageAttachmentMessage(msg, binding, prompt);
+    return;
+  }
+  if (!String(prompt?.text || "").trim() || !hasPendingDraft) {
+    await processPromptMessage(msg, binding, prompt);
+    return;
+  }
+
+  const claim = await attachmentDrafts.claim(binding.threadId, msg.messageId, {
+    additionalAttachments: prompt.attachments,
+  });
+  const accepted = await processPromptMessage(msg, binding, {
+    ...prompt,
+    attachments: claim.attachments,
+  });
+  try {
+    if (accepted) await attachmentDrafts.completeClaim(msg.messageId);
+    else await attachmentDrafts.releaseClaim(msg.messageId);
+  } catch (error) {
+    log(`attachment draft settlement deferred for ${msg.messageId}: ${safeError(error)}`);
   }
 }
 
@@ -788,18 +940,36 @@ async function processCommandMessage(msg, binding, command) {
     await inspectBinding(binding);
     let markdown;
     let queueAction;
+    let draftClaim;
+    let queuedAccepted = false;
     try {
       queueAction = command.name === "queue" ? parseQueueAction(command.args) : undefined;
+      if (queueAction?.action === "enqueue") {
+        draftClaim = await attachmentDrafts.claim(binding.threadId, msg.messageId);
+      }
       markdown = await executeSessionCommand(command, {
         controller: sessionController,
         threadId: binding.threadId,
         promptQueue,
+        attachmentDraftStore: attachmentDrafts,
         settingsStore: relaySettings,
-        enqueuePrompt: async (text) => enqueuePromptMessage(msg, binding, text),
+        enqueuePrompt: async (text) => {
+          const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
+          queuedAccepted = true;
+          return queued;
+        },
       });
     } catch (error) {
       markdown = publicCommandFailure(error);
       log(`session command /${command.name} failed: ${safeError(error)}`);
+    }
+    if (draftClaim) {
+      try {
+        if (queuedAccepted) await attachmentDrafts.completeClaim(msg.messageId);
+        else await attachmentDrafts.releaseClaim(msg.messageId);
+      } catch (error) {
+        log(`attachment draft settlement deferred for queue command ${msg.messageId}: ${safeError(error)}`);
+      }
     }
     if (!inputLedger.has(msg.messageId)) {
       await inputLedger.put({
@@ -1369,20 +1539,7 @@ async function pollSessionBindingInbox() {
   }
 }
 
-channel.on("message", async (msg) => {
-  const binding = bindingsByChat.get(msg.chatId);
-  if (msg.senderIsBot !== false || msg.senderId !== config.agent.ownerOpenId) return;
-  if (
-    completed.has(msg.messageId) ||
-    inputLedger.has(msg.messageId) ||
-    promptQueue.has(msg.messageId) ||
-    inFlightMessageIds.has(msg.messageId)
-  ) return;
-  if (deliveryOutbox.has(msg.messageId)) {
-    void retryPendingDeliveries();
-    return;
-  }
-  inFlightMessageIds.add(msg.messageId);
+async function processInboundMessage(msg, binding) {
   try {
     if (msg.rawContentType === "text") {
       const rawContent = String(msg.content || "");
@@ -1402,14 +1559,50 @@ channel.on("message", async (msg) => {
       return;
     }
     const content = assertRelayMessage(msg, binding);
-    if (content.length > config.maxInputChars) {
+    const hasResources = Array.isArray(msg.resources) && msg.resources.length > 0;
+    if (!hasResources && content.length > config.maxInputChars) {
       throw new SessionRelayError("input_too_long", "Message exceeds the configured input limit");
     }
-    const command = parseSessionCommand(content);
+    const command = msg.rawContentType === "text" && !hasResources
+      ? parseSessionCommand(content)
+      : undefined;
     if (command) await processCommandMessage(msg, binding, command);
-    else await processPromptMessage(msg, binding, content);
+    else {
+      if (hasResources) {
+        await pruneInboundAttachmentCache([msg.messageId])
+          .catch((error) => log(`inbound attachment cache cleanup deferred: ${safeError(error)}`));
+      }
+      const prompt = await prepareFeishuPrompt(msg, channel, inboundAttachmentStore, {
+        enabled: config.sessionRelay.inboundAttachments.enabled,
+      });
+      if (prompt.text.length > config.maxInputChars) {
+        throw new SessionRelayError("input_too_long", "Message exceeds the configured input limit");
+      }
+      await processPreparedPrompt(msg, binding, prompt);
+    }
   } catch (error) {
     await replyFailure(msg, error);
+  }
+}
+
+channel.on("message", async (msg) => {
+  const binding = bindingsByChat.get(msg.chatId);
+  if (msg.senderIsBot !== false || msg.senderId !== config.agent.ownerOpenId) return;
+  if (
+    completed.has(msg.messageId) ||
+    inputLedger.has(msg.messageId) ||
+    promptQueue.has(msg.messageId) ||
+    inFlightMessageIds.has(msg.messageId)
+  ) return;
+  if (deliveryOutbox.has(msg.messageId)) {
+    void retryPendingDeliveries();
+    return;
+  }
+  inFlightMessageIds.add(msg.messageId);
+  try {
+    await inboundWorkQueue.enqueue(binding?.threadId || `chat:${msg.chatId}`, () => (
+      processInboundMessage(msg, binding)
+    ));
   } finally {
     inFlightMessageIds.delete(msg.messageId);
   }

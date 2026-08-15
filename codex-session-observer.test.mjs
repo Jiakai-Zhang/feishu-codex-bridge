@@ -71,7 +71,7 @@ test("removes the exact Codex Desktop file wrapper while keeping image delivery 
           "",
           "## screenshot.png: C:/secret/screenshot.png",
           "",
-          "## My request:",
+          "## My request for Codex:",
           "check this",
         ].join("\n"),
       },
@@ -91,7 +91,7 @@ test("removes the exact Codex Desktop file wrapper while keeping image delivery 
   }]);
 });
 
-test("keeps lookalike user text and requires a separate resource before removing a wrapper", () => {
+test("removes an exact Desktop wrapper without a separate input item and keeps lookalikes", () => {
   const wrapper = [
     "# Files mentioned by the user:",
     "",
@@ -107,8 +107,37 @@ test("keeps lookalike user text and requires a separate resource before removing
     "keep all of it",
   ].join("\n");
 
-  assert.equal(stripCodexDesktopFileContext(wrapper), wrapper);
+  assert.equal(stripCodexDesktopFileContext(wrapper), "check this");
   assert.equal(stripCodexDesktopFileContext(lookalike, { hasResources: true }), lookalike);
+});
+
+test("extracts an ordinary file from the Desktop wrapper without exposing its local path", () => {
+  const item = {
+    type: "userMessage",
+    content: [{
+      type: "text",
+      text: [
+        "",
+        "# Files mentioned by the user:",
+        "",
+        "## workbook.xlsx: C:/private/cache/workbook.xlsx",
+        "",
+        "## My request for Codex:",
+        "读取工作表",
+      ].join("\n"),
+      text_elements: [],
+    }],
+  };
+
+  const details = userPromptDetailsFromItem(item);
+  assert.equal(details.text, "读取工作表\n📎 附件：workbook.xlsx");
+  assert.equal(details.text.includes("C:/private"), false);
+  assert.deepEqual(details.resources, [{
+    type: "attachment",
+    source: "local",
+    path: "C:/private/cache/workbook.xlsx",
+    name: "workbook.xlsx",
+  }]);
 });
 
 test("builds a titled rich-text post with prompt, send time, and final answer", () => {

@@ -109,7 +109,8 @@ function New-RecoveryBackup {
         'session-relay-pending-deliveries.json',
         'session-relay-input-ledger.json',
         'session-relay-prompt-queue.json',
-        'session-relay-settings.json'
+        'session-relay-settings.json',
+        'session-relay-attachment-drafts.json'
     )
     $backedUpNames = [Collections.Generic.List[string]]::new()
     foreach ($name in $stateNames) {

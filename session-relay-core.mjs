@@ -6,6 +6,8 @@ export class SessionRelayError extends Error {
   }
 }
 
+const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video"]);
+
 export function assertRelayMessage(msg, binding) {
   if (!msg || msg.chatId !== binding.groupChatId) {
     throw new SessionRelayError("wrong_group", "Message is outside the bound group");
@@ -16,11 +18,12 @@ export function assertRelayMessage(msg, binding) {
   if (msg.senderIsBot !== false || msg.senderId !== binding.ownerOpenId) {
     throw new SessionRelayError("untrusted_sender", "Message sender is not the bound human owner");
   }
-  if (msg.rawContentType !== "text") {
-    throw new SessionRelayError("unsupported_message", "Session Relay currently accepts text messages only");
+  const resources = Array.isArray(msg.resources) ? msg.resources : [];
+  if (!RELAY_MESSAGE_TYPES.has(String(msg.rawContentType || "")) || (msg.rawContentType !== "text" && resources.length === 0)) {
+    throw new SessionRelayError("unsupported_message", "Session Relay accepts text, image, and file messages only");
   }
   const content = String(msg.content || "");
-  if (!content.trim()) throw new SessionRelayError("empty_message", "Message text is empty");
+  if (!content.trim() && resources.length === 0) throw new SessionRelayError("empty_message", "Message has no usable content");
   return content;
 }
 

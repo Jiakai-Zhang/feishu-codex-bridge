@@ -1,4 +1,4 @@
-const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "settings"]);
+const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "settings", "attachments"]);
 
 export class SessionCommandError extends Error {
   constructor(code, message) {
@@ -37,6 +37,13 @@ export function parseQueueAction(value) {
     usage("用法：`/queue`、`/queue <Prompt>`、`/queue remove <序号>` 或 `/queue clear`");
   }
   return Object.freeze({ action: "enqueue", text });
+}
+
+export function parseAttachmentsAction(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text || text === "status") return Object.freeze({ action: "status" });
+  if (text === "clear") return Object.freeze({ action: "clear" });
+  usage("用法：`/attachments` 或 `/attachments clear`");
 }
 
 export function parseSettingsAction(input) {
@@ -196,7 +203,9 @@ export function formatPromptQueue(entries, { status } = {}) {
   if (status) lines.push(`- 启动条件：${queueWaitReason(status)}`);
   lines.push("");
   for (const [index, entry] of queue.slice(0, 10).entries()) {
-    lines.push(`${index + 1}. ${promptPreview(entry?.text) || "（无文本）"}`);
+    const attachmentCount = Array.isArray(entry?.attachments) ? entry.attachments.length : 0;
+    const fallback = attachmentCount > 0 ? `（${attachmentCount} 个附件）` : "（无文本）";
+    lines.push(`${index + 1}. ${promptPreview(entry?.text) || fallback}`);
   }
   if (queue.length > 10) lines.push(`…另有 ${queue.length - 10} 条未显示`);
   lines.push(
@@ -206,7 +215,28 @@ export function formatPromptQueue(entries, { status } = {}) {
   return lines.join("\n");
 }
 
-export function formatSessionStatus(status, { queueEntries = [], relaySettings } = {}) {
+export function formatAttachmentDraft(entries) {
+  const records = Array.isArray(entries) ? entries : [];
+  const attachments = records.flatMap((record) => Array.isArray(record?.attachments) ? record.attachments : []);
+  const lines = ["### 待提交附件", ""];
+  if (attachments.length === 0) {
+    lines.push("当前没有暂存附件。", "", "先发送文件，再发送普通文字 Prompt；Bridge 会把它们合并为一次输入。");
+    return lines.join("\n");
+  }
+  lines.push(`当前暂存 ${attachments.length} 个附件：`, "");
+  for (const [index, attachment] of attachments.entries()) {
+    lines.push(`${index + 1}. ${promptPreview(attachment?.name) || "未命名附件"}`);
+  }
+  lines.push(
+    "",
+    "下一条普通文字 Prompt 会与以上全部附件一起提交；Bridge 命令不会消耗它们。",
+    "",
+    "发送 `/attachments clear` 可放弃这些暂存附件。",
+  );
+  return lines.join("\n");
+}
+
+export function formatSessionStatus(status, { queueEntries = [], attachmentDraftEntries = [], relaySettings } = {}) {
   const settings = status?.settings || {};
   const activeFlags = Array.isArray(status?.status?.activeFlags) ? status.status.activeFlags : [];
   const usage = status?.tokenUsage?.total;
@@ -237,11 +267,27 @@ export function formatSessionStatus(status, { queueEntries = [], relaySettings }
     lines.push("- Goal：无");
   }
   lines.push(`- 下一轮队列：${queueEntries.length} 条`);
+  const stagedAttachmentCount = attachmentDraftEntries
+    .flatMap((entry) => Array.isArray(entry?.attachments) ? entry.attachments : [])
+    .length;
+  lines.push(`- 待提交附件：${stagedAttachmentCount} 个`);
   if (queueEntries.length > 0) {
     lines.push(`- 下一条：${promptPreview(queueEntries[0]?.text) || "（无文本）"}`);
     lines.push(`- 队列等待：${queueWaitReason(status)}`);
   }
   return lines.join("\n");
+}
+
+async function executeAttachments(command, context) {
+  const { attachmentDraftStore, threadId } = context;
+  if (!attachmentDraftStore) throw new TypeError("Attachment command execution requires a draft store");
+  const request = parseAttachmentsAction(command.args);
+  if (request.action === "status") return formatAttachmentDraft(attachmentDraftStore.list(threadId));
+  const removed = await attachmentDraftStore.clear(threadId);
+  const count = removed.reduce((sum, record) => sum + (record.attachments?.length || 0), 0);
+  return count > 0
+    ? `### 暂存附件已清空\n\n已放弃 ${count} 个附件；当前 Turn 和下一轮队列不受影响。`
+    : "### 暂存附件已经为空\n\n没有需要清除的附件。";
 }
 
 function currentModelEntry(view) {
@@ -380,7 +426,7 @@ async function executeQueue(command, context) {
     return [
       "### 已移除排队 Prompt",
       "",
-      `原第 ${request.position} 条已删除：${promptPreview(removed.text)}`,
+      `原第 ${request.position} 条已删除：${promptPreview(removed.text) || `（${removed.attachments?.length || 0} 个附件）`}`,
       `当前仍有 ${promptQueue.count(threadId)} 条等待。`,
     ].join("\n");
   }
@@ -441,6 +487,7 @@ export async function executeSessionCommand(command, context) {
     if (command.args) usage("用法：`/status`");
     return formatSessionStatus(await controller.getStatus(threadId), {
       queueEntries: context.promptQueue?.list(threadId) || [],
+      attachmentDraftEntries: context.attachmentDraftStore?.list(threadId) || [],
       relaySettings: context.settingsStore?.get(threadId),
     });
   }
@@ -460,6 +507,7 @@ export async function executeSessionCommand(command, context) {
   if (command.name === "model") return executeModel(command, context);
   if (command.name === "plan") return executePlan(command, context);
   if (command.name === "queue") return executeQueue(command, context);
+  if (command.name === "attachments") return executeAttachments(command, context);
   if (command.name === "settings") return executeSettings(command, context);
   return executeGoal(command, context);
 }
@@ -479,6 +527,10 @@ export function publicCommandFailure(error) {
     case "queue_full": return "下一轮队列已满。请先使用 `/queue` 查看，并通过 `/queue remove <序号>` 或 `/queue clear` 腾出空间。";
     case "queue_position_invalid": return "该队列序号不存在。请先发送 `/queue` 查看当前队列。";
     case "queue_message_conflict": return "这条飞书消息已经关联到另一条排队 Prompt，没有重复加入。";
+    case "attachment_draft_full": return "暂存附件数量已达到上限。请先发送文字 Prompt，或使用 `/attachments clear` 清空后重试。";
+    case "attachment_draft_total_too_large": return "暂存附件总大小已达到上限。请先发送文字 Prompt，或使用 `/attachments clear` 清空后重试。";
+    case "attachment_draft_busy": return "暂存附件正在提交，请稍后重试。";
+    case "attachment_draft_conflict": return "这条飞书附件消息已关联到另一份暂存记录，没有重复加入。";
     case "codex_app_server_unavailable": return "本机共享 Codex 服务当前未连接，请稍后重试。";
     default: return "命令执行失败。请查看 `/status` 后重试。";
   }

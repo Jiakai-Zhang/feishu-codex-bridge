@@ -11,6 +11,14 @@
     "appServerUrl": "ws://127.0.0.1:47321/rpc",
     "displayTimeZone": "Asia/Shanghai",
     "promptPreviewChars": 4000,
+    "inboundAttachments": {
+      "enabled": true,
+      "maxItems": 10,
+      "maxFileBytes": 31457280,
+      "maxTotalBytes": 62914560,
+      "retentionHours": 168,
+      "maxCacheBytes": 1073741824
+    },
     "feedGroup": {
       "enabled": true,
       "agentName": "Codex"

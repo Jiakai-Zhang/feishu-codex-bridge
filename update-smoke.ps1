@@ -114,6 +114,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'channel-secret.dpapi') -Content 'encrypted-smoke-value'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-settings.json') -Content '{"schemaVersion":2}'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-prompt-queue.json') -Content '[]'
+    Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-attachment-drafts.json') -Content '[]'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'custom-guardian.marker') -Content 'preserve external guardian'
 
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST = '1'
@@ -124,7 +125,12 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
     if ((Get-Content -Raw -LiteralPath (Join-Path $installRoot 'release-marker.txt')).Trim() -ne 'two') {
         throw 'The target release files were not installed.'
     }
-    foreach ($stateName in @('channel-secret.dpapi', 'session-relay-settings.json', 'session-relay-prompt-queue.json')) {
+    foreach ($stateName in @(
+        'channel-secret.dpapi',
+        'session-relay-settings.json',
+        'session-relay-prompt-queue.json',
+        'session-relay-attachment-drafts.json'
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $runtimeDirectory $stateName) -PathType Leaf)) {
             throw "The updater did not preserve $stateName."
         }

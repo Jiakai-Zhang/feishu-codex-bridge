@@ -1,4 +1,5 @@
 import { CodexTurnCollector } from "./codex-session-observer.mjs";
+import { buildCodexPromptInput } from "./feishu-inbound-attachment.mjs";
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -213,6 +214,11 @@ export class CodexSessionController {
       throw controllerError("codex_app_server_unavailable", "The shared Codex App Server is not connected");
     }
     return connection.request(method, params);
+  }
+
+  async #requestPrompt(method, params, prompt) {
+    const input = buildCodexPromptInput(prompt);
+    return this.#request(method, { ...params, input });
   }
 
   #scheduleReconnect() {
@@ -509,20 +515,17 @@ export class CodexSessionController {
     return retry();
   }
 
-  async submitPrompt({ threadId, text, clientUserMessageId }) {
-    const content = String(text || "");
-    if (!content.trim()) throw new TypeError("Codex prompt is empty");
+  async submitPrompt({ threadId, text, attachments, clientUserMessageId }) {
+    const prompt = { text, attachments };
     return this.#enqueue(threadId, async () => {
       const state = this.#state(threadId);
-      const input = [{ type: "text", text: content, text_elements: [] }];
       const client = clientUserMessageId ? { clientUserMessageId: String(clientUserMessageId) } : {};
       const steer = async (expectedTurnId) => {
-        const result = await this.#request("turn/steer", {
+        const result = await this.#requestPrompt("turn/steer", {
           threadId,
-          input,
           expectedTurnId,
           ...client,
-        });
+        }, prompt);
         return Object.freeze({ kind: "steered", turnId: result?.turnId || expectedTurnId, boundaryChanged: false });
       };
       const submit = async () => {
@@ -563,14 +566,14 @@ export class CodexSessionController {
               }
             }
             if (statusType(secondSnapshot.status) !== "idle") throw steerError;
-            const started = await this.#startTurn(state, input, client);
+            const started = await this.#startTurn(state, prompt, client);
             return Object.freeze({ kind: "started", turnId: started, boundaryChanged: true });
           }
         }
         if (statusType(firstSnapshot.status) !== "idle") {
           throw controllerError("session_busy", `The bound Codex task is not ready (${statusType(firstSnapshot.status)})`);
         }
-        const started = await this.#startTurn(state, input, client);
+        const started = await this.#startTurn(state, prompt, client);
         return Object.freeze({ kind: "started", turnId: started, boundaryChanged: Boolean(cachedSteerError) });
       };
       try {
@@ -587,14 +590,12 @@ export class CodexSessionController {
     });
   }
 
-  async startQueuedPrompt({ threadId, text, clientUserMessageId }) {
-    const content = String(text || "");
+  async startQueuedPrompt({ threadId, text, attachments, clientUserMessageId }) {
     const clientId = String(clientUserMessageId || "");
-    if (!content.trim()) throw new TypeError("Queued Codex prompt is empty");
     if (!clientId) throw new TypeError("Queued Codex prompt requires a client message id");
+    const prompt = { text, attachments };
     return this.#enqueue(threadId, async () => {
       const state = this.#state(threadId);
-      const input = [{ type: "text", text: content, text_elements: [] }];
       const client = { clientUserMessageId: clientId };
       const inspectAcceptedOrWait = async () => {
         const snapshot = await this.#readThread(threadId, true);
@@ -613,7 +614,7 @@ export class CodexSessionController {
           return Object.freeze({ kind: "waiting", reason: `session_${statusType(snapshot.status)}` });
         }
         try {
-          const turnId = await this.#startTurn(state, input, client);
+          const turnId = await this.#startTurn(state, prompt, client);
           return Object.freeze({ kind: "started", turnId, turnStatus: "inProgress" });
         } catch (error) {
           if (isRecoverableTransportError(error)) throw error;
@@ -657,14 +658,13 @@ export class CodexSessionController {
     });
   }
 
-  async #startTurn(state, input, client) {
-    const result = await this.#request("turn/start", {
+  async #startTurn(state, prompt, client) {
+    const result = await this.#requestPrompt("turn/start", {
       threadId: state.target.threadId,
-      input,
       cwd: state.target.cwd,
       approvalPolicy: "never",
       ...client,
-    });
+    }, prompt);
     const turnId = result?.turn?.id;
     if (!turnId) throw new Error("Codex App Server did not return a turn id");
     state.activeTurnId = turnId;

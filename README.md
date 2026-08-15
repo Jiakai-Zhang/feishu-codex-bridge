@@ -26,7 +26,7 @@
 - **原生控制**：直接在群内查看状态、切换模型与推理强度、控制 Plan/Goal、停止当前 Turn 或管理队列，不把这些命令发送给模型。
 - **公开进度**：只转发 Codex 明确标记为 commentary 的公开阶段说明；隐藏思维链、raw reasoning 和工具原始输出不会发送到飞书。
 - **可靠投递**：最终答案先写入本机持久发件箱，再发送到飞书；网络失败不会重新运行 Codex。
-- **文件与长回答**：固定版支持原生附件；当前 `main` 还会把超长 Markdown 写入飞书云文档，并转发本地图片、视频和其他文件。
+- **双向文件与长回答**：当前 `main` 可把飞书上传的图片和附件交给 Codex，也会把 Codex 本地媒体作为群内图片/原生附件返回；超长 Markdown 写入飞书云文档。
 - **Desktop fail-open**：共享 App Server 与连续 watchdog 会验证监听器和 relay pointer；恢复失败时优先让 Desktop 回退，而不是卡在不可连接的地址。
 
 运行链路：
@@ -79,13 +79,13 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 | 应用权限 | 用途 |
 | --- | --- |
-| `im:message` | 发送回复、富文本和互动卡片 |
+| `im:message` | 发送回复、富文本和互动卡片；下载 owner 消息中的图片与附件 |
 | `im:message.p2p_msg` | 接收 Bot 私聊中的 `/add` 与全局设置命令 |
 | `im:message.group_msg` | 接收绑定群中未 `@Bot` 的普通消息 |
 | `im:chat:readonly` | 读取绑定群基本信息 |
 | `im:chat.members:read` | 校验群内严格只有 owner 与当前 Bot |
 | `im:chat:create` | 自动创建专属 Session 群 |
-| `im:resource` | 上传消息图片、视频和其他文件 |
+| `im:resource` | 把 Codex 输出中的图片、视频和其他文件上传回飞书 |
 | `docx:document:create` | 创建长回答云文档（当前 `main`） |
 | `docx:document:write_only` | 写入长回答 Markdown（当前 `main`） |
 
@@ -114,7 +114,7 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。Project 暂时为空时，向导会提供“重新扫描”“返回 Project 列表”和“新建任务”。
 
-绑定完成后，在新群直接发送普通文本即可，无需 `@Bot`。Session Relay 不提供 `/new`、`/use` 或全局“当前任务”切换；每个群始终指向自己的 Session。
+绑定完成后，在新群直接发送文本、图片或附件即可，无需 `@Bot`。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。飞书无法在同一消息里附带说明的普通文件可以连续上传多条，Bridge 会先暂存，直到第一条普通文字 Prompt 到达，再把全部附件合并为该 Turn 的一次用户输入。Session Relay 不提供 `/new`、`/use` 或全局“当前任务”切换；每个群始终指向自己的 Session。
 
 ### 2. 群内命令
 
@@ -122,10 +122,11 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 
 | 命令 | 作用 |
 | --- | --- |
-| `/status` | 查看连接、Turn、模型、Plan、Token、Goal 和队列摘要 |
+| `/status` | 查看连接、Turn、模型、Plan、Token、Goal、队列和待提交附件摘要 |
 | `/stop` | 暂停活动 Goal（如有）并中止当前 Turn；不清空队列 |
 | `/queue <Prompt>` | 把 Prompt 作为独立新 Turn 持久排队 |
 | `/queue` / `remove` / `clear` | 查看、删除或清空待执行 Prompt |
+| `/attachments` / `clear` | 查看或放弃当前 Session 暂存的待提交附件 |
 | `/settings` | 查看当前 Session 的输入、公开进度和最终提醒设置 |
 | `/settings input steer\|queue` | 设置普通消息是调整当前 Turn，还是排队新 Turn |
 | `/settings progress on\|off` | 开关公开 commentary 进度 |
@@ -150,6 +151,9 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 ## 输出、文件与可靠性
 
+- 飞书入站默认单文件不超过 30 MiB；单条消息或同一 Session 的整份暂存草稿最多 10 个资源、总计 60 MiB。暂存附件和已排队附件都会持久化，Bridge 重启后仍能继续。缓存默认保留 7 天，并受 1 GiB 总容量限制。
+- 只有第一条普通文字 Prompt 或 `/queue <Prompt>` 会消费暂存附件；`/status`、`/model` 等 Bridge 命令不会。已有附件草稿时，后续纯图片消息也会加入草稿；没有草稿时，单独图片仍立即作为 Prompt 发送。
+- 入站图片在 Codex 与最终 Prompt 回显中按图片展示；普通附件只回显安全文件名，不显示飞书 `file_key` 或本机绝对路径。
 - 当前 `main` 的一个 Turn 只使用一张可更新卡片；公开进度在原卡片刷新，完成后由最终答案原位替换，并显示完成时间、总用时和本轮真实 Token。
 - 公开进度始终不 `@`；最终回答可按 Session 设置发送一次完成提醒。
 - 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送，且不暴露本机绝对路径。
@@ -190,7 +194,7 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 .\update.ps1 -Version <目标 release tag>
 ```
 
-升级器会拒绝脏工作树，保留本机配置、DPAPI 密文、绑定、Session 设置、队列、输入账本和投递状态；失败时自动回滚。完整恢复步骤见 [Windows 安装指南：更新](docs/INSTALL.md#更新)。
+升级器会拒绝脏工作树，保留本机配置、DPAPI 密文、绑定、Session 设置、待提交附件草稿、队列、输入账本和投递状态；失败时自动回滚。完整恢复步骤见 [Windows 安装指南：更新](docs/INSTALL.md#更新)。
 
 ## 文档
 

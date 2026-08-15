@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { DEFAULT_INBOUND_ATTACHMENT_LIMITS } from "./feishu-inbound-attachment.mjs";
 
 const OPEN_ID = /^ou_[A-Za-z0-9_-]+$/;
 const CHAT_ID = /^oc_[A-Za-z0-9_-]+$/;
@@ -109,6 +110,37 @@ export function normalizeSessionRelayConfig(raw, { configDir = process.cwd() } =
     min: 200,
     max: 10_000,
   });
+  const rawInboundAttachments = raw.sessionRelay?.inboundAttachments;
+  const inboundAttachmentsEnabled = optionalBoolean(
+    rawInboundAttachments?.enabled,
+    true,
+    "sessionRelay.inboundAttachments.enabled",
+  );
+  const inboundAttachmentMaxItems = Math.trunc(positiveNumber(
+    rawInboundAttachments?.maxItems,
+    DEFAULT_INBOUND_ATTACHMENT_LIMITS.maxItems,
+    { min: 1, max: 50 },
+  ));
+  const inboundAttachmentMaxFileBytes = Math.trunc(positiveNumber(
+    rawInboundAttachments?.maxFileBytes,
+    DEFAULT_INBOUND_ATTACHMENT_LIMITS.maxFileBytes,
+    { min: 1024, max: 100 * 1024 * 1024 },
+  ));
+  const inboundAttachmentMaxTotalBytes = Math.trunc(positiveNumber(
+    rawInboundAttachments?.maxTotalBytes,
+    DEFAULT_INBOUND_ATTACHMENT_LIMITS.maxTotalBytes,
+    { min: 1024, max: 500 * 1024 * 1024 },
+  ));
+  const inboundAttachmentRetentionHours = positiveNumber(
+    rawInboundAttachments?.retentionHours,
+    DEFAULT_INBOUND_ATTACHMENT_LIMITS.retentionMs / (60 * 60 * 1000),
+    { min: 1, max: 24 * 365 },
+  );
+  const inboundAttachmentMaxCacheBytes = Math.trunc(positiveNumber(
+    rawInboundAttachments?.maxCacheBytes,
+    DEFAULT_INBOUND_ATTACHMENT_LIMITS.maxCacheBytes,
+    { min: inboundAttachmentMaxTotalBytes, max: 20 * 1024 * 1024 * 1024 },
+  ));
   const feedGroupEnabled = optionalBoolean(
     raw.sessionRelay?.feedGroup?.enabled,
     false,
@@ -146,6 +178,14 @@ export function normalizeSessionRelayConfig(raw, { configDir = process.cwd() } =
       appServerUrl,
       displayTimeZone,
       promptPreviewChars,
+      inboundAttachments: Object.freeze({
+        enabled: inboundAttachmentsEnabled,
+        maxItems: inboundAttachmentMaxItems,
+        maxFileBytes: inboundAttachmentMaxFileBytes,
+        maxTotalBytes: inboundAttachmentMaxTotalBytes,
+        retentionMs: inboundAttachmentRetentionHours * 60 * 60 * 1000,
+        maxCacheBytes: inboundAttachmentMaxCacheBytes,
+      }),
       feedGroup: Object.freeze({
         enabled: feedGroupEnabled,
         agentName: feedGroupAgentName,

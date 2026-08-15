@@ -9,6 +9,10 @@ function userItem(clientId, text, id = `user-${clientId}`) {
   return { id, type: "userMessage", clientId, content: [{ type: "text", text }] };
 }
 
+function userInputItem(clientId, input, id = `user-${clientId}`) {
+  return { id, type: "userMessage", clientId, content: structuredClone(input) };
+}
+
 function fakeControllerServer({ activeTurn, goal = null } = {}) {
   const server = {
     requests: [],
@@ -97,7 +101,7 @@ function fakeControllerServer({ activeTurn, goal = null } = {}) {
         status: "inProgress",
         startedAt: Date.now() / 1000,
         completedAt: null,
-        items: [userItem(request.params.clientUserMessageId, request.params.input[0].text)],
+        items: [userInputItem(request.params.clientUserMessageId, request.params.input)],
       };
       server.turns.push(turn);
       server.status = { type: "active", activeFlags: [] };
@@ -125,9 +129,9 @@ function fakeControllerServer({ activeTurn, goal = null } = {}) {
       } else if (!turn || request.params.expectedTurnId !== turn.id) {
         respond(socket, request.id, undefined, { code: -32602, message: "expected turn mismatch" });
       } else {
-        const item = userItem(
+        const item = userInputItem(
           request.params.clientUserMessageId,
-          request.params.input[0].text,
+          request.params.input,
           `steer-${request.params.clientUserMessageId}`,
         );
         turn.items.push(item);
@@ -293,6 +297,135 @@ test("starts an idle Feishu prompt, steers the next prompt into the same active 
     { text: "adjust it", clientId: "om_adjust" },
   ]);
   assert.equal(completed[0].answer, "final answer");
+  await client.stop();
+});
+
+test("sends Feishu images as localImage and ordinary files in the Codex Desktop wrapper", async () => {
+  const server = fakeControllerServer();
+  const completed = [];
+  const client = controller(server, { onTurnCompleted: (record) => completed.push(record) });
+  await client.start();
+
+  await client.submitPrompt({
+    threadId,
+    text: "检查这些材料",
+    attachments: [
+      { kind: "image", localPath: "C:/bridge-cache/image.png", name: "image.png", size: 10 },
+      { kind: "file", localPath: "C:/bridge-cache/report.pdf", name: "report.pdf", size: 20 },
+    ],
+    clientUserMessageId: "om_attachments",
+  });
+
+  const request = server.requests.find(({ method }) => method === "turn/start");
+  assert.deepEqual(request.params.input.map(({ type }) => type), ["text", "localImage"]);
+  assert.equal(request.params.input[1].path, "C:\\bridge-cache\\image.png");
+  assert.match(request.params.input[0].text, /# Files mentioned by the user:/);
+  assert.match(request.params.input[0].text, /## report\.pdf: C:\\bridge-cache\\report\.pdf/);
+  assert.match(request.params.input[0].text, /## My request for Codex:\n检查这些材料$/);
+  assert.equal(request.params.input[0].text.includes("feishu_bridge_local_attachments"), false);
+  assert.equal(request.params.input.some(({ type }) => type === "mention"), false);
+
+  server.completeActive("已检查");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].promptEntries[0].text, "检查这些材料\n📎 附件：report.pdf");
+  assert.equal(completed[0].promptEntries[0].text.includes("bridge-cache"), false);
+  assert.deepEqual(completed[0].promptEntries[0].resources.map(({ type }) => type), ["image", "attachment"]);
+  await client.stop();
+});
+
+test("uses the stable Desktop file wrapper without a mention retry", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+
+  await client.submitPrompt({
+    threadId,
+    text: "first attachment",
+    attachments: [{ kind: "file", localPath: "C:/bridge-cache/first.xlsx", name: "first.xlsx" }],
+    clientUserMessageId: "om_fallback_first",
+  });
+  const firstStarts = server.requests.filter(({ method }) => method === "turn/start");
+  assert.equal(firstStarts.length, 1);
+  assert.deepEqual(firstStarts[0].params.input.map(({ type }) => type), ["text"]);
+  assert.match(firstStarts[0].params.input[0].text, /## first\.xlsx: C:\\bridge-cache\\first\.xlsx/);
+  assert.equal(firstStarts[0].params.input[0].text.includes("feishu_bridge_local_attachments"), false);
+
+  server.completeActive("first done");
+  await new Promise((resolve) => setImmediate(resolve));
+  const startsBeforeSecond = server.requests.filter(({ method }) => method === "turn/start").length;
+  await client.submitPrompt({
+    threadId,
+    text: "second attachment",
+    attachments: [{ kind: "file", localPath: "C:/bridge-cache/second.pdf", name: "second.pdf" }],
+    clientUserMessageId: "om_fallback_second",
+  });
+  const secondStarts = server.requests.filter(({ method }) => method === "turn/start").slice(startsBeforeSecond);
+  assert.equal(secondStarts.length, 1);
+  assert.deepEqual(secondStarts[0].params.input.map(({ type }) => type), ["text"]);
+  assert.match(secondStarts[0].params.input[0].text, /## second\.pdf: C:\\bridge-cache\\second\.pdf/);
+  await client.stop();
+});
+
+test("keeps ordinary files attached when a Feishu prompt steers an active Turn", async () => {
+  const server = fakeControllerServer({
+    activeTurn: {
+      id: "turn-active-file",
+      status: "inProgress",
+      startedAt: Date.now() / 1000,
+      completedAt: null,
+      items: [userItem("desktop-client", "current work")],
+    },
+  });
+  const client = controller(server);
+  await client.start();
+
+  const result = await client.submitPrompt({
+    threadId,
+    text: "adjust using this workbook",
+    attachments: [{ kind: "file", localPath: "C:/bridge-cache/adjust.xlsx", name: "adjust.xlsx" }],
+    clientUserMessageId: "om_file_steer",
+  });
+
+  assert.equal(result.kind, "steered");
+  const steer = server.requests.find(({ method }) => method === "turn/steer");
+  assert.deepEqual(steer.params.input.map(({ type }) => type), ["text"]);
+  assert.match(steer.params.input[0].text, /## adjust\.xlsx: C:\\bridge-cache\\adjust\.xlsx/);
+  assert.equal(steer.params.input.some(({ type }) => type === "mention"), false);
+  await client.stop();
+});
+
+test("keeps ordinary files attached when a queued Prompt starts its own Turn", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+
+  const result = await client.startQueuedPrompt({
+    threadId,
+    text: "read queued workbook",
+    attachments: [{ kind: "file", localPath: "C:/bridge-cache/queued.xlsx", name: "queued.xlsx" }],
+    clientUserMessageId: "om_file_queue",
+  });
+
+  assert.equal(result.kind, "started");
+  const start = server.requests.find(({ method }) => method === "turn/start");
+  assert.deepEqual(start.params.input.map(({ type }) => type), ["text"]);
+  assert.match(start.params.input[0].text, /## queued\.xlsx: C:\\bridge-cache\\queued\.xlsx/);
+  assert.match(start.params.input[0].text, /## My request for Codex:\nread queued workbook$/);
+  await client.stop();
+});
+
+test("accepts an image-only Feishu prompt", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  await client.submitPrompt({
+    threadId,
+    attachments: [{ kind: "image", localPath: "C:/bridge-cache/only.png", name: "only.png" }],
+    clientUserMessageId: "om_image_only",
+  });
+  const request = server.requests.find(({ method }) => method === "turn/start");
+  assert.deepEqual(request.params.input, [{ type: "localImage", path: "C:\\bridge-cache\\only.png" }]);
   await client.stop();
 });
 

@@ -42,17 +42,19 @@ npm ci
 
 在“权限管理”中为应用添加：
 
-- `im:message`：发送消息；
+- `im:message`：发送消息，并以 Bot 身份下载 owner 消息中的图片与附件；
 - `im:message.p2p_msg`：接收与机器人的单聊消息，用于 `/add`；
 - `im:message.group_msg`：接收群内普通消息，使仅含用户与 Bot 的绑定群无需 `@Bot`；
 - `im:chat:readonly`：读取群基本信息；
 - `im:chat.members:read`：验证群内只有绑定用户与 Bot；
 - `im:chat:create`：创建专属绑定群；
-- `im:resource`：上传、下载消息图片与文件。
+- `im:resource`：把 Codex 输出中的图片与文件上传回飞书；
 - `docx:document:create`：以当前用户身份创建长回答云文档；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 
 如果后台提示管理员审批，等待企业管理员批准后再继续。Bot 权限必须在开发者后台添加并重新发布应用；反复执行用户 OAuth 不能补上 Bot 权限。
+
+`im:message` 已满足“获取消息中的资源文件”接口的权限要求，无需为入站附件额外添加 `im:message:readonly`。如果应用选择只读权限模型，也可以用 `im:message:readonly` 满足下载接口，但 Bridge 发送回复仍需要 `im:message`。保密消息、开启防泄密模式的群，以及飞书接口不支持的表情包/合并转发子消息资源不会被下载。
 
 ### 3. 配置事件
 

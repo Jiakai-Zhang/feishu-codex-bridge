@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { normalizeCodexPromptAttachments } from "./feishu-inbound-attachment.mjs";
 
 export class SessionPromptQueueError extends Error {
   constructor(code, message, options) {
@@ -14,18 +15,31 @@ function normalizeRecord(record) {
   const sessionThreadId = String(record.sessionThreadId || "");
   const chatId = String(record.chatId || "");
   const text = String(record.text || "");
+  const attachments = normalizeCodexPromptAttachments(record.attachments);
   if (!messageId) throw new TypeError("Queued prompt requires a messageId");
   if (!sessionThreadId) throw new TypeError("Queued prompt requires a sessionThreadId");
   if (!chatId) throw new TypeError("Queued prompt requires a chatId");
-  if (!text.trim()) throw new TypeError("Queued prompt text is empty");
+  if (!text.trim() && attachments.length === 0) throw new TypeError("Queued prompt is empty");
   return {
     messageId,
     sessionThreadId,
     chatId,
     feishuThreadId: record.feishuThreadId ? String(record.feishuThreadId) : undefined,
     text,
+    attachments,
     createdAt: Number(record.createdAt) || Date.now(),
   };
+}
+
+function cloneRecord(record) {
+  return {
+    ...record,
+    attachments: record.attachments.map((attachment) => ({ ...attachment })),
+  };
+}
+
+function samePrompt(left, right) {
+  return left.text === right.text && JSON.stringify(left.attachments) === JSON.stringify(right.attachments);
 }
 
 function compareRecords(left, right) {
@@ -74,7 +88,7 @@ export class SessionPromptQueue {
     return [...this.records.values()]
       .filter((record) => target === undefined || record.sessionThreadId === target)
       .sort(compareRecords)
-      .map((record) => ({ ...record }));
+      .map(cloneRecord);
   }
 
   count(sessionThreadId) {
@@ -101,14 +115,14 @@ export class SessionPromptQueue {
     return this.#serialize(value.sessionThreadId, async () => {
       const existing = this.records.get(value.messageId);
       if (existing) {
-        if (existing.sessionThreadId !== value.sessionThreadId || existing.text !== value.text) {
+        if (existing.sessionThreadId !== value.sessionThreadId || !samePrompt(existing, value)) {
           throw new SessionPromptQueueError(
             "queue_message_conflict",
             "The Feishu message id is already associated with another queued prompt",
           );
         }
         return Object.freeze({
-          record: Object.freeze({ ...existing }),
+          record: Object.freeze(cloneRecord(existing)),
           position: this.list(value.sessionThreadId).findIndex(({ messageId }) => messageId === value.messageId) + 1,
           alreadyQueued: true,
         });
@@ -119,14 +133,14 @@ export class SessionPromptQueue {
       this.records.set(value.messageId, value);
       await this.persist();
       try {
-        await afterPersist?.(Object.freeze({ ...value }));
+        await afterPersist?.(Object.freeze(cloneRecord(value)));
       } catch (error) {
         this.records.delete(value.messageId);
         await this.persist().catch(() => {});
         throw error;
       }
       return Object.freeze({
-        record: Object.freeze({ ...value }),
+        record: Object.freeze(cloneRecord(value)),
         position: this.list(value.sessionThreadId).findIndex(({ messageId }) => messageId === value.messageId) + 1,
         alreadyQueued: false,
       });
@@ -144,7 +158,7 @@ export class SessionPromptQueue {
       const [record] = entries.splice(index, 1);
       this.records.delete(record.messageId);
       await this.persist();
-      return Object.freeze({ ...record });
+      return Object.freeze(cloneRecord(record));
     });
   }
 
@@ -174,6 +188,7 @@ export class SessionPromptQueue {
           result = await controller.startQueuedPrompt({
             threadId: target,
             text: record.text,
+            attachments: record.attachments,
             clientUserMessageId: record.messageId,
           });
         } catch (error) {
@@ -184,7 +199,7 @@ export class SessionPromptQueue {
           return Object.freeze({ ...result, reconciled });
         }
         try {
-          await this.onAccepted(Object.freeze({ ...record }), result);
+          await this.onAccepted(Object.freeze(cloneRecord(record)), result);
         } catch (error) {
           this.onError(error, record);
           return Object.freeze({ kind: "waiting", reason: "acceptance_persist_failed", reconciled });

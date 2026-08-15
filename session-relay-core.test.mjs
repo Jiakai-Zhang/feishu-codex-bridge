@@ -28,7 +28,7 @@ test("accepts an unmentioned owner text message in the exact bound group", () =>
   assert.equal(content, "  continue this task  ");
 });
 
-test("rejects another human, a bot, another group, and non-text content", () => {
+test("rejects another human, a bot, another group, and unsupported content", () => {
   const message = {
     chatId: "oc_bound",
     chatType: "group",
@@ -40,7 +40,21 @@ test("rejects another human, a bot, another group, and non-text content", () => 
   assert.throws(() => assertRelayMessage({ ...message, senderId: "ou_other" }, binding), /bound human owner/);
   assert.throws(() => assertRelayMessage({ ...message, senderIsBot: true }, binding), /bound human owner/);
   assert.throws(() => assertRelayMessage({ ...message, chatId: "oc_other" }, binding), /bound group/);
-  assert.throws(() => assertRelayMessage({ ...message, rawContentType: "image" }, binding), /text messages only/);
+  assert.throws(() => assertRelayMessage({ ...message, rawContentType: "folder", content: "" }, binding), /text, image, and file/);
+});
+
+test("accepts image-only, file-only, and rich post resource messages from the bound owner", () => {
+  for (const rawContentType of ["image", "file", "post"]) {
+    assert.doesNotThrow(() => assertRelayMessage({
+      chatId: "oc_bound",
+      chatType: "group",
+      senderId: "ou_owner",
+      senderIsBot: false,
+      rawContentType,
+      content: rawContentType === "image" ? "![image](img_key)" : "",
+      resources: [{ type: rawContentType === "image" ? "image" : "file", fileKey: "resource_key" }],
+    }, binding));
+  }
 });
 
 test("requires exactly one owner and exactly the connected Bot", () => {

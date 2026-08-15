@@ -1,4 +1,9 @@
 import path from "node:path";
+import {
+  parseCodexDesktopFilePrompt,
+  parseFeishuAttachmentContexts,
+  stripFeishuAttachmentContexts,
+} from "./feishu-inbound-attachment.mjs";
 
 function normalizeTimestampMs(value, fallback = Date.now()) {
   const number = Number(value);
@@ -97,38 +102,9 @@ function remoteResourceName(url, fallback) {
   catch { return fallback; }
 }
 
-const CODEX_DESKTOP_FILES_HEADING = "# Files mentioned by the user:";
-const CODEX_DESKTOP_REQUEST_HEADING = "## My request:";
-
-function isCodexDesktopFileEntry(line) {
-  return /^##\s+.+:\s+(?:[A-Za-z]:[\\/]|\\\\|\/|file:\/\/|https?:\/\/).+$/i.test(line);
-}
-
-export function stripCodexDesktopFileContext(value, { hasResources = false } = {}) {
+export function stripCodexDesktopFileContext(value) {
   const original = String(value || "").trim();
-  if (!original || !hasResources) return original;
-
-  const lines = original.replace(/\r\n?/g, "\n").split("\n");
-  if (lines[0].trim() !== CODEX_DESKTOP_FILES_HEADING) return original;
-
-  let cursor = 1;
-  let fileEntries = 0;
-  while (cursor < lines.length) {
-    const line = lines[cursor].trim();
-    if (!line) {
-      cursor += 1;
-      continue;
-    }
-    if (line === CODEX_DESKTOP_REQUEST_HEADING) break;
-    if (!isCodexDesktopFileEntry(line)) return original;
-    fileEntries += 1;
-    cursor += 1;
-  }
-
-  if (fileEntries === 0 || lines[cursor]?.trim() !== CODEX_DESKTOP_REQUEST_HEADING) return original;
-  cursor += 1;
-  while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
-  return lines.slice(cursor).join("\n").trim();
+  return parseCodexDesktopFilePrompt(original)?.text ?? original;
 }
 
 export function userPromptDetailsFromItem(item) {
@@ -138,11 +114,34 @@ export function userPromptDetailsFromItem(item) {
   const textParts = [];
   const resourceLabels = [];
   const resources = [];
+  const desktopFileEntries = [];
+  const contextAttachmentPaths = new Set();
   for (const part of item.content) {
     switch (part?.type) {
-      case "text":
-        textParts.push(String(part.text || ""));
+      case "text": {
+        const partText = String(part.text || "");
+        for (const attachment of parseFeishuAttachmentContexts(partText)) {
+          if (contextAttachmentPaths.has(attachment.localPath)) continue;
+          contextAttachmentPaths.add(attachment.localPath);
+          const name = safeResourceName(attachment.name, "未命名附件");
+          resources.push(Object.freeze({
+            type: "attachment",
+            source: "local",
+            path: attachment.localPath,
+            name,
+          }));
+          resourceLabels.push(`📎 附件：${name}`);
+        }
+        const withoutLegacyContext = stripFeishuAttachmentContexts(partText);
+        const desktopFilePrompt = parseCodexDesktopFilePrompt(withoutLegacyContext);
+        if (desktopFilePrompt) {
+          desktopFileEntries.push(...desktopFilePrompt.files);
+          textParts.push(desktopFilePrompt.text);
+        } else {
+          textParts.push(withoutLegacyContext);
+        }
         break;
+      }
       case "localImage": {
         const name = localResourceName(part.path, "图片");
         resources.push(Object.freeze({ type: "image", source: "local", path: String(part.path || ""), name }));
@@ -178,9 +177,20 @@ export function userPromptDetailsFromItem(item) {
         if (part?.type) resourceLabels.push(`[${part.type}]`);
     }
   }
-  const promptText = stripCodexDesktopFileContext(textParts.filter(Boolean).join("\n"), {
-    hasResources: resources.length > 0,
-  });
+  for (const file of desktopFileEntries) {
+    const location = String(file.path || "");
+    const existing = resources.some((resource) =>
+      String(resource.path || resource.url || "").toLowerCase() === location.toLowerCase());
+    if (existing) continue;
+    const name = safeResourceName(file.name, "未命名附件");
+    if (/^https?:\/\//i.test(location)) {
+      resources.push(Object.freeze({ type: "attachment", source: "remote", url: location, name }));
+    } else {
+      resources.push(Object.freeze({ type: "attachment", source: "local", path: location, name }));
+    }
+    resourceLabels.push(`📎 附件：${name}`);
+  }
+  const promptText = textParts.filter(Boolean).join("\n").trim();
   return Object.freeze({
     text: [promptText, ...resourceLabels].filter(Boolean).join("\n").trim(),
     resources: Object.freeze(resources),

@@ -53,6 +53,35 @@ test("rolls back a newly queued prompt when its input ledger cannot persist", as
   });
 });
 
+test("persists and dispatches an attachment-only queued prompt", async () => {
+  let dispatched;
+  await fixture(async ({ queue, file }) => {
+    const localPath = path.resolve(path.dirname(file), "image.png");
+    await queue.enqueue({
+      ...record("om_4", ""),
+      attachments: [{ kind: "image", localPath, name: "image.png", size: 42 }],
+    });
+    const reopened = await SessionPromptQueue.open(file, {
+      getController: () => ({
+        startQueuedPrompt: async (input) => {
+          dispatched = input;
+          return { kind: "started", turnId: "turn-image", turnStatus: "inProgress" };
+        },
+      }),
+    });
+    const result = await reopened.dispatch("codex-thread");
+    assert.equal(result.kind, "started");
+    assert.equal(dispatched.text, "");
+    assert.deepEqual(dispatched.attachments, [{
+      kind: "image",
+      localPath,
+      name: "image.png",
+      contentType: undefined,
+      size: 42,
+    }]);
+  });
+});
+
 test("keeps a prompt queued while busy and removes it only after a new Turn is accepted", async () => {
   const calls = [];
   let busy = true;
