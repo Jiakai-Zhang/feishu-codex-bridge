@@ -21,7 +21,8 @@ async function git(cwd, args) {
 }
 
 async function fixture(run) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-collab-git-"));
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-collab-git-"));
+  const root = await fs.realpath(temporaryRoot);
   const remote = path.join(root, "remote.git");
   const repo = path.join(root, "repo");
   const worktreeRoot = path.join(root, "worktrees");
