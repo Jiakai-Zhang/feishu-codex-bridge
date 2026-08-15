@@ -80,11 +80,11 @@ classification as experimental is not a removal decision.
 | `delivery-outbox.mjs` | Both Bridge entry points | `src/persistence/` | Preserve its JSON schema and idempotency semantics; do not fork the store |
 | `thread-work-queue.mjs` | Both Bridge entry points | `src/runtime/` | Keep process-local serialization neutral and free of Relay/collaboration policy |
 
-### Removal candidates — 1 Node module
+### Resolved removal candidates
 
 | Candidate | Import/script/doc references | Persisted or compatibility dependencies | Test coverage | Required proof before deletion |
 | --- | --- | --- | --- | --- |
-| `codex-session-runner.mjs` | No production, PowerShell, package, configuration, skill, or documentation reference; imported only by `codex-session-runner.test.mjs` | No durable store. It owns a legacy App Server spawn/WebSocket path and App Server request shapes. | Seven focused tests cover resume, active-writer waiting, active-turn waiting, WebSocket transport, final-answer fallback, failure release, and error classification. | Confirm no released external entry point imports it; compare its compatibility cases against `codex-session-controller.mjs`, `codex-session-observer.mjs`, and `codex-app-server.mjs`; move any still-unique characterization tests before a dedicated deletion PR. The file also contains corrupted legacy fallback strings, so it must not be revived as-is. |
+| `codex-session-runner.mjs` | Removed in Phase 5 after confirming no production, PowerShell, package, configuration, Skill, or documentation consumer. | It had no durable store and duplicated obsolete App Server spawn/WebSocket behavior. | Current controller, collector, observer, and shared connection tests cover persistent resume, queue/steer races, reconnect recovery, final-answer selection, RPC failures, notification routing, and pending-request cleanup. | Resolved: the stable Session Relay uses the persistent controller and shared App Server connection; the corrupted legacy runner is no longer a root-level production candidate. |
 
 ## PowerShell and operational ledger
 
@@ -184,7 +184,6 @@ packages are omitted.
 | `codex-desktop-catalog.mjs` | Stable | `codex-session-store.mjs` |
 | `codex-session-controller.mjs` | Stable | `codex-session-observer.mjs`, `feishu-inbound-attachment.mjs` |
 | `codex-session-observer.mjs` | Stable | `feishu-inbound-attachment.mjs` |
-| `codex-session-runner.mjs` | Removal candidate | — |
 | `codex-session-store.mjs` | Stable | — |
 | `codex-status.mjs` | Experimental | — |
 | `collaboration-git.mjs` | Experimental | `collaboration-request-inbox.mjs`, `project-context.mjs` |

@@ -1,4 +1,5 @@
-import { CodexTurnCollector } from "./codex-session-observer.mjs";
+import { CodexTurnCollector } from "./codex-turn-collector.mjs";
+import { CodexAppServerConnection } from "./codex-app-server-connection.mjs";
 import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
 
 function delay(ms) {
@@ -10,17 +11,6 @@ function controllerError(code, message, options) {
   error.name = "CodexSessionControllerError";
   error.code = code;
   return error;
-}
-
-class CodexAppServerRpcError extends Error {
-  constructor(method, error) {
-    super(`Codex App Server ${method} failed: ${String(error?.message || "unknown error")}`);
-    this.name = "CodexAppServerRpcError";
-    this.code = "codex_app_server_error";
-    this.method = method;
-    this.rpcCode = error?.code;
-    this.rpcData = error?.data;
-  }
 }
 
 function statusType(value) {
@@ -185,9 +175,7 @@ export class CodexSessionController {
     const connection = this.connection;
     this.connection = undefined;
     if (connection) {
-      connection.intentionalClose = true;
-      connection.rejectPending(controllerError("codex_app_server_unavailable", "Codex session controller stopped"));
-      try { connection.socket.close(); } catch {}
+      connection.close(controllerError("codex_app_server_unavailable", "Codex session controller stopped"));
     }
   }
 
@@ -237,102 +225,27 @@ export class CodexSessionController {
   }
 
   async #connect() {
-    const socket = new this.WebSocketImpl(this.appServerUrl);
-    const pending = new Map();
-    let nextRequestId = 1;
-    let closed = false;
-    const connection = {
-      socket,
-      ready: false,
-      intentionalClose: false,
-      request: undefined,
-      rejectPending: (error) => {
-        for (const entry of pending.values()) {
-          clearTimeout(entry.timer);
-          entry.reject(error);
+    let connection;
+    connection = new CodexAppServerConnection({
+      url: this.appServerUrl,
+      WebSocketImpl: this.WebSocketImpl,
+      requestTimeoutMs: this.requestTimeoutMs,
+      clientLabel: "controller",
+      log: this.log,
+      onNotification: (method, params) => this.#handleNotification(method, params),
+      onClose: ({ intentional }) => {
+        if (this.connection === connection) this.connection = undefined;
+        if (!intentional && !this.stopped && this.hasConnected) {
+          this.disconnectedAtMs = Date.now();
+          this.log("Codex session controller disconnected; reconnect scheduled");
+          this.#scheduleReconnect();
         }
-        pending.clear();
       },
-    };
+    });
     this.connection = connection;
 
-    const send = (message) => {
-      if (closed) throw controllerError("codex_app_server_unavailable", "Codex session controller connection is closed");
-      socket.send(JSON.stringify(message));
-    };
-    connection.request = (method, params) => {
-      const id = nextRequestId++;
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(controllerError("codex_app_server_timeout", `Codex App Server ${method} timed out`));
-        }, this.requestTimeoutMs);
-        timer.unref?.();
-        pending.set(id, { method, resolve, reject, timer });
-        try { send({ method, id, params }); }
-        catch (error) {
-          clearTimeout(timer);
-          pending.delete(id);
-          reject(error);
-        }
-      });
-    };
-
-    const opened = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(controllerError("codex_app_server_unavailable", "Timed out connecting the Codex session controller"));
-        try { socket.close(); } catch {}
-      }, this.requestTimeoutMs);
-      timer.unref?.();
-      socket.addEventListener("open", () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
-      socket.addEventListener("error", () => {
-        clearTimeout(timer);
-        reject(controllerError("codex_app_server_unavailable", "Could not connect the Codex session controller"));
-      }, { once: true });
-    });
-
-    socket.addEventListener("message", (event) => {
-      let message;
-      try { message = JSON.parse(String(event.data)); }
-      catch (error) {
-        this.log(`Codex session controller ignored invalid JSON: ${error instanceof Error ? error.name : "unknown"}`);
-        return;
-      }
-      if (message?.id !== undefined && pending.has(message.id)) {
-        const entry = pending.get(message.id);
-        pending.delete(message.id);
-        clearTimeout(entry.timer);
-        if (message.error) entry.reject(new CodexAppServerRpcError(entry.method, message.error));
-        else entry.resolve(message.result);
-        return;
-      }
-      if (message?.method && message?.id !== undefined) {
-        try { send({ id: message.id, error: { code: -32601, message: `Unsupported controller request: ${message.method}` } }); }
-        catch {}
-        return;
-      }
-      if (message?.method) this.#handleNotification(message.method, message.params || {});
-    });
-    socket.addEventListener("close", (event) => {
-      if (closed) return;
-      closed = true;
-      connection.rejectPending(controllerError(
-        "codex_app_server_unavailable",
-        `Codex session controller connection closed (code ${event.code})`,
-      ));
-      if (this.connection === connection) this.connection = undefined;
-      if (!connection.intentionalClose && !this.stopped && this.hasConnected) {
-        this.disconnectedAtMs = Date.now();
-        this.log("Codex session controller disconnected; reconnect scheduled");
-        this.#scheduleReconnect();
-      }
-    });
-
     try {
-      await opened;
+      await connection.open();
       await connection.request("initialize", {
         clientInfo: {
           name: "feishu_codex_session_controller",
@@ -369,14 +282,12 @@ export class CodexSessionController {
         }
         this.collector.seedThread(snapshot?.thread, { catchUpAfterMs });
       }
-      connection.ready = true;
+      connection.activate();
       this.hasConnected = true;
       this.disconnectedAtMs = undefined;
     } catch (error) {
-      connection.intentionalClose = true;
-      connection.rejectPending(error);
+      connection.close(error);
       if (this.connection === connection) this.connection = undefined;
-      try { socket.close(); } catch {}
       throw error;
     }
   }

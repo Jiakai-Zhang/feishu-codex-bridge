@@ -49,6 +49,13 @@ This is a destination, not permission to move files opportunistically. Each relo
 
 `codex/` owns Codex Desktop/App Server discovery, requests, notifications, Session observation, execution, and Codex-specific media/input shapes. It must not render Feishu cards or choose Relay policy.
 
+Within this adapter, `CodexAppServerConnection` owns WebSocket/RPC transport,
+`CodexSessionController` owns mutable Session commands and state transitions,
+`CodexSessionObserver` owns resume/reconnect/catch-up lifecycle, and
+`CodexTurnCollector` owns notification-to-Turn aggregation and presentation
+records. `CodexSessionStore` and `CodexDesktopCatalog` remain read-oriented
+catalog boundaries and do not participate in live transport ownership.
+
 ### Feishu adapter
 
 `feishu/` owns inbound/outbound API calls, event decoding, cards, documents, feed groups, media transfer, and OAuth integration. It must not decide Session scheduling policy.
