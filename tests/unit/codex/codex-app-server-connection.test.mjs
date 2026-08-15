@@ -18,12 +18,18 @@ class FakeWebSocket extends EventTarget {
   }
 
   close() {
-    this.dispatchEvent(new CloseEvent("close", { code: 1000 }));
+    this.dispatchEvent(closeEvent(1000));
   }
 
   receive(message) {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
   }
+}
+
+function closeEvent(code) {
+  const event = new Event("close");
+  Object.defineProperty(event, "code", { value: code });
+  return event;
 }
 
 test("owns request correlation, notifications, and unsupported server requests", async () => {
@@ -70,7 +76,7 @@ test("normalizes RPC failures and rejects pending work on close", async () => {
   });
 
   const pending = connection.request("thread/read", {});
-  connection.socket.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+  connection.socket.dispatchEvent(closeEvent(1006));
   await assert.rejects(pending, (error) => error.code === "codex_app_server_unavailable");
   assert.equal(closes.length, 1);
   assert.equal(closes[0].intentional, false);
