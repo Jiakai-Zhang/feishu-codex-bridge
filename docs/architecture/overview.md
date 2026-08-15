@@ -65,6 +65,19 @@ This is a destination, not permission to move files opportunistically. Each relo
 
 `app/` is the composition root. Its long-term job is to load configuration, construct adapters and stores, wire the Relay, and start or stop processes. Business logic should not accumulate there.
 
+The retained experimental collaboration Bridge follows the same boundary. Its
+`app/channel-bridge.mjs` composition root wires focused application modules:
+
+- `command-router.mjs` owns command dispatch and command-local selection state;
+- `session-turn-orchestrator.mjs` owns one queued Codex turn and its final delivery handoff;
+- `progress-renderer.mjs` owns public progress/status presentation and strips private reasoning content;
+- `inbound-handler.mjs` owns Channel event classification and immediate-versus-queued routing;
+- `outbound-delivery.mjs` owns persisted final-answer retries;
+- `collaboration-orchestrator.mjs` owns experimental peer handoff, approvals, leases, and Agent-event delivery.
+
+These modules receive narrow runtime dependencies from the composition root;
+they do not load configuration or create process-wide stores themselves.
+
 ## Dependency direction
 
 The intended direction is:
