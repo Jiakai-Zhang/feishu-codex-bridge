@@ -89,6 +89,14 @@ Exit criteria:
 - observer and controller responsibilities no longer overlap implicitly;
 - retry/reconnect semantics remain unchanged or are explicitly versioned.
 
+Completed implementation: controller and observer now share a narrow
+`CodexAppServerConnection` transport for request correlation, timeouts, RPC
+errors, notifications, and pending-request cleanup. Turn collection and Feishu
+presentation live in `codex-turn-collector.mjs`, leaving the observer focused on
+resume/catch-up lifecycle. The orphaned root `codex-session-runner.mjs` and its
+private test harness were removed after the inventory proof was satisfied;
+stable persistent controller and connection tests retain the active behavior.
+
 ## Phase 6: optional type migration
 
 Evaluate TypeScript or checked JSDoc only after boundaries and file topology stabilize. A type-system migration must be a separate decision and must not be combined with directory moves or behavioral refactoring.
