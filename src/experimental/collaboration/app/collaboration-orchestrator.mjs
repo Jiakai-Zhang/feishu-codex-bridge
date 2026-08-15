@@ -24,13 +24,13 @@ export function createCollaborationOrchestrator({
       && peer.agentId === agentId
     ));
   }
-  
+
   function requireTaskApprover(openId, task, { allowRequester = false } = {}) {
     if (config.collaboration.approverOpenIds.includes(openId)) return;
     if (allowRequester && task?.requesterHumanOpenId === openId) return;
     throw new Error("该操作只允许配置的协作审批者执行");
   }
-  
+
   function eventForTask(task, kind, payload) {
     return createAgentEvent({
       kind,
@@ -44,7 +44,7 @@ export function createCollaborationOrchestrator({
       payload,
     }, { ttlMs: config.collaboration.eventTtlMs });
   }
-  
+
   async function deliverAgentEventRecord(record) {
     const peer = trustedPeer(record.peerAgentId);
     if (!peer?.botOpenId) throw new Error("Trusted peer Bot identity is unavailable");
@@ -55,7 +55,7 @@ export function createCollaborationOrchestrator({
       mentions: [{ key: "peer", openId: peer.botOpenId, name: peer.displayName, isBot: true }],
     });
   }
-  
+
   function agentEventNoticeMarkdown(event, peer) {
     const common = [
       `## Agent 协作 · ${event.kind}`,
@@ -85,7 +85,7 @@ export function createCollaborationOrchestrator({
     }
     return common.join("\n");
   }
-  
+
   async function announceAgentEvent(peer, chatId, event) {
     if (!new Set(["task.request", "task.result", "task.blocked", "task.rejected"]).has(event.kind)) return;
     await channel.send(chatId, { markdown: agentEventNoticeMarkdown(event, peer) }, {
@@ -95,7 +95,7 @@ export function createCollaborationOrchestrator({
       ],
     });
   }
-  
+
   async function sendAgentEvent(peer, chatId, event, { announce = true } = {}) {
     const record = {
       peerAgentId: peer.agentId,
@@ -127,7 +127,7 @@ export function createCollaborationOrchestrator({
       return false;
     }
   }
-  
+
   async function sendTaskEvent(task, kind, payload) {
     const peer = trustedPeer(task.peerAgentId);
     if (!peer) throw new Error(`Trusted peer ${task.peerAgentId} is unavailable in the bound collaboration group`);
@@ -135,7 +135,7 @@ export function createCollaborationOrchestrator({
     const delivered = await sendAgentEvent(peer, task.chatId || config.collaboration.groupChatId, event);
     return { event, delivered };
   }
-  
+
   async function validateLocalCollaborationRequest(request) {
     if (!config.collaboration.enabled || !collaborationGit) throw new Error("Collaboration is disabled for this Bridge Project");
     if (request.source.agentId !== config.agent.id) throw new Error("Collaboration request source Agent does not match this Bridge");
@@ -157,7 +157,7 @@ export function createCollaborationOrchestrator({
     }
     return peer;
   }
-  
+
   async function dispatchCollaborationRequest(request, {
     requesterHumanOpenId = config.agent.ownerOpenId,
     taskId = `task:${request.requestId.slice("req:".length)}`,
@@ -218,12 +218,12 @@ export function createCollaborationOrchestrator({
     });
     return { task, event, delivered };
   }
-  
+
   function requestIdFromInboxPath(filePath) {
     const match = path.basename(filePath).match(/^req_([0-9a-f-]{36})\.json$/i);
     return match ? `req:${match[1]}` : undefined;
   }
-  
+
   async function processCollaborationInboxRecord(record) {
     const requestId = record.request?.requestId || requestIdFromInboxPath(record.filePath);
     if (!requestId) {
@@ -264,7 +264,7 @@ export function createCollaborationOrchestrator({
       log(`collaboration request ${requestId} blocked: ${safeError(error)}`);
     }
   }
-  
+
   async function scanCollaborationInbox() {
     if (!isChannelConnected() || !collaborationInbox) return;
     const pending = await collaborationInbox.list();
@@ -277,9 +277,9 @@ export function createCollaborationOrchestrator({
       });
     }
   }
-  
+
   let agentEventRetryInFlight = false;
-  
+
   async function retryPendingAgentEvents() {
     if (!isChannelConnected() || agentEventRetryInFlight) return;
     agentEventRetryInFlight = true;
@@ -309,7 +309,7 @@ export function createCollaborationOrchestrator({
       agentEventRetryInFlight = false;
     }
   }
-  
+
   async function landingPlanForTask(task, { persist = true } = {}) {
     if (!task || task.direction !== "inbound") throw new Error("Unknown inbound collaboration task");
     const snapshot = await projectContext.refresh();
@@ -321,7 +321,7 @@ export function createCollaborationOrchestrator({
     }
     return { plan, mode };
   }
-  
+
   async function executeInboundTask(taskId, {
     commandMessage,
     approvedByOpenId,
@@ -363,7 +363,7 @@ export function createCollaborationOrchestrator({
           markdown: `⏳ 已审批协作任务 \`${task.taskId}\`，正在同步 \`${task.githubRepository}:${task.branch}\` 并准备本地 Codex 落点。`,
         });
       }
-  
+
       if (!collaborationGit) throw new Error("Collaboration Git handoff is unavailable");
       const worktree = await collaborationGit.prepareIncoming(task.requestGit);
       let thread;
@@ -392,7 +392,7 @@ export function createCollaborationOrchestrator({
         landing: task.landing,
       });
       await sendTaskEvent(task, "task.progress", { message: "Codex task started at the selected local Project landing" });
-  
+
       const prompt = [
         `你正在执行一个经过本地审批的 Agent 协作任务。`,
         `请求 Agent：${task.requesterAgentId}`,
@@ -462,7 +462,7 @@ export function createCollaborationOrchestrator({
       }
     }
   }
-  
+
   async function resumeOutboundResult(task) {
     if (!collaborationGit) throw new Error("Collaboration Git handoff is unavailable");
     if (task.direction !== "outbound" || task.state !== "completed" || task.resultMode !== "resume") {
@@ -504,7 +504,7 @@ export function createCollaborationOrchestrator({
       details: { peerAgentId: task.peerAgentId, branch: task.resultGit.branch, commit: task.resultGit.commit },
     });
   }
-  
+
   function inboundEventMarkdown(event, task) {
     const labels = {
       "task.request": "收到新的 Git 协作任务",
@@ -525,7 +525,7 @@ export function createCollaborationOrchestrator({
       `- Git：\`${(event.payload.git || task.requestGit || task.resultGit)?.branch || task.branch}@${((event.payload.git || task.requestGit || task.resultGit)?.commit || "unknown").slice(0, 12)}\``,
     ].join("\n");
   }
-  
+
   async function processPeerControlMessage(msg, route, content) {
     if (content.startsWith("/agent-event")) {
       const decoded = decodeAgentEvent(content);
@@ -597,8 +597,8 @@ export function createCollaborationOrchestrator({
     log(`peer control ${request.action} accepted from ${route.peer.agentId} for ${config.project.id}`);
     return true;
   }
-  
-  
+
+
   return {
     trustedPeer,
     requireTaskApprover,
@@ -611,4 +611,3 @@ export function createCollaborationOrchestrator({
     processPeerControlMessage,
   };
 }
-

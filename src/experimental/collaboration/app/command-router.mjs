@@ -48,7 +48,7 @@ export function createCommandRouter({
   function threadListKey(msg) {
     return `${msg.chatId}:${msg.senderId}`;
   }
-  
+
   function rememberThreadList(msg, threads) {
     threadListSelections.set(threadListKey(msg), {
       threadIds: threads.map(({ id }) => id),
@@ -59,13 +59,13 @@ export function createCommandRouter({
       threadListSelections.delete(oldest);
     }
   }
-  
+
   async function selectedThreadFromList(msg, index) {
     const cached = threadListSelections.get(threadListKey(msg));
     if (cached?.expiresAt > Date.now()) return getThread(cached.threadIds[index]);
     return (await listProjectThreads())[index];
   }
-  
+
   async function handleCommand(msg, content) {
     const trimmed = content.trim();
     const separator = trimmed.search(/\s/);
@@ -476,7 +476,7 @@ export function createCommandRouter({
     }
     return false;
   }
-  
-  
+
+
   return handleCommand;
 }

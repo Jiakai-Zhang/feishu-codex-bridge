@@ -183,4 +183,3 @@ export function createStatusRenderer({
 }
 
 import { capacityView, formatInteger, formatPercent, formatTimestamp } from "../codex/codex-status.mjs";
-
