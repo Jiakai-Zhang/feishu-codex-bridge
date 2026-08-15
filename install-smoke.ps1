@@ -37,7 +37,7 @@ try {
 
     Push-Location $sourceRoot
     try {
-        $validationCode = "import('./session-relay-config.mjs').then(async (module) => { await module.loadSessionRelayConfig('./bridge.config.json'); console.log('normalized config valid'); })"
+        $validationCode = "import('./src/relay/session-relay-config.mjs').then(async (module) => { await module.loadSessionRelayConfig('./bridge.config.json'); console.log('normalized config valid'); })"
         & ([string]$config.nodeExecutable) --input-type=module --eval $validationCode
         if ($LASTEXITCODE -ne 0) { throw 'The generated configuration failed Node validation.' }
     } finally {
