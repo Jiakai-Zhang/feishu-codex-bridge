@@ -72,6 +72,13 @@ Reduce the large Bridge entry point into a thin composition root plus cohesive m
 
 Extract behavior only after characterization or integration tests protect the current flow. Avoid line-count-driven splitting; each module must have a clear owner and dependency direction.
 
+Completed implementation: the experimental Bridge now has a composition root
+plus explicit modules for command routing, inbound events, Session turns,
+progress/status rendering, durable outbound retry, and collaboration handoff.
+Module tests protect immediate command classification, public-progress privacy,
+runtime status rendering, and idempotent persisted-result retry. External
+commands, wire formats, configuration, and persisted schemas are unchanged.
+
 ## Phase 5: Codex Session decomposition
 
 Clarify the responsibilities of Session controller, observer, runner, store, and Desktop catalog. Introduce narrow interfaces where Relay currently depends on Codex implementation details.
