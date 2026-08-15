@@ -23,3 +23,14 @@ When the user asks to update an existing installation:
 3. Stop if tracked or untracked user changes exist. Never reset, clean, stash, or overwrite them on the user's behalf.
 4. Preserve the existing local configuration, DPAPI credential, bindings, Session settings, queues, ledgers, and delivery state. Do not request the App Secret again.
 5. Verify the exact installed tag and live Bridge health after the update. Follow the target release notes for any required Codex Desktop restart.
+
+## Development and refactoring requests
+
+1. Read `CONTRIBUTING.md`, `docs/architecture/overview.md`, and `docs/architecture/refactoring-plan.md` before structural work.
+2. Treat the Windows Session Relay as the stable product surface. Project Agent, team, knowledge, and multi-agent collaboration code remain experimental unless a release explicitly promotes them.
+3. Do not add new production modules to the repository root. The current root-level modules are a legacy layout that will be migrated in dedicated mechanical PRs.
+4. Keep mechanical changes, such as moves and import rewrites, separate from behavioral changes. Do not opportunistically redesign a module while relocating it.
+5. Treat persisted JSON formats, `bridge.config.json`, Feishu command semantics, install/update behavior, DPAPI state, and Codex App Server messages as compatibility surfaces. Add an explicit migration when changing one.
+6. Prefer domain-specific modules over generic `utils`, `helpers`, `common`, or `misc` directories.
+7. Preserve untracked runtime/configuration files and never use destructive cleanup commands on the user's behalf.
+8. Run `npm run check` before finishing. Run the relevant Windows smoke or doctor checks when PowerShell operations change.
