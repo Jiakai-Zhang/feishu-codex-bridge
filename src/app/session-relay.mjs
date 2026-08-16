@@ -750,14 +750,14 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
   }
 }
 
-async function queueStreamCardFollowups(baseRecord, attachments, mentionOpenId) {
-  const records = buildSessionStreamCardFollowups(baseRecord, attachments, mentionOpenId);
-  await queueDeliveryBundle(records, records.length > 0 ? "stream card follow-up delivery completed" : undefined);
+async function queueStreamCardFollowups(baseRecord, attachments) {
+  const records = buildSessionStreamCardFollowups(baseRecord, attachments);
+  await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media, mentionOpenId) {
+async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
   if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
-  await queueStreamCardFollowups(baseDelivery, media.attachments, mentionOpenId);
+  await queueStreamCardFollowups(baseDelivery, media.attachments);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
   return true;
@@ -1284,7 +1284,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1321,7 +1321,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1361,7 +1361,7 @@ async function processCompletedTurn(record) {
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }

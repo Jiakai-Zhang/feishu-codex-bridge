@@ -3,34 +3,11 @@ import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs"
 
 const MAX_STORED_PROGRESS = 12;
 
-export function buildSessionStreamCardFollowups(baseRecord, attachments, mentionOpenId) {
-  const records = [];
-  const userId = String(mentionOpenId || "").trim();
-  let dependency;
-  if (userId) {
-    dependency = `${baseRecord.deliveryId}:mention`;
-    records.push(Object.freeze({
-      kind: baseRecord.kind,
-      deliveryId: dependency,
-      messageId: baseRecord.messageId,
-      chatId: baseRecord.chatId,
-      threadId: baseRecord.threadId,
-      post: Object.freeze({
-        zh_cn: Object.freeze({
-          content: Object.freeze([Object.freeze([
-            Object.freeze({ tag: "at", user_id: userId }),
-            Object.freeze({ tag: "text", text: " 最终回答已完成" }),
-          ])]),
-        }),
-      }),
-      createdAt: Date.now(),
-    }));
-  }
-  records.push(...buildNativeAttachmentDeliveries(baseRecord, attachments).map((record) => Object.freeze({
-    ...record,
-    dependsOn: dependency,
-  })));
-  return Object.freeze(records);
+export function buildSessionStreamCardFollowups(baseRecord, attachments) {
+  return Object.freeze([
+    Object.freeze({ ...baseRecord }),
+    ...buildNativeAttachmentDeliveries(baseRecord, attachments),
+  ]);
 }
 
 function recordKey(threadId, turnId) {
