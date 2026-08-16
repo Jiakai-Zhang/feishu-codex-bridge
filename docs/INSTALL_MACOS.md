@@ -4,6 +4,8 @@
 
 > 当前 macOS 代码以 `7c8668e` 为上游基线；附件 PR #12 已包含在该基线中。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。它尚不是上游固定 release。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
+如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
+
 ## 1. 系统要求
 
 - macOS 13 或更新版本，Apple Silicon 或 Intel；

@@ -1,5 +1,9 @@
 # 给 Codex 的安装 Prompt
 
+## macOS 全新安装
+
+已安装并登录 ChatGPT/Codex Desktop 的全新 Mac，请直接复制[完整 macOS 安装 Prompt](INSTALL_MACOS_PROMPT.md)。它会使用仓库 `.sh` 入口安装锁定的 Lark CLI 与 Bridge，并在飞书应用创建/发布、审批、OAuth、Secret 安全输入和 Desktop 重启处暂停。
+
 ## 推荐：固定测试版
 
 把下面一段发到一个新的 Codex 任务：

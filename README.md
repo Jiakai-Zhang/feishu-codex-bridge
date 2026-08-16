@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未发布固定 tag。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.7` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
 | 上游 `7c8668e` | 已合并附件 PR #12，并完成领域目录迁移、稳定/实验代码隔离、Codex Session 拆分和 ESLint 语义检查 |
-| macOS platform v2 | 在该上游基线上提供共享跨平台核心、POSIX 路径、Keychain、launchd、安装/Doctor 和 Desktop relay 支持 |
+| `v0.3.2-macos-rc.7` | 在该上游基线上提供共享跨平台核心、POSIX 路径、Keychain、launchd、安装/Doctor 和 Desktop relay 支持 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
@@ -51,7 +51,7 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 移植尚未有固定 release tag，请先使用 `codex/macos-platform-v2` 分支并严格按 [macOS 安装指南](docs/INSTALL_MACOS.md)操作。Windows 仍使用下面的固定 release 流程：
+macOS 请使用固定候选 tag `v0.3.2-macos-rc.7`，并直接复制[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。Windows 仍使用下面的固定 release 流程：
 
 把下面这段发到一个新的 Codex 对话：
 
@@ -63,6 +63,7 @@ macOS 移植尚未有固定 release tag，请先使用 `codex/macos-platform-v2`
 
 - [Windows 安装指南](docs/INSTALL.md)
 - [macOS 安装指南](docs/INSTALL_MACOS.md)
+- [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [可复制的安装与升级 Prompt](docs/INSTALL_AGENT_PROMPT.md)
 - [飞书自建应用配置](docs/FEISHU_APP_SETUP.md)
@@ -226,6 +227,7 @@ Windows：
 
 - [Session Relay 行为、命令与生命周期参考](docs/SESSION_RELAY.md)
 - [macOS 安装与运维](docs/INSTALL_MACOS.md)
+- [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
 - [Windows 安装与升级](docs/INSTALL.md)
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
