@@ -24,10 +24,10 @@ import {
   RELAY_ENVIRONMENT_VARIABLE,
 } from "./constants.mjs";
 import {
-  DESKTOP_APPLICATIONS,
   desktopProxySelection,
   desktopRelayAttachment,
   embeddedDesktopAppServerRunning,
+  installedDesktopBundlePath,
   persistedDesktopProxyUrl,
   processHasEnvironment,
   processProxyEnvironmentMatches,
@@ -263,15 +263,7 @@ async function launchDesktopRelayCommand(args) {
     }, waitSeconds * 1000, 250);
     if (!exited) throw new Error("Timed out waiting for ChatGPT/Codex Desktop to fully quit.");
   }
-  let bundlePath = preferredBundle;
-  if (!bundlePath) {
-    for (const application of DESKTOP_APPLICATIONS) {
-      if (await pathExists(application.bundlePath)) {
-        bundlePath = application.bundlePath;
-        break;
-      }
-    }
-  }
+  const bundlePath = preferredBundle || await installedDesktopBundlePath();
   if (!bundlePath) throw new Error("ChatGPT/Codex Desktop was not found in /Applications.");
   await ensureSharedAppServerProxy(status, proxyUrl);
   const openArguments = [

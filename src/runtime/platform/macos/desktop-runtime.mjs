@@ -100,6 +100,19 @@ export async function runningDesktopApplications() {
   return results;
 }
 
+export async function installedDesktopBundlePath({
+  applications = DESKTOP_APPLICATIONS,
+  access = fs.access,
+} = {}) {
+  for (const application of applications) {
+    try {
+      await access(application.bundlePath);
+      return application.bundlePath;
+    } catch {}
+  }
+  return undefined;
+}
+
 export async function embeddedDesktopAppServerRunning() {
   const processes = await desktopProcessTable();
   const executables = DESKTOP_APPLICATIONS.map(({ bundlePath }) => path.join(bundlePath, "Contents", "Resources", "codex"));

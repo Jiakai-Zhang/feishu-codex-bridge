@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   desktopProxySelection,
+  installedDesktopBundlePath,
   proxyEnvironmentMatches,
   safeDesktopLaunchArguments,
   safeLoopbackProxyArgument,
@@ -144,4 +145,22 @@ test("macOS Desktop launcher defaults to direct and enables proxy only when expl
   assert.equal(proxyEnvironmentMatches("HTTP_PROXY=http://127.0.0.1:7897", proxyUrl), false);
   assert.equal(proxyEnvironmentMatches("CODEX_APP_SERVER_WS_URL=ws://127.0.0.1:47321/rpc", undefined), true);
   assert.equal(proxyEnvironmentMatches("HTTP_PROXY=http://127.0.0.1:7897", undefined), false);
+});
+
+test("macOS Desktop launcher selects the first installed application bundle", async () => {
+  const checked = [];
+  const applications = [
+    { bundlePath: "/Applications/Missing.app" },
+    { bundlePath: "/Applications/Available.app" },
+    { bundlePath: "/Applications/Later.app" },
+  ];
+  const selected = await installedDesktopBundlePath({
+    applications,
+    access: async (bundlePath) => {
+      checked.push(bundlePath);
+      if (bundlePath !== "/Applications/Available.app") throw new Error("missing");
+    },
+  });
+  assert.equal(selected, "/Applications/Available.app");
+  assert.deepEqual(checked, ["/Applications/Missing.app", "/Applications/Available.app"]);
 });
