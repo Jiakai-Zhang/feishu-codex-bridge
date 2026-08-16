@@ -163,13 +163,13 @@ async function stopCommand(args) {
   }
 }
 
-async function ensureSharedAppServerProxy(status, proxyUrl, { clearPersisted = false } = {}) {
-  if (!proxyUrl && !clearPersisted) return;
+async function ensureSharedAppServerProxy(status, proxyUrl) {
   const activation = JSON.parse(await fs.readFile(status.layout.relayStatePath, "utf8"));
   if (activation.enabled !== true || activation.url !== status.endpoint.href) {
     throw new Error("Desktop relay activation changed before the proxy could be applied.");
   }
-  if (activation.desktopProxyUrl !== proxyUrl) {
+  const stateChanged = activation.desktopProxyUrl !== proxyUrl;
+  if (stateChanged) {
     const updatedActivation = {
       ...activation,
       updatedAt: new Date().toISOString(),
@@ -178,9 +178,10 @@ async function ensureSharedAppServerProxy(status, proxyUrl, { clearPersisted = f
     else delete updatedActivation.desktopProxyUrl;
     await writeJsonAtomic(status.layout.relayStatePath, updatedActivation);
   }
-  await writeMacOSLaunchAgents(status.config);
   const currentPid = await readPid(status.layout.appServerPidPath);
   const alreadyConfigured = currentPid && await processProxyEnvironmentMatches(currentPid, proxyUrl);
+  if (!stateChanged && alreadyConfigured) return;
+  await writeMacOSLaunchAgents(status.config);
   if (alreadyConfigured) return;
 
   await bootoutLaunchAgent(MACOS_LABELS.relay);
@@ -213,12 +214,21 @@ async function ensureSharedAppServerProxy(status, proxyUrl, { clearPersisted = f
 
 async function launchDesktopRelayCommand(args) {
   assertMacOS();
-  const { options } = optionMap(args);
+  const { options, positional } = optionMap(args);
   for (const name of options.keys()) {
-    if (!["wait-for-exit", "no-proxy"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
+    if (!["wait-for-exit", "proxy", "no-proxy"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
+  }
+  if (positional.length > 0) {
+    throw new Error("Unexpected Desktop launch argument. Use --proxy <loopback-url> to enable a proxy.");
+  }
+  if (options.has("proxy") && (options.get("proxy") === true || !String(options.get("proxy")).trim())) {
+    throw new Error("--proxy requires an unauthenticated loopback URL with an explicit port.");
   }
   if (options.has("no-proxy") && options.get("no-proxy") !== true) {
     throw new Error("--no-proxy does not accept a value.");
+  }
+  if (options.has("proxy") && options.has("no-proxy")) {
+    throw new Error("--proxy cannot be combined with --no-proxy.");
   }
   const status = await statusSnapshot();
   if (!status.listener || !status.appServerProcess || status.pointer !== status.endpoint.href
@@ -230,8 +240,7 @@ async function launchDesktopRelayCommand(args) {
     throw new Error("--wait-for-exit must be between 0 and 600 seconds.");
   }
   const proxySelection = desktopProxySelection({
-    requestedValue: process.env.FEISHU_CODEX_DESKTOP_PROXY_URL,
-    persistedValue: await persistedDesktopProxyUrl(status.layout),
+    requestedValue: options.get("proxy"),
     noProxy: options.has("no-proxy"),
   });
   const proxyUrl = proxySelection.proxyUrl;
@@ -243,9 +252,7 @@ async function launchDesktopRelayCommand(args) {
   }
   let running = await runningDesktopApplications();
   const preferredBundle = running[0]?.bundlePath;
-  const preservedArguments = proxySelection.mode === "disabled"
-    ? []
-    : safeDesktopLaunchArguments(running[0], proxyUrl);
+  const preservedArguments = safeDesktopLaunchArguments(proxyUrl);
   if (running.length > 0 && waitSeconds === 0) {
     throw new Error("ChatGPT/Codex Desktop is still running. Fully quit it, then run this launcher again.");
   }
@@ -266,9 +273,7 @@ async function launchDesktopRelayCommand(args) {
     }
   }
   if (!bundlePath) throw new Error("ChatGPT/Codex Desktop was not found in /Applications.");
-  await ensureSharedAppServerProxy(status, proxyUrl, {
-    clearPersisted: proxySelection.mode === "disabled",
-  });
+  await ensureSharedAppServerProxy(status, proxyUrl);
   const openArguments = [
     "--env", `${RELAY_ENVIRONMENT_VARIABLE}=${status.endpoint.href}`,
   ];

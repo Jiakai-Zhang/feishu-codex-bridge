@@ -118,15 +118,21 @@ macOS `security` 会显示隐藏输入提示。用户只在这里粘贴 App Secr
 
 macOS 上从 Dock 或自动恢复启动的 GUI 进程不一定会继承后设置的 `launchctl` 环境。该入口使用系统 `open --env` 把经验证的本机 relay 地址直接注入 Desktop，且拒绝在 Desktop 尚未完全退出时启动第二个实例。安装脚本不会强制结束 Desktop 进程。
 
-未配置代理的用户直接运行 `./launch-codex-desktop-with-relay.sh`，Desktop 与共享 Codex App Server 都使用直连。若启动器设置 `FEISHU_CODEX_DESKTOP_PROXY_URL`，启动入口只接受无认证的 loopback 代理 URL，并只将代理环境应用到 Desktop 与共享 Codex App Server。Feishu Bridge、Channel 和 watchdog 不使用该代理。首次应用或代理变更时，入口会在 Desktop 已完全退出的前提下重载共享 App Server，验证新进程已继承代理后才打开 Desktop。
-
-如果本机曾经保存过代理，需要改回直连，请在 Desktop 完全退出后运行：
+启动器默认使用直连：
 
 ```bash
-./launch-codex-desktop-with-relay.sh --no-proxy
+./launch-codex-desktop-with-relay.sh
 ```
 
-`--no-proxy` 会清除本安装保存的 Desktop 代理，验证重启后的共享 App Server 不再带任何 HTTP/HTTPS/ALL proxy 环境，再不带 `--proxy-server` 启动 Desktop。该参数不能与 `FEISHU_CODEX_DESKTOP_PROXY_URL` 同时使用。
+即使上一次使用了代理，不带参数的启动也会清除保存的 Desktop 代理，验证共享 App Server 不再带 HTTP/HTTPS/ALL proxy 环境，再以直连方式打开 Desktop。`--no-proxy` 仍作为兼容别名保留，但已不需要使用。
+
+只有需要代理时才显式添加 `--proxy`：
+
+```bash
+./launch-codex-desktop-with-relay.sh --proxy http://127.0.0.1:7897
+```
+
+`--proxy` 只接受带明确端口、无认证的 loopback URL。代理环境只会应用到 Desktop 与共享 Codex App Server；Feishu Bridge、Channel 和 watchdog 仍使用直连。首次应用、代理变更或切回直连时，入口会在 Desktop 已完全退出的前提下重载共享 App Server，验证新进程的代理状态后才打开 Desktop。
 
 ## 7. 真实验收
 

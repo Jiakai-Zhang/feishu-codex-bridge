@@ -85,19 +85,19 @@ test("macOS Desktop relay accepts only an explicit unauthenticated loopback prox
   assert.equal(safeLoopbackProxyArgument("http://user:password@127.0.0.1:7897"), undefined);
 });
 
-test("macOS Desktop launcher supports direct, persisted proxy, and explicit no-proxy modes", () => {
+test("macOS Desktop launcher defaults to direct and enables proxy only when explicitly requested", () => {
   assert.deepEqual(desktopProxySelection(), { mode: "direct", proxyUrl: undefined });
   assert.deepEqual(desktopProxySelection({
     persistedValue: "http://127.0.0.1:7897",
-  }), { mode: "persisted", proxyUrl: "http://127.0.0.1:7897" });
+  }), { mode: "direct", proxyUrl: undefined });
   assert.deepEqual(desktopProxySelection({
     requestedValue: "socks5://localhost:1080",
     persistedValue: "http://127.0.0.1:7897",
-  }), { mode: "environment", proxyUrl: "socks5://localhost:1080" });
+  }), { mode: "explicit", proxyUrl: "socks5://localhost:1080" });
   assert.deepEqual(desktopProxySelection({
     noProxy: true,
     persistedValue: "http://127.0.0.1:7897",
-  }), { mode: "disabled", proxyUrl: undefined });
+  }), { mode: "direct", proxyUrl: undefined });
   assert.throws(() => desktopProxySelection({
     noProxy: true,
     requestedValue: "http://127.0.0.1:7897",
@@ -105,9 +105,11 @@ test("macOS Desktop launcher supports direct, persisted proxy, and explicit no-p
   assert.throws(() => desktopProxySelection({
     requestedValue: "https://proxy.example.com:443",
   }), /loopback URL/);
-  assert.deepEqual(safeDesktopLaunchArguments({
-    commands: ["/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --proxy-server=http://127.0.0.1:7897"],
-  }), ["--proxy-server=http://127.0.0.1:7897"]);
+  assert.deepEqual(safeDesktopLaunchArguments(), []);
+  assert.deepEqual(
+    safeDesktopLaunchArguments("http://127.0.0.1:7897"),
+    ["--proxy-server=http://127.0.0.1:7897"],
+  );
 
   const proxyUrl = "http://127.0.0.1:7897";
   const completeProxyEnvironment = [

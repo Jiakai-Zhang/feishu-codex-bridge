@@ -27,24 +27,17 @@ export function safeLoopbackProxyArgument(value) {
   return undefined;
 }
 
-export function desktopProxySelection({ requestedValue, persistedValue, noProxy = false } = {}) {
+export function desktopProxySelection({ requestedValue, noProxy = false } = {}) {
   const requestedText = String(requestedValue || "").trim();
   if (noProxy && requestedText) {
-    throw new Error("--no-proxy cannot be combined with FEISHU_CODEX_DESKTOP_PROXY_URL.");
+    throw new Error("--proxy cannot be combined with --no-proxy.");
   }
-  if (noProxy) return Object.freeze({ mode: "disabled", proxyUrl: undefined });
-  if (requestedText) {
-    const argument = safeLoopbackProxyArgument(requestedText);
-    if (!argument) {
-      throw new Error("The Desktop proxy must be an unauthenticated loopback URL with an explicit port.");
-    }
-    return Object.freeze({ mode: "environment", proxyUrl: argument.slice("--proxy-server=".length) });
+  if (noProxy || !requestedText) return Object.freeze({ mode: "direct", proxyUrl: undefined });
+  const argument = safeLoopbackProxyArgument(requestedText);
+  if (!argument) {
+    throw new Error("The Desktop proxy must be an unauthenticated loopback URL with an explicit port.");
   }
-  const persistedArgument = safeLoopbackProxyArgument(persistedValue);
-  if (persistedArgument) {
-    return Object.freeze({ mode: "persisted", proxyUrl: persistedArgument.slice("--proxy-server=".length) });
-  }
-  return Object.freeze({ mode: "direct", proxyUrl: undefined });
+  return Object.freeze({ mode: "explicit", proxyUrl: argument.slice("--proxy-server=".length) });
 }
 
 export function proxyEnvironment(proxyUrl) {
@@ -116,15 +109,9 @@ export async function embeddedDesktopAppServerRunning() {
       && !/(?:^|\s)--listen(?:\s|$)/.test(command)));
 }
 
-export function safeDesktopLaunchArguments(application, configuredProxyUrl) {
-  const requested = safeLoopbackProxyArgument(configuredProxyUrl || process.env.FEISHU_CODEX_DESKTOP_PROXY_URL);
-  if (requested) return [requested];
-  for (const command of application?.commands || []) {
-    const match = command.match(/(?:^|\s)--proxy-server=([^\s]+)/);
-    const argument = safeLoopbackProxyArgument(match?.[1]);
-    if (argument) return [argument];
-  }
-  return [];
+export function safeDesktopLaunchArguments(configuredProxyUrl) {
+  const requested = safeLoopbackProxyArgument(configuredProxyUrl);
+  return requested ? [requested] : [];
 }
 
 export async function processHasEnvironment(pid, name, expectedValue) {
