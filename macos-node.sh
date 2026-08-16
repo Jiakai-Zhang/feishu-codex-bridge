@@ -24,7 +24,7 @@ for candidate in "${candidates[@]}"; do
       node_major="${BASH_REMATCH[1]}"
       node_minor="${BASH_REMATCH[2]}"
       if (( node_major > 22 || (node_major == 22 && node_minor >= 13) )); then
-        exec "$candidate" "$SCRIPT_DIR/macos-admin.mjs" "$@"
+        exec "$candidate" "$SCRIPT_DIR/src/runtime/platform/macos/admin-cli.mjs" "$@"
       fi
     fi
   fi

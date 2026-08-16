@@ -8,14 +8,16 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   appServerReadyProbe,
-  buildLaunchAgentPlist,
-  ensurePrivateDirectory,
-  keychainIdentity,
-  nodeVersionSupported,
   parseLoopbackAppServerUrl,
-  runtimeLayout,
+} from "../../../../src/runtime/shared/network-probes.mjs";
+import { nodeVersionSupported } from "../../../../src/runtime/shared/node-version.mjs";
+import {
+  ensurePrivateDirectory,
   writeFileAtomic,
-} from "./macos-runtime.mjs";
+} from "../../../../src/runtime/shared/private-state.mjs";
+import { keychainIdentity } from "../../../../src/runtime/platform/macos/keychain-credential-store.mjs";
+import { buildLaunchAgentPlist } from "../../../../src/runtime/platform/macos/launchd-service-manager.mjs";
+import { runtimeLayout } from "../../../../src/runtime/platform/macos/runtime-layout.mjs";
 
 const execFile = promisify(nodeExecFile);
 

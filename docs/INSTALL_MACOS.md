@@ -2,7 +2,7 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 代码基于上游 `main` 与最新附件 PR #12 移植，尚不是上游固定 release。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 代码以 `7c8668e` 为上游基线；附件 PR #12 已包含在该基线中。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。它尚不是上游固定 release。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 ## 1. 系统要求
 

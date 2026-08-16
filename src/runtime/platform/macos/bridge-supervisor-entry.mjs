@@ -3,19 +3,21 @@ import { promises as fs, openSync, closeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensurePrivateDirectory } from "../../shared/private-state.mjs";
+import { safeError } from "../../shared/safe-error.mjs";
+import { assertMacOS } from "./constants.mjs";
 import {
-  assertMacOS,
-  ensurePrivateDirectory,
   keychainIdentity,
+  readKeychainSecret,
+} from "./keychain-credential-store.mjs";
+import {
   pidIsRunning,
-  readBridgeConfig,
   readPid,
-  runtimeLayout,
-  safeError,
-} from "./macos-runtime.mjs";
+} from "./process-inspector.mjs";
+import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 assertMacOS();
-const repositoryRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const { raw: config } = await readBridgeConfig(repositoryRoot);
 const layout = runtimeLayout(repositoryRoot, config);
 const keychainRepositoryRoot = typeof config.macosKeychainRepositoryRoot === "string"
@@ -32,18 +34,6 @@ await fs.writeFile(layout.supervisorPidPath, String(process.pid), { encoding: "u
 
 async function log(message) {
   await fs.appendFile(layout.supervisorLogPath, `[${new Date().toISOString()}] ${message}\n`, "utf8");
-}
-
-async function keychainSecret() {
-  const { execFile } = await import("node:child_process");
-  return new Promise((resolve, reject) => {
-    execFile("/usr/bin/security", [
-      "find-generic-password", "-a", identity.account, "-s", identity.service, "-w",
-    ], { encoding: "utf8", timeout: 10_000, maxBuffer: 64_000 }, (error, stdout) => {
-      if (error) reject(new Error("The macOS Keychain does not contain a readable Channel secret."));
-      else resolve(String(stdout || "").replace(/[\r\n]+$/, ""));
-    });
-  });
 }
 
 async function stopChild(signal = "SIGTERM") {
@@ -72,8 +62,7 @@ try {
     }
     await fs.rm(layout.bridgePidPath, { force: true });
 
-    let secret = await keychainSecret();
-    if (!secret) throw new Error("The macOS Keychain Channel secret is empty.");
+    let secret = await readKeychainSecret(identity);
     const stdoutFd = openSync(layout.bridgeStdoutPath, "a", 0o600);
     const stderrFd = openSync(layout.bridgeStderrPath, "a", 0o600);
     try {

@@ -5,25 +5,27 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  assertMacOS,
-  bootoutLaunchAgent,
   ensurePrivateDirectory,
-  getLaunchEnvironment,
-  isExpectedProcess,
+  writeJsonAtomic,
+} from "../../shared/private-state.mjs";
+import { parseLoopbackAppServerUrl } from "../../shared/network-probes.mjs";
+import { safeError } from "../../shared/safe-error.mjs";
+import {
+  assertMacOS,
   MACOS_LABELS,
-  parseLoopbackAppServerUrl,
-  readBridgeConfig,
-  readPid,
   RELAY_ENVIRONMENT_VARIABLE,
-  runtimeLayout,
-  safeError,
+} from "./constants.mjs";
+import {
+  bootoutLaunchAgent,
+  getLaunchEnvironment,
   setLaunchAgentEnabled,
   unsetLaunchEnvironmentIfOwned,
-  writeJsonAtomic,
-} from "./macos-runtime.mjs";
+} from "./launchd-service-manager.mjs";
+import { isExpectedProcess, readPid } from "./process-inspector.mjs";
+import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
-const repositoryRoot = path.dirname(modulePath);
+const repositoryRoot = path.resolve(path.dirname(modulePath), "../../../..");
 const VERSION_PATTERN = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/;
 const PERSISTENT_FILES = Object.freeze([
   "completed.json",
@@ -203,7 +205,7 @@ async function serviceState(config, layout, testMode) {
   const entry = config.mode === "session-relay" ? "session-relay.mjs" : "channel-bridge.mjs";
   const [bridgeRunning, supervisorRunning] = await Promise.all([
     bridgePid ? isExpectedProcess(bridgePid, [nodeExecutable, entry]) : false,
-    supervisorPid ? isExpectedProcess(supervisorPid, [nodeExecutable, "macos-bridge-supervisor.mjs"]) : false,
+    supervisorPid ? isExpectedProcess(supervisorPid, [nodeExecutable, "bridge-supervisor-entry.mjs"]) : false,
   ]);
   const endpoint = parseLoopbackAppServerUrl(config.sessionRelay?.appServerUrl);
   let relayState;

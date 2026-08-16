@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFile = promisify(nodeExecFile);
-const sourceRoot = path.dirname(fileURLToPath(import.meta.url));
+const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 test("macOS installer creates a valid private config and launchd package without exposing identities", async (t) => {
   if (process.platform !== "darwin") return;
@@ -19,13 +19,12 @@ test("macOS installer creates a valid private config and launchd package without
   await fs.mkdir(repositoryRoot, { recursive: true });
   await fs.mkdir(testHome, { recursive: true });
   const resolvedRepositoryRoot = await fs.realpath(repositoryRoot);
+  await fs.cp(path.join(sourceRoot, "src"), path.join(repositoryRoot, "src"), {
+    recursive: true,
+    force: true,
+  });
   for (const name of [
-    "macos-admin.mjs",
-    "macos-runtime.mjs",
-    "macos-environment.mjs",
-    "macos-app-server.mjs",
-    "macos-bridge-supervisor.mjs",
-    "macos-relay-watchdog.mjs",
+    "channel-bridge.mjs",
     "session-relay.mjs",
     "request-session-binding.mjs",
   ]) {
@@ -50,7 +49,7 @@ test("macOS installer creates a valid private config and launchd package without
   const codex = path.join(root, "codex-test");
   await fs.writeFile(codex, '#!/bin/sh\nprintf "%s\\n" "      --listen <URL>"\n', { mode: 0o755 });
   const { stdout, stderr } = await execFile(process.execPath, [
-    path.join(repositoryRoot, "macos-admin.mjs"),
+    path.join(repositoryRoot, "src", "runtime", "platform", "macos", "admin-cli.mjs"),
     "install",
     "--skip-dependency-install",
     "--no-user-changes",
@@ -106,7 +105,7 @@ test("macOS installer creates a valid private config and launchd package without
   assert.equal(stagedConfig.macosKeychainRepositoryRoot, resolvedRepositoryRoot);
   assert.equal(stagedConfig.larkCliEntry, path.join(installation, "node_modules", "@larksuite", "cli", "scripts", "run.js"));
   assert.equal((await fs.stat(stagedConfigPath)).mode & 0o777, 0o600);
-  await fs.access(path.join(installation, "macos-app-server.mjs"));
+  await fs.access(path.join(installation, "src", "runtime", "platform", "macos", "app-server-entry.mjs"));
   await fs.access(stagedConfig.larkCliEntry);
 
   stagedConfig.sessionRelay.bindings = [{
@@ -123,7 +122,7 @@ test("macOS installer creates a valid private config and launchd package without
     desktopProxyUrl: "http://127.0.0.1:7788",
   }, null, 2)}\n`, { mode: 0o600 });
   await execFile(process.execPath, [
-    path.join(repositoryRoot, "macos-admin.mjs"),
+    path.join(repositoryRoot, "src", "runtime", "platform", "macos", "admin-cli.mjs"),
     "install",
     "--skip-dependency-install",
     "--no-user-changes",

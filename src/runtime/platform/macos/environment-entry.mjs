@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MACOS_LABELS, setLaunchEnvironment } from "./macos-runtime.mjs";
+import { MACOS_LABELS } from "./constants.mjs";
+import { setLaunchEnvironment } from "./launchd-service-manager.mjs";
 
 const pointerPath = path.join(os.homedir(), "Library", "Application Support", "FeishuCodexBridge", "bootstrap", "installation.json");
 const pointer = JSON.parse(await fs.readFile(pointerPath, "utf8"));

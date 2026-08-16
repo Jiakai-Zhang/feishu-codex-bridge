@@ -1,26 +1,25 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appServerReadyProbe, parseLoopbackAppServerUrl } from "../../shared/network-probes.mjs";
+import { writeJsonAtomic } from "../../shared/private-state.mjs";
 import {
-  appServerReadyProbe,
   assertMacOS,
+  MACOS_LABELS,
+  RELAY_ENVIRONMENT_VARIABLE,
+} from "./constants.mjs";
+import {
   getLaunchEnvironment,
-  isExpectedProcess,
   launchDomain,
   launchctl,
-  MACOS_LABELS,
-  parseLoopbackAppServerUrl,
-  readBridgeConfig,
-  readPid,
-  RELAY_ENVIRONMENT_VARIABLE,
-  runtimeLayout,
   setLaunchEnvironment,
   unsetLaunchEnvironmentIfOwned,
-  writeJsonAtomic,
-} from "./macos-runtime.mjs";
+} from "./launchd-service-manager.mjs";
+import { isExpectedProcess, readPid } from "./process-inspector.mjs";
+import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 assertMacOS();
-const repositoryRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const { raw: config } = await readBridgeConfig(repositoryRoot);
 const layout = runtimeLayout(repositoryRoot, config);
 const endpoint = parseLoopbackAppServerUrl(config.sessionRelay?.appServerUrl);

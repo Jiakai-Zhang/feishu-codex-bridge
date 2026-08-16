@@ -6,10 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { safeLoopbackProxyArgument } from "./macos-admin.mjs";
+import { safeLoopbackProxyArgument } from "../../../src/runtime/platform/macos/desktop-runtime.mjs";
 
 const execFile = promisify(nodeExecFile);
-const repositoryRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 test("macOS lifecycle wrappers route through the single safe Node launcher", async () => {
   const commands = new Map([
@@ -33,7 +33,14 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
 });
 
 test("macOS secret setup uses an interactive Keychain prompt, never a password argument", async () => {
-  const content = await fs.readFile(path.join(repositoryRoot, "macos-admin.mjs"), "utf8");
+  const content = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "keychain-credential-store.mjs",
+  ), "utf8");
   assert.match(content, /"add-generic-password", "-U"/);
   assert.match(content, /identity\.label, "-w"/);
   assert.doesNotMatch(content, /"-w",\s*(?:secret|options|get\()/i);

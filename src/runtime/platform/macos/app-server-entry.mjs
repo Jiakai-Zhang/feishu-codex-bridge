@@ -4,17 +4,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   appServerReadyProbe,
-  assertMacOS,
-  ensurePrivateDirectory,
   loopbackPortOpen,
   parseLoopbackAppServerUrl,
-  readBridgeConfig,
-  runtimeLayout,
-  safeError,
-} from "./macos-runtime.mjs";
+} from "../../shared/network-probes.mjs";
+import { ensurePrivateDirectory } from "../../shared/private-state.mjs";
+import { safeError } from "../../shared/safe-error.mjs";
+import { assertMacOS } from "./constants.mjs";
+import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 assertMacOS();
-const repositoryRoot = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 const { raw: config } = await readBridgeConfig(repositoryRoot);
 if (config.mode !== "session-relay") throw new Error("The shared App Server requires session-relay mode.");

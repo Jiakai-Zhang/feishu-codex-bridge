@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFile = promisify(nodeExecFile);
-const sourceRoot = path.dirname(fileURLToPath(import.meta.url));
+const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 async function git(cwd, args) {
   const { stdout } = await execFile("/usr/bin/git", args, { cwd, encoding: "utf8" });
@@ -40,10 +40,10 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await git(source, ["init", "-b", "main"]);
   await git(source, ["config", "user.email", "update-test@example.invalid"]);
   await git(source, ["config", "user.name", "macOS Update Test"]);
-  await Promise.all([
-    fs.copyFile(path.join(sourceRoot, "macos-update.mjs"), path.join(source, "macos-update.mjs")),
-    fs.copyFile(path.join(sourceRoot, "macos-runtime.mjs"), path.join(source, "macos-runtime.mjs")),
-  ]);
+  await fs.cp(path.join(sourceRoot, "src", "runtime"), path.join(source, "src", "runtime"), {
+    recursive: true,
+    force: true,
+  });
   await fs.writeFile(path.join(source, ".gitignore"), "bridge.config.json\n");
   await writeExecutable(path.join(source, "bootstrap.sh"), "#!/bin/sh\nexit 0\n");
   await writeExecutable(path.join(source, "install.sh"), [
@@ -108,13 +108,13 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   const dirtyPath = path.join(installation, "local-user-change.txt");
   await fs.writeFile(dirtyPath, "preserve me\n");
   await assert.rejects(() => execFile(process.execPath, [
-    path.join(installation, "macos-update.mjs"), "--version", "v1.1.0", "--test-mode",
+    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"), "--version", "v1.1.0", "--test-mode",
   ], { cwd: installation, env: environment, encoding: "utf8", timeout: 30_000 }), /exit code|Command failed/);
   assert.equal(await git(installation, ["rev-parse", "HEAD"]), await git(installation, ["rev-parse", "v1.0.0^{commit}"]));
   await fs.unlink(dirtyPath);
 
   const success = await execFile(process.execPath, [
-    path.join(installation, "macos-update.mjs"), "--version", "v1.1.0", "--test-mode",
+    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"), "--version", "v1.1.0", "--test-mode",
   ], { cwd: installation, env: environment, encoding: "utf8", timeout: 30_000 });
   assert.match(success.stdout, /Upgrade completed successfully: v1\.1\.0/);
   assert.equal(success.stdout.includes(root), false);
@@ -132,7 +132,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   let failure;
   try {
     await execFile(process.execPath, [
-      path.join(installation, "macos-update.mjs"), "--version", "v1.2.0", "--test-mode",
+      path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"), "--version", "v1.2.0", "--test-mode",
     ], { cwd: installation, env: environment, encoding: "utf8", timeout: 30_000 });
   } catch (error) {
     failure = error;
