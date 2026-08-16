@@ -40,6 +40,10 @@ import {
 import { FeishuSessionChatManager } from "../feishu/feishu-session-chat.mjs";
 import { SessionAddFlow } from "../relay/session-add-flow.mjs";
 import {
+  buildCalendarSchedulingPrompt,
+  parseCalendarSchedulingCommand,
+} from "../relay/calendar-scheduling-command.mjs";
+import {
   SessionAttachmentDraftStore,
   shouldStageAttachmentPrompt,
 } from "../persistence/session-attachment-drafts.mjs";
@@ -1211,6 +1215,26 @@ async function processTemporaryChatCommand(msg, baseBinding, command) {
   }
 }
 
+async function processCalendarSchedulingCommand(msg, baseBinding, command) {
+  if (!command.request) {
+    await channel.reply(msg, {
+      markdown: "用法：`/schedule <自然语言日程需求>`\n\n例如：`/schedule 明天下午 3 点和张三开一小时评审会，有会议室就一起预定`",
+    });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  try {
+    await startTemporaryChat(
+      msg,
+      baseBinding,
+      buildCalendarSchedulingPrompt(command.request),
+    );
+  } catch (error) {
+    log(`calendar scheduling command failed: ${safeError(error)}`);
+    await replyFailure(msg, error);
+  }
+}
+
 async function uploadPromptImages(resources) {
   const uploaded = [];
   for (const resource of resources || []) {
@@ -1746,6 +1770,11 @@ async function processInboundMessage(msg, baseBinding) {
     let binding = resolveRelayBinding(msg.chatId);
     if (msg.rawContentType === "text") {
       const rawContent = String(msg.content || "");
+      const calendarCommand = parseCalendarSchedulingCommand(rawContent);
+      if (calendarCommand) {
+        await processCalendarSchedulingCommand(msg, baseBinding, calendarCommand);
+        return;
+      }
       const temporaryChatCommand = parseTemporaryChatCommand(rawContent);
       if (temporaryChatCommand) {
         await processTemporaryChatCommand(msg, baseBinding, temporaryChatCommand);
@@ -1765,7 +1794,9 @@ async function processInboundMessage(msg, baseBinding) {
       }
     }
     if (!binding) {
-      await channel.reply(msg, { markdown: "发送 `/chat` 开始私聊，或发送 `/add` 创建并绑定一个 Codex Session 群。" });
+      await channel.reply(msg, {
+        markdown: "发送 `/chat` 开始私聊，发送 `/schedule <自然语言需求>` 预约日程，或发送 `/add` 创建并绑定一个 Codex Session 群。",
+      });
       await persistCompleted(msg.messageId);
       return;
     }

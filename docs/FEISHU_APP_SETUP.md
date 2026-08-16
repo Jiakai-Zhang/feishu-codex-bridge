@@ -52,6 +52,8 @@ npm ci
 - `docx:document:create`：以当前用户身份创建长回答云文档；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 
+如果需要使用 `/schedule` 自然语言日历助理，还要为应用开通 `calendar:calendar`。邀请同事时，按 lark-cli 返回的 `missing_scopes` 补充通讯录搜索所需权限；不要为只给自己创建日程的安装扩大通讯录权限。
+
 如果后台提示管理员审批，等待企业管理员批准后再继续。Bot 权限必须在开发者后台添加并重新发布应用；反复执行用户 OAuth 不能补上 Bot 权限。
 
 `im:message` 已满足“获取消息中的资源文件”接口的权限要求，无需为入站附件额外添加 `im:message:readonly`。如果应用选择只读权限模型，也可以用 `im:message:readonly` 满足下载接口，但 Bridge 发送回复仍需要 `im:message`。保密消息、开启防泄密模式的群，以及飞书接口不支持的表情包/合并转发子消息资源不会被下载。
@@ -103,6 +105,14 @@ Agent 把验证网址和生成的二维码显示给用户后结束当前回合�
 ```
 
 二维码图片与 device code 都是临时安装产物，不得提交到 Git。最后再次运行 `auth status --json --verify`，确认用户身份可用，并运行仓库的 `doctor.ps1` 检查 Feed 与文档 scope。
+
+自然语言日历是可选能力。开发者后台开通并发布 `calendar:calendar` 后，再给当前用户增量授权：
+
+```powershell
+.\lark-cli.ps1 auth login --scope "calendar:calendar"
+```
+
+需要按姓名邀请同事时，可按最小权限原则额外运行 `auth login --domain contact --recommend`；如果飞书返回 `missing_scopes`，应先在开发者后台添加对应权限、发布应用，再重新执行用户授权。日历命令必须使用用户身份，Bot 身份看到的是 Bot 自己的日历。
 
 ## E. App Secret 的第二份用途
 

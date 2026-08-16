@@ -46,8 +46,10 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 - `/chat`：创建一个临时 Codex Session；创建完成后，普通消息持续进入该 Session。
 - `/chat <Prompt>`：创建临时 Session，并把后面的正文直接作为第一条 Prompt，不把它当作任务标题。
 - `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。
+- `/schedule <自然语言需求>`：创建或复用临时 Session，并要求 Codex 按 `lark-calendar` Skill 解析日程、查询忙闲/会议室及展示方案。第一次处理只读；用户在后续消息中明确确认具体方案后才写入用户日历。
 - 绑定群中的临时 Chat 继承原 Session 的 cwd；Bot 私聊使用 Bridge 启动时的 Codex 工作目录。
 - 临时 Chat 状态持久化。Bridge 重启后仍能继续；`/endchat` 不取消已经提交的 Turn，其最终结果仍投递到原飞书会话。
+- `/schedule` 支持新建与改约、模糊时间、参会人解析和会议室选择。它始终使用 lark-cli 用户身份，不使用 Bot 日历；首次使用可能需要补充日历业务域 OAuth scope。
 - Bot 私聊只接受配置中的 owner；私聊最终回答不发送多余的 `@owner`。
 
 ## 跨客户端同步
