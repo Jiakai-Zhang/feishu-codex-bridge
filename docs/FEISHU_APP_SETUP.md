@@ -43,7 +43,7 @@ npm ci
 在“权限管理”中为应用添加：
 
 - `im:message`：发送消息，并以 Bot 身份下载 owner 消息中的图片与附件；
-- `im:message.p2p_msg`：接收与机器人的单聊消息，用于 `/add`；
+- `im:message.p2p_msg`：接收与机器人的单聊消息，用于 `/chat`、`/add` 与后续私聊；
 - `im:message.group_msg`：接收群内普通消息，使仅含用户与 Bot 的绑定群无需 `@Bot`；
 - `im:chat:readonly`：读取群基本信息；
 - `im:chat.members:read`：验证群内只有绑定用户与 Bot；
