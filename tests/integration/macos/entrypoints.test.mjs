@@ -47,15 +47,21 @@ test("macOS Desktop relay activation reloads the launchd registration", async ()
     "macos",
     "admin-cli.mjs",
   ), "utf8");
-  const configureStart = source.indexOf("async function configureRelayCommand");
-  const configureEnd = source.indexOf("async function larkCliCommand", configureStart);
-  const configureSource = source.slice(configureStart, configureEnd);
-  const bootout = configureSource.indexOf("bootoutLaunchAgent(MACOS_LABELS.relay)");
-  const activate = configureSource.indexOf("writeJsonAtomic(status.layout.relayStatePath, activation)");
-  const bootstrap = configureSource.indexOf("bootstrapLaunchAgent(MACOS_LABELS.relay");
+  const activationStart = source.indexOf("async function activateDesktopRelay");
+  const activationEnd = source.indexOf("async function configureRelayCommand", activationStart);
+  const activationSource = source.slice(activationStart, activationEnd);
+  const bootout = activationSource.indexOf("bootoutLaunchAgent(MACOS_LABELS.relay)");
+  const activate = activationSource.indexOf("writeJsonAtomic(status.layout.relayStatePath, activation)");
+  const bootstrap = activationSource.indexOf("bootstrapLaunchAgent(MACOS_LABELS.relay");
   assert.ok(bootout >= 0);
   assert.ok(activate > bootout);
   assert.ok(bootstrap > activate);
+  const proxyStart = source.indexOf("async function ensureSharedAppServerProxy");
+  const proxyEnd = source.indexOf("async function launchDesktopRelayCommand", proxyStart);
+  assert.match(source.slice(proxyStart, proxyEnd), /await activateDesktopRelay\(status, proxyUrl\)/);
+  const configureStart = source.indexOf("async function configureRelayCommand");
+  const configureEnd = source.indexOf("async function larkCliCommand", configureStart);
+  assert.match(source.slice(configureStart, configureEnd), /await activateDesktopRelay\(status, desktopProxyUrl\)/);
 });
 
 test("macOS secret setup uses an interactive Keychain prompt, never a password argument", async () => {

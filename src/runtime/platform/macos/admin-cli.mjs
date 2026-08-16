@@ -204,12 +204,7 @@ async function ensureSharedAppServerProxy(status, proxyUrl) {
       : "The shared App Server retained proxy variables after direct mode was requested.");
   }
 
-  await setLaunchAgentEnabled(MACOS_LABELS.relay, true);
-  await bootstrapLaunchAgent(MACOS_LABELS.relay, status.layout.relayPlistPath);
-  const relayRecovered = await waitUntil(async () =>
-    await relayHeartbeatReady(status.layout, status.endpoint.href)
-      && await getLaunchEnvironment(RELAY_ENVIRONMENT_VARIABLE) === status.endpoint.href, 20_000, 250);
-  if (!relayRecovered) throw new Error("Desktop relay did not recover after proxy reconfiguration.");
+  await activateDesktopRelay(status, proxyUrl);
 }
 
 async function launchDesktopRelayCommand(args) {
@@ -284,20 +279,7 @@ async function launchDesktopRelayCommand(args) {
   process.stdout.write("ChatGPT/Codex Desktop launched with the verified shared App Server relay.\n");
 }
 
-async function configureRelayCommand(args) {
-  assertMacOS();
-  const { options } = optionMap(args);
-  const status = await statusSnapshot();
-  if (options.has("disable")) {
-    await pauseRelay(status.layout, status.endpoint, { disable: true });
-    await writeJsonAtomic(status.layout.relayStatePath, { schemaVersion: 1, enabled: false, url: status.endpoint.href });
-    process.stdout.write("Desktop relay disabled. Fully restart ChatGPT/Codex Desktop to apply the change.\n");
-    return;
-  }
-  if (!status.connected || !status.listener || !status.appServerProcess) {
-    throw new Error("Start the Bridge and verify the shared App Server before enabling Desktop relay.");
-  }
-  const desktopProxyUrl = await persistedDesktopProxyUrl(status.layout);
+async function activateDesktopRelay(status, desktopProxyUrl) {
   const activation = {
     schemaVersion: 1,
     enabled: true,
@@ -334,6 +316,23 @@ async function configureRelayCommand(args) {
     } catch { return false; }
   }, 20_000, 250);
   if (!ready) throw new Error("Desktop relay watchdog did not become ready.");
+}
+
+async function configureRelayCommand(args) {
+  assertMacOS();
+  const { options } = optionMap(args);
+  const status = await statusSnapshot();
+  if (options.has("disable")) {
+    await pauseRelay(status.layout, status.endpoint, { disable: true });
+    await writeJsonAtomic(status.layout.relayStatePath, { schemaVersion: 1, enabled: false, url: status.endpoint.href });
+    process.stdout.write("Desktop relay disabled. Fully restart ChatGPT/Codex Desktop to apply the change.\n");
+    return;
+  }
+  if (!status.connected || !status.listener || !status.appServerProcess) {
+    throw new Error("Start the Bridge and verify the shared App Server before enabling Desktop relay.");
+  }
+  const desktopProxyUrl = await persistedDesktopProxyUrl(status.layout);
+  await activateDesktopRelay(status, desktopProxyUrl);
   process.stdout.write("Desktop relay enabled. Fully quit and reopen ChatGPT/Codex Desktop before testing.\n");
 }
 
