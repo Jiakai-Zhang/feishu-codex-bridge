@@ -20,7 +20,8 @@ RC 发布后不会自动更新本文中的 tag。使用前应确认下方目标 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
 - ChatGPT/Codex Desktop 已安装并登录。
-- 这台 Mac 应创建或绑定一个未被其他 Bridge 使用的专用飞书企业自建应用和 Bot。
+- 这台 Mac 必须创建一个新的专用飞书企业自建应用和 Bot，不复用组织内的现有应用。
+- 即使两台 Mac 使用同一个飞书账号，每台 Mac 也分别使用自己的应用和 Bot。
 
 工作规则：
 
@@ -54,25 +55,46 @@ RC 发布后不会自动更新本文中的 tag。使用前应确认下方目标 
 
 5. 这是全新独立部署，不要询问是替换旧 Mac 还是与旧 Mac 并行。
    - 不迁移或复用其他机器的 Bridge 配置、绑定、队列或运行状态；
+   - 不复用组织内已有的飞书应用或 Bot；
+   - 同一个飞书账号部署第二台 Mac 时，也必须为第二台 Mac 创建另一个应用；
    - 只绑定这台 Mac 上可见的 Codex 任务；
    - 不检查或停止其他机器上的 Bridge。
 
-6. 引导用户创建一个专用的飞书企业自建应用，并启用该应用的机器人能力。
+6. 引导用户创建一个专用的飞书企业自建应用。
    - 不要把它说成“飞书 CLI 智能体”；
-   - 可使用 ./lark-cli.sh config init --new --brand feishu --lang zh_cn 启动创建流程；
    - 创建应用、修改权限和发布版本都是外部变更。在真正执行前，先向用户说明拟进行的变更并获得明确批准；
+   - 获得批准后，在后台运行 ./lark-cli.sh config init --new --brand feishu --lang zh_cn 启动创建流程；
+   - Lark CLI 提供验证链接后，使用仓库内 Lark CLI 生成二维码，把未经修改的链接和二维码交给用户，然后结束当前回合；
+   - 用户必须使用实际要部署 Bridge 的飞书组织账号完成创建；
    - 浏览器登录、CAPTCHA/MFA 或管理员确认时停下，由用户操作；
    - 任何 App Secret 都只能由用户在本机可见的交互提示中输入。不得在聊天中索取、读取或回显明文。
 
-7. 按 docs/FEISHU_APP_SETUP.md 在开放平台完成应用配置：
-   - 启用 Bot；
-   - 添加应用权限：im:message、im:message.p2p_msg:readonly、im:message.group_msg、im:chat:readonly、im:chat.members:read、im:chat:create、im:resource；
-   - 添加需要用户 OAuth 的权限：im:feed_group_v1:read、im:feed_group_v1:write、docx:document:create、docx:document:write_only；
-   - 使用长连接订阅 im.message.receive_v1；
-   - 将当前用户加入应用可用范围；
-   - 创建并发布应用版本。
+7. 将开放平台配置做成用户自己操作的分步向导。遵循 docs/FEISHU_APP_SETUP.md，每次只给出一个页面、一个操作目标和一个完成标准，用户回复“好了”后才继续：
 
-   如果组织要求管理员审批，停下并等待审批通过。权限或事件未发布时不得继续。
+   7.1 机器人：
+   - 指导用户进入“应用能力 > 机器人”并启用 Bot；
+   - 告诉用户启用后应看到的状态；
+   - 用户确认后才进入权限管理。
+
+   7.2 权限管理：
+   - 指导用户进入“权限管理”；
+   - 给出应用权限：im:message、im:message.p2p_msg:readonly、im:message.group_msg、im:chat:readonly、im:chat.members:read、im:chat:create、im:resource；
+   - 给出需要用户 OAuth 的权限：im:feed_group_v1:read、im:feed_group_v1:write、docx:document:create、docx:document:write_only；
+   - 让用户核对权限数量与名称，确认后才进入事件配置。
+
+   7.3 事件与回调：
+   - 指导用户进入“事件与回调 > 事件配置”；
+   - 选择“使用长连接接收事件”；
+   - 添加 im.message.receive_v1；
+   - 用户确认订阅方式和事件都已保存后，才进入发布。
+
+   7.4 发布与可用范围：
+   - 指导用户进入“应用发布 > 版本管理与发布”并创建版本；
+   - 可用范围只加入实际使用 Bridge 的当前用户；
+   - 让用户本人检查变更、提交发布并确认最终状态；
+   - 如果组织要求管理员审批，停下并等待审批通过。
+
+   页面文案与指南不一致时，让用户提供不包含凭据、身份标识或密钥的截图，再按实际页面继续。不得仅凭用户口头确认宣布成功；后续必须用 Lark CLI、Bridge Channel 和 Doctor 验证。权限、事件、发布或审批未完成时不得继续。
 
 8. 完成当前用户 OAuth：
    - 使用 ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"；
@@ -138,4 +160,4 @@ RC 发布后不会自动更新本文中的 tag。使用前应确认下方目标 
 - Prompt 固定到明确 tag，避免安装过程读到正在变化的分支。
 - `bootstrap.sh` 会安装仓库锁定的 Lark CLI，无需全局安装。
 - 飞书应用创建/发布、管理员审批、OAuth、Secret 输入与 Desktop 重启仍是必须的人工停点。
-- 本 Prompt 是全新独立安装流程，不包含旧机迁移或多机共用同一 Bot 的逻辑。
+- 本 Prompt 是全新独立安装流程；即使是同一个飞书账号，每台 Mac 也创建自己的应用和 Bot。

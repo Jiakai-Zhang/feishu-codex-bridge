@@ -2,7 +2,7 @@
 
 本文命令同时支持两个本机入口：macOS 使用 `./lark-cli.sh`，Windows PowerShell 使用 `.\lark-cli.ps1`。下文若展示 PowerShell，macOS 只需将命令前缀替换为 `./lark-cli.sh`，参数保持不变。
 
-每台电脑建议使用一个专用于 Codex Bridge 的企业自建应用。不要与飞书 CLI 智能体或其他生产机器人共用 App ID；这样权限、消息入口、故障和审计边界最清楚。
+每台同时运行 Bridge 的电脑都必须使用一个独立的企业自建应用和 Bot，即使这些电脑由同一个飞书账号使用也不例外。飞书长连接的消息推送是集群模式，同一应用建立多个客户端时，只会由其中随机一个客户端收到事件；详见[飞书长连接注意事项](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case)。不要与飞书 CLI 智能体或其他生产机器人共用 App ID。
 
 ## A. 创建或绑定应用
 
