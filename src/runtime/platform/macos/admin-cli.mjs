@@ -315,7 +315,6 @@ async function configureRelayCommand(args) {
     createdAt: new Date().toISOString(),
     ...(desktopProxyUrl ? { desktopProxyUrl } : {}),
   };
-  await writeJsonAtomic(status.layout.relayStatePath, activation);
   const nodeExecutable = path.resolve(repositoryRoot, String(status.config.nodeExecutable));
   const plist = buildLaunchAgentPlist({
     label: MACOS_LABELS.relay,
@@ -327,6 +326,12 @@ async function configureRelayCommand(args) {
     stderrPath: path.join(status.layout.logsDir, "desktop-relay.stderr.log"),
   });
   await writeFileAtomic(status.layout.relayPlistPath, plist, { mode: 0o600 });
+  // launchd keeps the ProgramArguments from the loaded job even after its plist
+  // is replaced. Always unload the previous registration before activating a
+  // relay from a newly installed release.
+  await bootoutLaunchAgent(MACOS_LABELS.relay);
+  await unsetLaunchEnvironmentIfOwned(RELAY_ENVIRONMENT_VARIABLE, status.endpoint.href);
+  await writeJsonAtomic(status.layout.relayStatePath, activation);
   await setLaunchAgentEnabled(MACOS_LABELS.relay, true);
   await bootstrapLaunchAgent(MACOS_LABELS.relay, status.layout.relayPlistPath);
   const ready = await waitUntil(async () => {

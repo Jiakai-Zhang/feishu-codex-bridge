@@ -268,6 +268,17 @@ async function quiesceCurrentServices(layout, endpoint, testMode) {
   await unsetLaunchEnvironmentIfOwned(RELAY_ENVIRONMENT_VARIABLE, endpoint.href);
 }
 
+async function prepareRelayForCrossVersionStart(layout, endpoint, testMode) {
+  if (!testMode) {
+    await bootoutLaunchAgent(MACOS_LABELS.relay);
+    await unsetLaunchEnvironmentIfOwned(RELAY_ENVIRONMENT_VARIABLE, endpoint.href);
+  }
+  // The relay plist is release-specific. Removing it prevents start-bridge from
+  // registering the previous release's entrypoint before configure regenerates
+  // the plist for the checked-out release.
+  await fs.rm(layout.relayPlistPath, { force: true });
+}
+
 function assertTestMode(testMode) {
   if (!testMode) return;
   const temporaryRoot = fs.realpath(os.tmpdir());
@@ -337,6 +348,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
     await runRepositoryScript("bootstrap.sh");
     await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
     if (shouldStart) {
+      if (state.relayEnabled) await prepareRelayForCrossVersionStart(layout, endpoint, testMode);
       await runRepositoryScript("start-bridge.sh");
       if (state.relayEnabled) await runRepositoryScript("configure-codex-desktop-relay.sh");
     }
@@ -358,6 +370,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
         await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
       }
       if (shouldStart) {
+        if (state.relayEnabled) await prepareRelayForCrossVersionStart(layout, endpoint, testMode);
         await runRepositoryScript("start-bridge.sh");
         if (state.relayEnabled) await runRepositoryScript("configure-codex-desktop-relay.sh");
       }

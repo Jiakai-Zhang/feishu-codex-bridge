@@ -37,6 +37,26 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
   }
 });
 
+test("macOS Desktop relay activation reloads the launchd registration", async () => {
+  const source = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "admin-cli.mjs",
+  ), "utf8");
+  const configureStart = source.indexOf("async function configureRelayCommand");
+  const configureEnd = source.indexOf("async function larkCliCommand", configureStart);
+  const configureSource = source.slice(configureStart, configureEnd);
+  const bootout = configureSource.indexOf("bootoutLaunchAgent(MACOS_LABELS.relay)");
+  const activate = configureSource.indexOf("writeJsonAtomic(status.layout.relayStatePath, activation)");
+  const bootstrap = configureSource.indexOf("bootstrapLaunchAgent(MACOS_LABELS.relay");
+  assert.ok(bootout >= 0);
+  assert.ok(activate > bootout);
+  assert.ok(bootstrap > activate);
+});
+
 test("macOS secret setup uses an interactive Keychain prompt, never a password argument", async () => {
   const content = await fs.readFile(path.join(
     repositoryRoot,

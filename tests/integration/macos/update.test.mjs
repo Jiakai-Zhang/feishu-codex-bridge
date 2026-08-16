@@ -53,9 +53,21 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     "exit 0",
     "",
   ].join("\n"));
-  await writeExecutable(path.join(source, "start-bridge.sh"), "#!/bin/sh\nset -eu\n/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING\"\n");
+  await writeExecutable(path.join(source, "start-bridge.sh"), [
+    "#!/bin/sh",
+    "set -eu",
+    "test ! -e \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST\"",
+    "/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING\"",
+    "",
+  ].join("\n"));
   await writeExecutable(path.join(source, "stop-bridge.sh"), "#!/bin/sh\nset -eu\n/bin/rm -f \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING\"\n");
-  await writeExecutable(path.join(source, "configure-codex-desktop-relay.sh"), "#!/bin/sh\nset -eu\n/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_MARKER\"\n");
+  await writeExecutable(path.join(source, "configure-codex-desktop-relay.sh"), [
+    "#!/bin/sh",
+    "set -eu",
+    "/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_MARKER\"",
+    "/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST\"",
+    "",
+  ].join("\n"));
   await writeExecutable(path.join(source, "doctor.sh"), [
     "#!/bin/sh",
     "set -eu",
@@ -87,8 +99,11 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await fs.writeFile(path.join(runtime, "session-relay-settings.json"), '{"keep":"one"}\n', { mode: 0o600 });
   await fs.writeFile(path.join(runtime, "session-relay-inbound-attachments", "message", "sample.bin"), "attachment-state", { mode: 0o600 });
   const relayStatePath = path.join(testHome, "Library", "Application Support", "FeishuCodexBridge", "bootstrap", "desktop-relay-state.json");
+  const relayPlistPath = path.join(testHome, "Library", "LaunchAgents", "com.feishu-codex-bridge.desktop-relay.plist");
   await fs.mkdir(path.dirname(relayStatePath), { recursive: true });
+  await fs.mkdir(path.dirname(relayPlistPath), { recursive: true });
   await fs.writeFile(relayStatePath, '{"enabled":false,"keep":"relay"}\n', { mode: 0o600 });
+  await fs.writeFile(relayPlistPath, "stale release relay\n", { mode: 0o600 });
   const runningMarker = path.join(runtime, "test-bridge-running");
   const relayMarker = path.join(runtime, "test-relay-configured");
   const doctorArgs = path.join(runtime, "test-doctor-args");
@@ -101,6 +116,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY: "1",
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING: runningMarker,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_MARKER: relayMarker,
+    FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST: relayPlistPath,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_DOCTOR_ARGS: doctorArgs,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE: targetOnlyState,
   };
