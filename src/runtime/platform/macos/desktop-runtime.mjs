@@ -27,6 +27,26 @@ export function safeLoopbackProxyArgument(value) {
   return undefined;
 }
 
+export function desktopProxySelection({ requestedValue, persistedValue, noProxy = false } = {}) {
+  const requestedText = String(requestedValue || "").trim();
+  if (noProxy && requestedText) {
+    throw new Error("--no-proxy cannot be combined with FEISHU_CODEX_DESKTOP_PROXY_URL.");
+  }
+  if (noProxy) return Object.freeze({ mode: "disabled", proxyUrl: undefined });
+  if (requestedText) {
+    const argument = safeLoopbackProxyArgument(requestedText);
+    if (!argument) {
+      throw new Error("The Desktop proxy must be an unauthenticated loopback URL with an explicit port.");
+    }
+    return Object.freeze({ mode: "environment", proxyUrl: argument.slice("--proxy-server=".length) });
+  }
+  const persistedArgument = safeLoopbackProxyArgument(persistedValue);
+  if (persistedArgument) {
+    return Object.freeze({ mode: "persisted", proxyUrl: persistedArgument.slice("--proxy-server=".length) });
+  }
+  return Object.freeze({ mode: "direct", proxyUrl: undefined });
+}
+
 export function proxyEnvironment(proxyUrl) {
   if (!safeLoopbackProxyArgument(proxyUrl)) return {};
   const noProxy = "127.0.0.1,localhost,::1";
@@ -115,6 +135,26 @@ export async function processHasEnvironment(pid, name, expectedValue) {
       maxBuffer: 2_000_000,
     });
     return String(stdout || "").includes(`${name}=${expectedValue}`);
+  } catch {
+    return false;
+  }
+}
+
+export function proxyEnvironmentMatches(commandText, proxyUrl) {
+  const command = String(commandText || "");
+  const names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+  if (proxyUrl) return names.every((name) => command.includes(`${name}=${proxyUrl}`));
+  return names.every((name) => !command.includes(`${name}=`));
+}
+
+export async function processProxyEnvironmentMatches(pid, proxyUrl) {
+  try {
+    const { stdout } = await execFile("/bin/ps", ["eww", "-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 2_000_000,
+    });
+    return proxyEnvironmentMatches(stdout, proxyUrl);
   } catch {
     return false;
   }

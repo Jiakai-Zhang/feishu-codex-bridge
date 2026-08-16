@@ -25,15 +25,16 @@ import {
 } from "./constants.mjs";
 import {
   DESKTOP_APPLICATIONS,
+  desktopProxySelection,
   desktopRelayAttachment,
   embeddedDesktopAppServerRunning,
   persistedDesktopProxyUrl,
   processHasEnvironment,
+  processProxyEnvironmentMatches,
   proxyEnvironment,
   relayHeartbeatReady,
   runningDesktopApplications,
   safeDesktopLaunchArguments,
-  safeLoopbackProxyArgument,
 } from "./desktop-runtime.mjs";
 import {
   bootstrapLaunchAgent,
@@ -162,25 +163,24 @@ async function stopCommand(args) {
   }
 }
 
-async function ensureSharedAppServerProxy(status, proxyUrl) {
-  if (!proxyUrl) return;
+async function ensureSharedAppServerProxy(status, proxyUrl, { clearPersisted = false } = {}) {
+  if (!proxyUrl && !clearPersisted) return;
   const activation = JSON.parse(await fs.readFile(status.layout.relayStatePath, "utf8"));
   if (activation.enabled !== true || activation.url !== status.endpoint.href) {
     throw new Error("Desktop relay activation changed before the proxy could be applied.");
   }
   if (activation.desktopProxyUrl !== proxyUrl) {
-    await writeJsonAtomic(status.layout.relayStatePath, {
+    const updatedActivation = {
       ...activation,
-      desktopProxyUrl: proxyUrl,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    if (proxyUrl) updatedActivation.desktopProxyUrl = proxyUrl;
+    else delete updatedActivation.desktopProxyUrl;
+    await writeJsonAtomic(status.layout.relayStatePath, updatedActivation);
   }
   await writeMacOSLaunchAgents(status.config);
   const currentPid = await readPid(status.layout.appServerPidPath);
-  const alreadyConfigured = currentPid
-    && await processHasEnvironment(currentPid, "HTTP_PROXY", proxyUrl)
-    && await processHasEnvironment(currentPid, "HTTPS_PROXY", proxyUrl)
-    && await processHasEnvironment(currentPid, "ALL_PROXY", proxyUrl);
+  const alreadyConfigured = currentPid && await processProxyEnvironmentMatches(currentPid, proxyUrl);
   if (alreadyConfigured) return;
 
   await bootoutLaunchAgent(MACOS_LABELS.relay);
@@ -196,11 +196,12 @@ async function ensureSharedAppServerProxy(status, proxyUrl) {
     throw new Error("The shared App Server did not recover after proxy reconfiguration.");
   }
   const restartedPid = await readPid(status.layout.appServerPidPath);
-  const proxyApplied = restartedPid
-    && await processHasEnvironment(restartedPid, "HTTP_PROXY", proxyUrl)
-    && await processHasEnvironment(restartedPid, "HTTPS_PROXY", proxyUrl)
-    && await processHasEnvironment(restartedPid, "ALL_PROXY", proxyUrl);
-  if (!proxyApplied) throw new Error("The shared App Server did not inherit the configured local proxy.");
+  const proxyApplied = restartedPid && await processProxyEnvironmentMatches(restartedPid, proxyUrl);
+  if (!proxyApplied) {
+    throw new Error(proxyUrl
+      ? "The shared App Server did not inherit the configured local proxy."
+      : "The shared App Server retained proxy variables after direct mode was requested.");
+  }
 
   await setLaunchAgentEnabled(MACOS_LABELS.relay, true);
   await bootstrapLaunchAgent(MACOS_LABELS.relay, status.layout.relayPlistPath);
@@ -213,6 +214,12 @@ async function ensureSharedAppServerProxy(status, proxyUrl) {
 async function launchDesktopRelayCommand(args) {
   assertMacOS();
   const { options } = optionMap(args);
+  for (const name of options.keys()) {
+    if (!["wait-for-exit", "no-proxy"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
+  }
+  if (options.has("no-proxy") && options.get("no-proxy") !== true) {
+    throw new Error("--no-proxy does not accept a value.");
+  }
   const status = await statusSnapshot();
   if (!status.listener || !status.appServerProcess || status.pointer !== status.endpoint.href
     || !(await relayHeartbeatReady(status.layout, status.endpoint.href))) {
@@ -222,13 +229,12 @@ async function launchDesktopRelayCommand(args) {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 600) {
     throw new Error("--wait-for-exit must be between 0 and 600 seconds.");
   }
-  const requestedProxyValue = process.env.FEISHU_CODEX_DESKTOP_PROXY_URL;
-  const requestedProxyArgument = safeLoopbackProxyArgument(requestedProxyValue);
-  if (requestedProxyValue && !requestedProxyArgument) {
-    throw new Error("The Desktop proxy must be an unauthenticated loopback URL with an explicit port.");
-  }
-  const proxyUrl = requestedProxyArgument?.slice("--proxy-server=".length)
-    || await persistedDesktopProxyUrl(status.layout);
+  const proxySelection = desktopProxySelection({
+    requestedValue: process.env.FEISHU_CODEX_DESKTOP_PROXY_URL,
+    persistedValue: await persistedDesktopProxyUrl(status.layout),
+    noProxy: options.has("no-proxy"),
+  });
+  const proxyUrl = proxySelection.proxyUrl;
   if (proxyUrl) {
     const proxy = new URL(proxyUrl);
     if (!(await loopbackPortOpen({ host: proxy.hostname.replace(/^\[|\]$/g, ""), port: Number(proxy.port) }))) {
@@ -237,7 +243,9 @@ async function launchDesktopRelayCommand(args) {
   }
   let running = await runningDesktopApplications();
   const preferredBundle = running[0]?.bundlePath;
-  const preservedArguments = safeDesktopLaunchArguments(running[0], proxyUrl);
+  const preservedArguments = proxySelection.mode === "disabled"
+    ? []
+    : safeDesktopLaunchArguments(running[0], proxyUrl);
   if (running.length > 0 && waitSeconds === 0) {
     throw new Error("ChatGPT/Codex Desktop is still running. Fully quit it, then run this launcher again.");
   }
@@ -258,7 +266,9 @@ async function launchDesktopRelayCommand(args) {
     }
   }
   if (!bundlePath) throw new Error("ChatGPT/Codex Desktop was not found in /Applications.");
-  await ensureSharedAppServerProxy(status, proxyUrl);
+  await ensureSharedAppServerProxy(status, proxyUrl, {
+    clearPersisted: proxySelection.mode === "disabled",
+  });
   const openArguments = [
     "--env", `${RELAY_ENVIRONMENT_VARIABLE}=${status.endpoint.href}`,
   ];

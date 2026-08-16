@@ -6,7 +6,12 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { safeLoopbackProxyArgument } from "../../../src/runtime/platform/macos/desktop-runtime.mjs";
+import {
+  desktopProxySelection,
+  proxyEnvironmentMatches,
+  safeDesktopLaunchArguments,
+  safeLoopbackProxyArgument,
+} from "../../../src/runtime/platform/macos/desktop-runtime.mjs";
 
 const execFile = promisify(nodeExecFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -78,4 +83,43 @@ test("macOS Desktop relay accepts only an explicit unauthenticated loopback prox
   assert.equal(safeLoopbackProxyArgument("socks5://localhost:1080"), "--proxy-server=socks5://localhost:1080");
   assert.equal(safeLoopbackProxyArgument("https://proxy.example.com:443"), undefined);
   assert.equal(safeLoopbackProxyArgument("http://user:password@127.0.0.1:7897"), undefined);
+});
+
+test("macOS Desktop launcher supports direct, persisted proxy, and explicit no-proxy modes", () => {
+  assert.deepEqual(desktopProxySelection(), { mode: "direct", proxyUrl: undefined });
+  assert.deepEqual(desktopProxySelection({
+    persistedValue: "http://127.0.0.1:7897",
+  }), { mode: "persisted", proxyUrl: "http://127.0.0.1:7897" });
+  assert.deepEqual(desktopProxySelection({
+    requestedValue: "socks5://localhost:1080",
+    persistedValue: "http://127.0.0.1:7897",
+  }), { mode: "environment", proxyUrl: "socks5://localhost:1080" });
+  assert.deepEqual(desktopProxySelection({
+    noProxy: true,
+    persistedValue: "http://127.0.0.1:7897",
+  }), { mode: "disabled", proxyUrl: undefined });
+  assert.throws(() => desktopProxySelection({
+    noProxy: true,
+    requestedValue: "http://127.0.0.1:7897",
+  }), /cannot be combined/);
+  assert.throws(() => desktopProxySelection({
+    requestedValue: "https://proxy.example.com:443",
+  }), /loopback URL/);
+  assert.deepEqual(safeDesktopLaunchArguments({
+    commands: ["/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --proxy-server=http://127.0.0.1:7897"],
+  }), ["--proxy-server=http://127.0.0.1:7897"]);
+
+  const proxyUrl = "http://127.0.0.1:7897";
+  const completeProxyEnvironment = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+  ].map((name) => `${name}=${proxyUrl}`).join(" ");
+  assert.equal(proxyEnvironmentMatches(completeProxyEnvironment, proxyUrl), true);
+  assert.equal(proxyEnvironmentMatches("HTTP_PROXY=http://127.0.0.1:7897", proxyUrl), false);
+  assert.equal(proxyEnvironmentMatches("CODEX_APP_SERVER_WS_URL=ws://127.0.0.1:47321/rpc", undefined), true);
+  assert.equal(proxyEnvironmentMatches("HTTP_PROXY=http://127.0.0.1:7897", undefined), false);
 });
