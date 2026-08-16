@@ -20,6 +20,7 @@ import {
   FEISHU_FILE_MAX_BYTES,
   FEISHU_IMAGE_MAX_BYTES,
   buildNativeAttachmentDeliveries,
+  buildNativeAttachmentMessage,
   classifyFeishuImageSize,
   inspectFeishuNativeAttachment,
   uploadFeishuNativeAttachment,
@@ -289,6 +290,7 @@ async function resolveNativeFileDelivery(record) {
     fileName: uploaded.fileName,
     fileSize: uploaded.fileSize,
     modifiedAtMs: uploaded.modifiedAtMs,
+    mediaType: uploaded.mediaType,
   };
   await deliveryOutbox.put(updated);
   return updated;
@@ -300,12 +302,13 @@ async function deliverPendingRecord(record) {
     if (!binding) throw new Error("Native attachment delivery has no configured group binding");
     await inspectBinding(binding);
     const delivery = await resolveNativeFileDelivery(record);
-    const content = JSON.stringify({ file_key: delivery.fileKey });
+    const message = buildNativeAttachmentMessage(delivery);
+    const content = JSON.stringify(message.content);
     const response = delivery.messageId
       ? await channel.rawClient.im.message.reply({
         data: {
           content,
-          msg_type: "file",
+          msg_type: message.msgType,
           reply_in_thread: Boolean(delivery.threadId),
           uuid: deliveryIdempotencyKey(delivery.deliveryId),
         },
@@ -316,7 +319,7 @@ async function deliverPendingRecord(record) {
         data: {
           receive_id: delivery.chatId,
           content,
-          msg_type: "file",
+          msg_type: message.msgType,
           uuid: deliveryIdempotencyKey(delivery.deliveryId),
         },
       });

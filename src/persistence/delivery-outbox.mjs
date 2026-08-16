@@ -30,6 +30,9 @@ function normalizeRecord(record) {
     fileKey,
     localPath,
     fileName: record.fileName ? String(record.fileName).slice(0, 200) : undefined,
+    mediaType: kind === "file" && (record.mediaType === "image" || record.mediaType === "video")
+      ? record.mediaType
+      : undefined,
     fileSize: Number(record.fileSize) > 0 ? Number(record.fileSize) : undefined,
     modifiedAtMs: Number(record.modifiedAtMs) > 0 ? Number(record.modifiedAtMs) : undefined,
     publicStatus: kind === "reply" && record.publicStatus === true,
