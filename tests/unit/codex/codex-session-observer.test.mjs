@@ -827,5 +827,5 @@ test("observer seeds the current active turn without backfilling older completed
 
   assert.equal(record.prompt, "active prompt");
   assert.equal(record.answer, "active answer");
-  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "thread/resume", "thread/read"]);
+  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "initialized", "thread/resume", "thread/read"]);
 });

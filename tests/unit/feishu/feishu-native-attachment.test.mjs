@@ -24,6 +24,7 @@ test("classifies inline images and native-file fallbacks at Feishu limits", () =
 test("sanitizes file names without exposing a local path", () => {
   assert.equal(safeNativeAttachmentName("folder/report.txt", "C:/private/report.txt"), "folder_report.txt");
   assert.equal(safeNativeAttachmentName("", "C:/private/report.txt"), "report.txt");
+  assert.equal(safeNativeAttachmentName("", "/private/output/report.txt"), "report.txt");
 });
 
 test("inspects and uploads a regular file as a Feishu stream attachment", async () => {

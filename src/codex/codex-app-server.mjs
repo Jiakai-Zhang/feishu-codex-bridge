@@ -49,6 +49,7 @@ export function startCodexProjectThread({
           const message = JSON.parse(String(event.data));
           if (message.id === 1) {
             if (message.error) return finish(rpcError("initialize", message.error));
+            send({ method: "initialized", params: {} });
             send({
               method: "thread/start",
               id: 2,
@@ -118,6 +119,7 @@ export function startCodexProjectThread({
     const handleMessage = (message) => {
       if (message.id === 1) {
         if (message.error) return finish(rpcError(message));
+        send({ method: "initialized", params: {} });
         send({
           method: "thread/start",
           id: 2,
@@ -217,6 +219,7 @@ export function setCodexThreadName({
           const message = JSON.parse(String(event.data));
           if (message.id === 1) {
             if (message.error) return finish(new Error(`Codex App Server initialize failed: ${message.error.message || "unknown"}`));
+            send({ method: "initialized", params: {} });
             send({ method: "thread/name/set", id: 2, params: { threadId, name } });
           } else if (message.id === 2) {
             if (message.error) return finish(new Error(`Codex App Server name update failed: ${message.error.message || "unknown"}`));
@@ -276,6 +279,7 @@ export function setCodexThreadName({
     const handleMessage = (message) => {
       if (message.id === 1) {
         if (message.error) return finish(new Error(`Codex App Server initialize failed: ${message.error.message || "unknown"}`));
+        send({ method: "initialized", params: {} });
         send({ method: "thread/name/set", id: 2, params: { threadId, name } });
         return;
       }

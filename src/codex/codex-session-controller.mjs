@@ -50,6 +50,12 @@ function isRecoverableTransportError(error) {
   return ["codex_app_server_unavailable", "codex_app_server_timeout"].includes(error?.code);
 }
 
+const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
+
+function isActiveWriterError(error) {
+  return error instanceof Error && ACTIVE_WRITER_PATTERN.test(error.message);
+}
+
 function clone(value) {
   return value == null ? value : structuredClone(value);
 }
@@ -257,14 +263,32 @@ export class CodexSessionController {
           requestAttestation: false,
         },
       });
+      connection.notify("initialized");
       const catchUpAfterMs = this.hasConnected ? this.disconnectedAtMs : undefined;
       for (const state of this.states.values()) {
-        const result = await connection.request("thread/resume", {
-          threadId: state.target.threadId,
-          cwd: state.target.cwd,
-          approvalPolicy: "never",
-          sandbox: this.sandboxMode,
-        });
+        let result;
+        let waitingWasLogged = false;
+        for (;;) {
+          try {
+            result = await connection.request("thread/resume", {
+              threadId: state.target.threadId,
+              cwd: state.target.cwd,
+              approvalPolicy: "never",
+              sandbox: this.sandboxMode,
+            });
+            break;
+          } catch (error) {
+            if (!isActiveWriterError(error)) throw error;
+            if (!waitingWasLogged) {
+              waitingWasLogged = true;
+              this.log("Codex task is owned by another App Server; waiting for Desktop relay handoff");
+            }
+            if (this.stopped || this.connection !== connection) {
+              throw controllerError("codex_app_server_unavailable", "Codex session controller stopped while waiting for Desktop relay handoff");
+            }
+            await this.sleepImpl(this.reconnectDelayMs);
+          }
+        }
         if (result?.thread?.id !== state.target.threadId) {
           throw new Error("Codex session controller resumed a different task than its binding");
         }

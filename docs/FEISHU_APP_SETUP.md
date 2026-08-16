@@ -1,5 +1,7 @@
 # 飞书自建应用配置
 
+本文命令同时支持两个本机入口：macOS 使用 `./lark-cli.sh`，Windows PowerShell 使用 `.\lark-cli.ps1`。下文若展示 PowerShell，macOS 只需将命令前缀替换为 `./lark-cli.sh`，参数保持不变。
+
 每台电脑建议使用一个专用于 Codex Bridge 的企业自建应用。不要与飞书 CLI 智能体或其他生产机器人共用 App ID；这样权限、消息入口、故障和审计边界最清楚。
 
 ## A. 创建或绑定应用
@@ -40,19 +42,24 @@ npm ci
 
 ### 2. 添加应用权限
 
-在“权限管理”中为应用添加：
+在“权限管理”中为应用添加以下权限。Bridge 的 Channel 与群管理使用应用/Bot 身份：
 
 - `im:message`：发送消息，并以 Bot 身份下载 owner 消息中的图片与附件；
-- `im:message.p2p_msg`：接收与机器人的单聊消息，用于 `/add`；
+- `im:message.p2p_msg:readonly`：接收与机器人的单聊消息，用于 `/add`；
 - `im:message.group_msg`：接收群内普通消息，使仅含用户与 Bot 的绑定群无需 `@Bot`；
 - `im:chat:readonly`：读取群基本信息；
 - `im:chat.members:read`：验证群内只有绑定用户与 Bot；
 - `im:chat:create`：创建专属绑定群；
-- `im:resource`：把 Codex 输出中的图片与文件上传回飞书；
+- `im:resource`：把 Codex 输出中的图片与文件上传回飞书。
+
+以下能力由当前用户身份调用，也必须先在应用的权限管理中开通，随后再完成第 D 节的用户 OAuth：
+
+- `im:feed_group_v1:read`：读取当前用户的消息标签；
+- `im:feed_group_v1:write`：创建 Agent 标签并把绑定群加入标签；
 - `docx:document:create`：以当前用户身份创建长回答云文档；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 
-如果后台提示管理员审批，等待企业管理员批准后再继续。Bot 权限必须在开发者后台添加并重新发布应用；反复执行用户 OAuth 不能补上 Bot 权限。
+如果后台提示管理员审批，等待企业管理员批准后再继续。应用权限必须在开发者后台添加并重新发布应用；反复执行用户 OAuth 不能补上尚未开通或未发布的权限。
 
 `im:message` 已满足“获取消息中的资源文件”接口的权限要求，无需为入站附件额外添加 `im:message:readonly`。如果应用选择只读权限模型，也可以用 `im:message:readonly` 满足下载接口，但 Bridge 发送回复仍需要 `im:message`。保密消息、开启防泄密模式的群，以及飞书接口不支持的表情包/合并转发子消息资源不会被下载。
 
@@ -106,4 +113,4 @@ Agent 把验证网址和生成的二维码显示给用户后结束当前回合�
 
 ## E. App Secret 的第二份用途
 
-飞书 CLI 配置完成后，Channel Bridge 仍需通过 `setup-channel-secret.ps1` 保存自己的 DPAPI 加密副本。必须由用户在可见窗口中输入；不要从飞书 CLI 配置、进程、日志或系统凭据中提取明文。
+飞书 CLI 配置完成后，Channel Bridge 仍需通过 `setup-channel-secret.sh` 或 `setup-channel-secret.ps1` 保存自己的凭据。macOS 存入当前用户 Keychain，Windows 使用 DPAPI。必须由用户在本机可见提示中输入；不要从飞书 CLI 配置、进程、日志或系统凭据中提取明文。

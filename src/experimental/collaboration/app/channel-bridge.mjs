@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -32,10 +33,11 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../../../..");
 const config = await loadBridgeConfig(path.join(repositoryRoot, "bridge.config.json"));
 const projectContext = new ProjectContext(config.project);
-const userProfile = process.env.USERPROFILE;
-if (!userProfile) throw new Error("USERPROFILE is required to locate the Codex state database");
+const userProfile = process.env.USERPROFILE || process.env.HOME || os.homedir();
+if (!userProfile) throw new Error("The user home directory is required to locate the Codex state database");
 const runtimeDir = path.join(config.workspace, "work", "feishu-codex-bridge");
 const pidPath = path.join(runtimeDir, "bridge.pid");
+const readyPath = path.join(runtimeDir, "bridge-ready.json");
 const stopPath = path.join(runtimeDir, "stop.request");
 const statePath = path.join(runtimeDir, "completed.json");
 const legacySelectionPath = path.join(runtimeDir, "selected-thread.json");
@@ -54,9 +56,10 @@ const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
 if (!appSecret) throw new Error("LARK_APP_SECRET was not supplied by the secure launcher");
 
-await fs.mkdir(runtimeDir, { recursive: true });
+await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 await fs.rm(stopPath, { force: true });
-await fs.writeFile(pidPath, String(process.pid), "utf8");
+await fs.rm(readyPath, { force: true });
+await fs.writeFile(pidPath, String(process.pid), { encoding: "utf8", mode: 0o600 });
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
 const agentEventOutbox = await AgentEventOutbox.open(agentEventOutboxPath);
 const teamTaskStore = await TeamTaskStore.open(teamTaskStorePath);
@@ -704,6 +707,12 @@ try {
   }
   connectedBotOpenId = identity.openId;
   await audit("channel.connected", `bot:${identity.openId}`, { details: { botName: identity.name || undefined } });
+  await fs.writeFile(readyPath, `${JSON.stringify({
+    schemaVersion: 1,
+    pid: process.pid,
+    mode: "channel-bridge",
+    readyAt: new Date().toISOString(),
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   log(`READY: Channel SDK connected as ${identity.name || identity.openId}`);
   void retryPendingDeliveries();
   void retryPendingAgentEvents();
@@ -717,6 +726,7 @@ try {
   clearInterval(collaborationInboxTimer);
   await channel.disconnect().catch(() => {});
   await audit("bridge.stopped", `agent:${config.agent.id}`).catch((error) => log(`final audit append failed: ${safeError(error)}`));
+  await fs.rm(readyPath, { force: true });
   await fs.rm(pidPath, { force: true });
   await fs.rm(stopPath, { force: true });
   log("Channel SDK bridge stopped");

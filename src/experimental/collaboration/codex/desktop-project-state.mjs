@@ -1,16 +1,10 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-function normalizeFsPath(value) {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  return path.resolve(value.replace(/^\\\\\?\\/, "")).replace(/[\\/]+$/, "").toLowerCase();
-}
+import { sameFsPath } from "../../../runtime/shared/fs-paths.mjs";
 
 function samePath(left, right) {
-  const normalizedLeft = normalizeFsPath(left);
-  const normalizedRight = normalizeFsPath(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+  return typeof left === "string" && typeof right === "string" && sameFsPath(left, right);
 }
 
 function localProjectsFromState(state) {

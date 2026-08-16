@@ -1,8 +1,8 @@
 # Feishu ↔ Codex Bridge
 
-在 Windows 上把飞书群固定连接到本机 Codex Session。它复用 Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
+在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：当前正式支持的入口是 Windows 上的个人 Session Relay。它依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码，不属于当前发布合同。
+> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前基于上游最新 PR，尚未发布固定 tag。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -10,6 +10,7 @@
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
 | 当前 `main` | 在上述能力上，继续合并了 Bridge pointer 生命周期、单张持久流式卡片、长回答云文档及完整媒体转发 |
+| 最新 PR #12 + macOS 移植 | 增加飞书入站附件 relay，并提供 POSIX 路径、Keychain、launchd、安装/Doctor 和 Desktop relay 支持 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
@@ -17,6 +18,7 @@
 - [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
 - [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
 - [`main`：长回答文档与媒体转发](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/10)
+- [PR #12：飞书入站附件 relay](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/12)
 
 ## 能做什么
 
@@ -48,6 +50,8 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
+macOS 移植尚未有固定 release tag，请先使用当前移植分支并严格按 [macOS 安装指南](docs/INSTALL_MACOS.md)操作。Windows 仍使用下面的固定 release 流程：
+
 把下面这段发到一个新的 Codex 对话：
 
 ```text
@@ -57,6 +61,7 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 固定 tag 可以避免安装期间读到正在变化的分支。完整协议和人工步骤：
 
 - [Windows 安装指南](docs/INSTALL.md)
+- [macOS 安装指南](docs/INSTALL_MACOS.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [可复制的安装与升级 Prompt](docs/INSTALL_AGENT_PROMPT.md)
 - [飞书自建应用配置](docs/FEISHU_APP_SETUP.md)
@@ -65,13 +70,13 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 | 依赖 | 要求 |
 | --- | --- |
-| 操作系统 | Windows 10/11 |
+| 操作系统 | macOS 13+ 或 Windows 10/11 |
 | Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用 |
 | Node.js | `>=22.13.0`，并带 npm |
-| 其他 | PowerShell 5.1/7、Git |
+| 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git |
 | 飞书 | 启用 Bot 与长连接事件的企业自建应用 |
 
-仓库依赖通过 `npm ci` 安装，锁定 `@larksuite/channel` 和 `@larksuite/cli`；日常使用仓库内的 `lark-cli.ps1`，无需全局安装飞书 CLI。
+仓库依赖通过 `npm ci` 安装，锁定 `@larksuite/channel` 和 `@larksuite/cli`；日常使用仓库内的 `lark-cli.sh` 或 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
 ## 飞书权限速查
 
@@ -80,7 +85,7 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 | 应用权限 | 用途 |
 | --- | --- |
 | `im:message` | 发送回复、富文本和互动卡片；下载 owner 消息中的图片与附件 |
-| `im:message.p2p_msg` | 接收 Bot 私聊中的 `/add` 与全局设置命令 |
+| `im:message.p2p_msg:readonly` | 接收 Bot 私聊中的 `/add` 与全局设置命令 |
 | `im:message.group_msg` | 接收绑定群中未 `@Bot` 的普通消息 |
 | `im:chat:readonly` | 读取绑定群基本信息 |
 | `im:chat.members:read` | 校验群内严格只有 owner 与当前 Bot |
@@ -98,7 +103,7 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 - `docx:document:create`（当前 `main`）
 - `docx:document:write_only`（当前 `main`）
 
-`auth status --json --verify` 的完整结果含身份信息，不要粘贴到聊天、Issue 或日志。App Secret 只允许在 `setup-channel-secret.ps1` 的本机可见窗口中输入，并由 Windows DPAPI 保存。
+`auth status --json --verify` 的完整结果含身份信息，不要粘贴到聊天、Issue 或日志。App Secret 只允许在本机可见的 `setup-channel-secret.sh`/`.ps1` 交互提示中输入，并由 macOS Keychain 或 Windows DPAPI 保存。
 
 ## 开始使用
 
@@ -172,6 +177,17 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 ## 日常运维
 
+macOS：
+
+```bash
+./start-bridge.sh
+./status-bridge.sh
+./doctor.sh --require-running
+./stop-bridge.sh
+```
+
+Windows：
+
 ```powershell
 .\start-bridge.ps1
 .\status-bridge.ps1
@@ -181,12 +197,21 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 首次启用共享 App Server 时，还要运行：
 
+macOS：
+
+```bash
+./configure-codex-desktop-relay.sh
+./doctor.sh --require-running --require-desktop-relay
+```
+
+Windows：
+
 ```powershell
 .\configure-codex-desktop-relay.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-严格 Doctor 通过后，完全退出并重新打开 Codex Desktop，让新进程读取 relay pointer。正常停止请使用 `stop-bridge.ps1`，不要单独结束 Bridge、supervisor 或 App Server 进程。
+严格 Doctor 通过后，完全退出并重新打开 ChatGPT/Codex Desktop，让新进程读取 relay pointer。正常停止请使用对应平台的 `stop-bridge.sh` 或 `stop-bridge.ps1`，不要单独结束 Bridge、supervisor 或 App Server 进程。
 
 升级固定 release：
 
@@ -194,11 +219,12 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 .\update.ps1 -Version <目标 release tag>
 ```
 
-升级器会拒绝脏工作树，保留本机配置、DPAPI 密文、绑定、Session 设置、待提交附件草稿、队列、输入账本和投递状态；失败时自动回滚。完整恢复步骤见 [Windows 安装指南：更新](docs/INSTALL.md#更新)。
+两个平台的升级器都会拒绝脏工作树，保留本机配置、凭据、绑定、Session 设置、待提交附件草稿、队列、输入账本和投递状态；失败时自动回滚。macOS 使用 `./update.sh --version <tag>`，Windows 使用 `.\update.ps1 -Version <tag>`；不得跨平台混用。详见 [macOS 更新](docs/INSTALL_MACOS.md#更新固定版本) 与 [Windows 更新](docs/INSTALL.md#更新)。
 
 ## 文档
 
 - [Session Relay 行为、命令与生命周期参考](docs/SESSION_RELAY.md)
+- [macOS 安装与运维](docs/INSTALL_MACOS.md)
 - [Windows 安装与升级](docs/INSTALL.md)
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
@@ -207,10 +233,10 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 ## 开发与验证
 
-```powershell
+```bash
 npm ci
 npm test
-node --check .\session-relay.mjs
+node --check ./session-relay.mjs
 ```
 
-提交前还应运行 `git diff --check`。真实 `bridge.config.json`、DPAPI 数据、运行状态、日志和身份/会话标识不得提交到仓库。
+提交前还应运行 `git diff --check`。真实 `bridge.config.json`、Keychain/DPAPI 凭据、运行状态、日志和身份/会话标识不得提交到仓库。
