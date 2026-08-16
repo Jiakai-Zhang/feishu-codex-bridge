@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createSerializedFileWriter, readJsonArrayFile } from "../persistence/serialized-json-file.mjs";
 import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs";
 
 const MAX_STORED_PROGRESS = 12;
@@ -216,23 +216,15 @@ function normalizeRecord(record) {
 
 export class SessionStreamCardStore {
   constructor(filePath, records = []) {
-    this.filePath = filePath;
     this.records = new Map(records.map((record) => {
       const normalized = normalizeRecord(record);
       return [recordKey(normalized.threadId, normalized.turnId), normalized];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   static async open(filePath) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Stream card store must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Stream card store");
     return new SessionStreamCardStore(filePath, records);
   }
 
@@ -280,10 +272,6 @@ export class SessionStreamCardStore {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }

@@ -15,6 +15,7 @@ import {
   externalTurnDeliveryId,
 } from "../codex/codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "../persistence/delivery-outbox.mjs";
+import { createSerializedFileWriter } from "../persistence/serialized-json-file.mjs";
 import {
   FEISHU_FILE_MAX_BYTES,
   FEISHU_IMAGE_MAX_BYTES,
@@ -204,7 +205,7 @@ try {
 } catch (error) {
   if (error?.code !== "ENOENT") throw error;
 }
-let completedWriteTail = Promise.resolve();
+const writeCompleted = createSerializedFileWriter(completedPath);
 let connectedBotOpenId = config.agent.botOpenId;
 let channelConnected = false;
 let deliveryRetryInFlight = false;
@@ -276,11 +277,7 @@ async function persistCompleted(messageId) {
   completed.add(messageId);
   if (completed.size > 10_000) completed = new Set([...completed].slice(-8_000));
   const snapshot = JSON.stringify([...completed], null, 2);
-  completedWriteTail = completedWriteTail.then(
-    () => fs.writeFile(completedPath, snapshot, "utf8"),
-    () => fs.writeFile(completedPath, snapshot, "utf8"),
-  );
-  await completedWriteTail;
+  await writeCompleted(snapshot);
 }
 
 async function resolveNativeFileDelivery(record) {

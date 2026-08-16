@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createSerializedFileWriter, readJsonArrayFile } from "./serialized-json-file.mjs";
 
 function normalizeRecord(record) {
   if (!record || typeof record !== "object") {
@@ -42,23 +42,15 @@ function normalizeRecord(record) {
 
 export class DeliveryOutbox {
   constructor(filePath, records = []) {
-    this.filePath = filePath;
     this.records = new Map(records.map((record) => {
       const normalized = normalizeRecord(record);
       return [normalized.deliveryId, normalized];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   static async open(filePath) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Delivery outbox must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Delivery outbox");
     return new DeliveryOutbox(filePath, records);
   }
 
@@ -117,11 +109,7 @@ export class DeliveryOutbox {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }
 

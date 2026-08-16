@@ -1,5 +1,5 @@
 import { execFile as nodeExecFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { createSerializedFileWriter, readJsonArrayFile } from "../persistence/serialized-json-file.mjs";
 import { parseJsonEnvelope, requiredString } from "./lark-cli-json.mjs";
 
 function safeDocumentUrl(value) {
@@ -146,23 +146,16 @@ function normalizeRecord(record) {
 
 export class LongAnswerDocumentStore {
   constructor(filePath, records = []) {
-    this.filePath = requiredString(filePath, "filePath");
+    const normalizedFilePath = requiredString(filePath, "filePath");
     this.records = new Map(records.map((record) => {
       const normalized = normalizeRecord(record);
       return [documentKey(normalized.threadId, normalized.turnId), normalized];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(normalizedFilePath);
   }
 
   static async open(filePath) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Long-answer document store must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Long-answer document store");
     return new LongAnswerDocumentStore(filePath, records);
   }
 
@@ -192,10 +185,6 @@ export class LongAnswerDocumentStore {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }

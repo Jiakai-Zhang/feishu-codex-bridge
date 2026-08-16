@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createSerializedFileWriter, readJsonArrayFile } from "../../../persistence/serialized-json-file.mjs";
 
 function normalize(record) {
   if (!record?.event?.eventId || typeof record.peerAgentId !== "string" || typeof record.chatId !== "string") {
@@ -23,23 +23,16 @@ function errorCode(error) {
 
 export class AgentEventOutbox {
   static async open(filePath) {
-    let records = [];
-    try {
-      records = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(records)) throw new TypeError("Agent event outbox must contain an array");
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Agent event outbox");
     return new AgentEventOutbox(filePath, records);
   }
 
   constructor(filePath, records = []) {
-    this.filePath = filePath;
     this.records = new Map(records.map((record) => {
       const value = normalize(record);
       return [value.eventId, value];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   size() {
@@ -88,10 +81,6 @@ export class AgentEventOutbox {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }
