@@ -9,7 +9,7 @@ import {
   SessionStreamCardStore,
 } from "../../../src/feishu/session-stream-card.mjs";
 
-test("plans a durable completion mention before native attachments", () => {
+test("reposts the final answer after updating the stream card", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "reply",
     deliveryId: "final-a",
@@ -22,16 +22,16 @@ test("plans a durable completion mention before native attachments", () => {
     fileName: "report.pdf",
     fileSize: 42,
     modifiedAtMs: 10,
-  }], "ou_owner");
+  }]);
 
   assert.equal(records.length, 2);
-  assert.equal(records[0].deliveryId, "final-a:mention");
-  assert.equal(records[0].post.zh_cn.content[0][0].tag, "at");
+  assert.equal(records[0].deliveryId, "final-a");
+  assert.equal(records[0].kind, "reply");
   assert.equal(records[1].kind, "file");
-  assert.equal(records[1].dependsOn, "final-a:mention");
+  assert.equal(records[1].dependsOn, "final-a");
 });
 
-test("sends native attachments directly when final mentions are disabled", () => {
+test("reposts proactive final answers before native attachments", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "send",
     deliveryId: "final-b",
@@ -39,9 +39,10 @@ test("sends native attachments directly when final mentions are disabled", () =>
     createdAt: 100,
   }, [{ localPath: "C:\\tmp\\result.zip", fileName: "result.zip" }]);
 
-  assert.equal(records.length, 1);
-  assert.equal(records[0].kind, "file");
-  assert.equal(records[0].dependsOn, undefined);
+  assert.equal(records.length, 2);
+  assert.equal(records[0].kind, "send");
+  assert.equal(records[1].kind, "file");
+  assert.equal(records[1].dependsOn, "final-b");
   assert.equal(records[0].messageId, undefined);
 });
 

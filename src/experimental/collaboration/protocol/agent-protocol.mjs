@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { canonicalGitHubRepository } from "./collaboration-request-inbox.mjs";
 
-export const AGENT_EVENT_KINDS = Object.freeze([
+const AGENT_EVENT_KINDS = Object.freeze([
   "task.request",
   "task.accepted",
   "task.progress",

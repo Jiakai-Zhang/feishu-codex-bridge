@@ -15,10 +15,12 @@ import {
   externalTurnDeliveryId,
 } from "../codex/codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "../persistence/delivery-outbox.mjs";
+import { createSerializedFileWriter } from "../persistence/serialized-json-file.mjs";
 import {
   FEISHU_FILE_MAX_BYTES,
   FEISHU_IMAGE_MAX_BYTES,
   buildNativeAttachmentDeliveries,
+  buildNativeAttachmentMessage,
   classifyFeishuImageSize,
   inspectFeishuNativeAttachment,
   uploadFeishuNativeAttachment,
@@ -204,7 +206,7 @@ try {
 } catch (error) {
   if (error?.code !== "ENOENT") throw error;
 }
-let completedWriteTail = Promise.resolve();
+const writeCompleted = createSerializedFileWriter(completedPath);
 let connectedBotOpenId = config.agent.botOpenId;
 let channelConnected = false;
 let deliveryRetryInFlight = false;
@@ -276,11 +278,7 @@ async function persistCompleted(messageId) {
   completed.add(messageId);
   if (completed.size > 10_000) completed = new Set([...completed].slice(-8_000));
   const snapshot = JSON.stringify([...completed], null, 2);
-  completedWriteTail = completedWriteTail.then(
-    () => fs.writeFile(completedPath, snapshot, "utf8"),
-    () => fs.writeFile(completedPath, snapshot, "utf8"),
-  );
-  await completedWriteTail;
+  await writeCompleted(snapshot);
 }
 
 async function resolveNativeFileDelivery(record) {
@@ -292,6 +290,7 @@ async function resolveNativeFileDelivery(record) {
     fileName: uploaded.fileName,
     fileSize: uploaded.fileSize,
     modifiedAtMs: uploaded.modifiedAtMs,
+    mediaType: uploaded.mediaType,
   };
   await deliveryOutbox.put(updated);
   return updated;
@@ -303,12 +302,13 @@ async function deliverPendingRecord(record) {
     if (!binding) throw new Error("Native attachment delivery has no configured group binding");
     await inspectBinding(binding);
     const delivery = await resolveNativeFileDelivery(record);
-    const content = JSON.stringify({ file_key: delivery.fileKey });
+    const message = buildNativeAttachmentMessage(delivery);
+    const content = JSON.stringify(message.content);
     const response = delivery.messageId
       ? await channel.rawClient.im.message.reply({
         data: {
           content,
-          msg_type: "file",
+          msg_type: message.msgType,
           reply_in_thread: Boolean(delivery.threadId),
           uuid: deliveryIdempotencyKey(delivery.deliveryId),
         },
@@ -319,7 +319,7 @@ async function deliverPendingRecord(record) {
         data: {
           receive_id: delivery.chatId,
           content,
-          msg_type: "file",
+          msg_type: message.msgType,
           uuid: deliveryIdempotencyKey(delivery.deliveryId),
         },
       });
@@ -750,14 +750,14 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
   }
 }
 
-async function queueStreamCardFollowups(baseRecord, attachments, mentionOpenId) {
-  const records = buildSessionStreamCardFollowups(baseRecord, attachments, mentionOpenId);
-  await queueDeliveryBundle(records, records.length > 0 ? "stream card follow-up delivery completed" : undefined);
+async function queueStreamCardFollowups(baseRecord, attachments) {
+  const records = buildSessionStreamCardFollowups(baseRecord, attachments);
+  await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media, mentionOpenId) {
+async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
   if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
-  await queueStreamCardFollowups(baseDelivery, media.attachments, mentionOpenId);
+  await queueStreamCardFollowups(baseDelivery, media.attachments);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
   return true;
@@ -1284,7 +1284,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1321,7 +1321,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1361,7 +1361,7 @@ async function processCompletedTurn(record) {
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }

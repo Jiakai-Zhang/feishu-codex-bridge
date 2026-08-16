@@ -1,5 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import os from "node:os";
+import { parseJsonEnvelope, requiredString } from "./lark-cli-json.mjs";
 
 const CHAT_ID = /^oc_[A-Za-z0-9_-]+$/;
 
@@ -13,31 +14,11 @@ export class FeishuFeedGroupError extends Error {
   }
 }
 
-function requiredString(value, field) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new TypeError(`${field} is required`);
-  }
-  return value.trim();
-}
-
 export function buildAgentFeedGroupName({
   hostname = os.hostname(),
   agentName = "Codex",
 } = {}) {
   return `${requiredString(hostname, "hostname")}-${requiredString(agentName, "agentName")}`;
-}
-
-function parseJsonEnvelope(text) {
-  const value = String(text || "").trim();
-  if (!value) return undefined;
-  try { return JSON.parse(value); }
-  catch {}
-
-  const start = value.indexOf("{");
-  const end = value.lastIndexOf("}");
-  if (start < 0 || end < start) return undefined;
-  try { return JSON.parse(value.slice(start, end + 1)); }
-  catch { return undefined; }
 }
 
 function commandFailure(error, stdout, stderr) {

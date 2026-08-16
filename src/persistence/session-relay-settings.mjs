@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { createSerializedFileWriter } from "./serialized-json-file.mjs";
 
 export const DEFAULT_SESSION_RELAY_SETTINGS = Object.freeze({
   inputMode: "queue",
@@ -54,14 +55,13 @@ export class SessionRelaySettingsStore {
     defaults = DEFAULT_SESSION_RELAY_SETTINGS,
     sessionFallback = defaults,
   } = {}) {
-    this.filePath = filePath;
     this.defaults = { ...normalizeSessionRelaySettings(defaults) };
     this.sessionFallback = { ...normalizeSessionRelaySettings(sessionFallback) };
     this.records = new Map(records.map((record) => {
       const value = normalizeRecord(record);
       return [value.threadId, value];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   static async open(filePath, { legacyInstall = false } = {}) {
@@ -164,10 +164,6 @@ export class SessionRelaySettingsStore {
       sessionFallback: normalizeSessionRelaySettings(this.sessionFallback),
       sessions: this.list(),
     }, null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }

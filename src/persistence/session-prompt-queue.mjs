@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { normalizeCodexPromptAttachments } from "../feishu/feishu-inbound-attachment.mjs";
+import { createSerializedFileWriter, readJsonArrayFile } from "./serialized-json-file.mjs";
 
 export class SessionPromptQueueError extends Error {
   constructor(code, message, options) {
@@ -53,7 +53,6 @@ export class SessionPromptQueue {
     onAccepted = async () => {},
     onError = () => {},
   } = {}) {
-    this.filePath = filePath;
     this.maxPerSession = maxPerSession;
     this.getController = getController;
     this.onAccepted = onAccepted;
@@ -62,20 +61,13 @@ export class SessionPromptQueue {
       const value = normalizeRecord(record);
       return [value.messageId, value];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
     this.threadTails = new Map();
     this.dispatching = new Map();
   }
 
   static async open(filePath, options) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Session prompt queue must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Session prompt queue");
     return new SessionPromptQueue(filePath, records, options);
   }
 
@@ -232,10 +224,6 @@ export class SessionPromptQueue {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }

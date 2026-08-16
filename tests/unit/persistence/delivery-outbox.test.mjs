@@ -76,8 +76,9 @@ test("persists an ordered final-answer and native-file delivery bundle", async (
         deliveryId: "codex-turn:thread:turn:attachment:1",
         dependsOn: "codex-turn:thread:turn",
         chatId: "oc_1",
-        localPath: "C:/output/report.pdf",
-        fileName: "report.pdf",
+        localPath: "C:/output/demo.mp4",
+        fileName: "demo.mp4",
+        mediaType: "video",
         fileSize: 123,
         createdAt: 101,
       },
@@ -87,7 +88,8 @@ test("persists an ordered final-answer and native-file delivery bundle", async (
     assert.equal(answer.kind, "send");
     assert.equal(attachment.kind, "file");
     assert.equal(attachment.dependsOn, answer.deliveryId);
-    assert.equal(attachment.fileName, "report.pdf");
+    assert.equal(attachment.fileName, "demo.mp4");
+    assert.equal(attachment.mediaType, "video");
     assert.equal(attachment.fileSize, 123);
   });
 });

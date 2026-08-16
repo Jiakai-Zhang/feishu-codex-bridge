@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createSerializedFileWriter, readJsonArrayFile } from "./serialized-json-file.mjs";
 
 function normalize(record) {
   if (!record || typeof record !== "object") throw new TypeError("Input ledger record must be an object");
@@ -15,24 +15,16 @@ function normalize(record) {
 
 export class SessionInputLedger {
   constructor(filePath, records = [], { maxEntries = 10_000 } = {}) {
-    this.filePath = filePath;
     this.maxEntries = maxEntries;
     this.records = new Map(records.map((record) => {
       const value = normalize(record);
       return [value.messageId, value];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   static async open(filePath, options) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Input ledger must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Input ledger");
     return new SessionInputLedger(filePath, records, options);
   }
 
@@ -67,10 +59,6 @@ export class SessionInputLedger {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }
