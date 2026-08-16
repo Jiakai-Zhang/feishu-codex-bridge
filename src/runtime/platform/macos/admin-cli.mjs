@@ -46,6 +46,7 @@ import {
   setLaunchAgentEnabled,
   unsetLaunchEnvironmentIfOwned,
 } from "./launchd-service-manager.mjs";
+import { launchEnvironment } from "./launch-environment.mjs";
 import {
   keychainHasSecret,
   keychainIdentity,

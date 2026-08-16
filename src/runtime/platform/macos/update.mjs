@@ -21,6 +21,10 @@ import {
   setLaunchAgentEnabled,
   unsetLaunchEnvironmentIfOwned,
 } from "./launchd-service-manager.mjs";
+import {
+  embeddedDesktopAppServerRunning,
+  runningDesktopApplications,
+} from "./desktop-runtime.mjs";
 import { isExpectedProcess, readPid } from "./process-inspector.mjs";
 import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
@@ -69,6 +73,25 @@ function optionMap(args) {
 
 function approvedOrigin(value) {
   return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)(?:ninmon|Jiakai-Zhang)\/feishu-codex-bridge(?:\.git)?\/?$/i.test(String(value || ""));
+}
+
+export async function assertSafeUpdateContext({
+  testMode = false,
+  environment = process.env,
+  listDesktopApplications = runningDesktopApplications,
+  isEmbeddedDesktopAppServerRunning = embeddedDesktopAppServerRunning,
+} = {}) {
+  if (testMode) return;
+  if (environment.CODEX_THREAD_ID || environment.CODEX_SESSION_ID) {
+    throw new Error("Run update.sh from an independent Terminal, not from inside an active Codex task.");
+  }
+  const [desktopApplications, embeddedAppServer] = await Promise.all([
+    listDesktopApplications(),
+    isEmbeddedDesktopAppServerRunning(),
+  ]);
+  if (desktopApplications.length > 0 || embeddedAppServer) {
+    throw new Error("Fully quit ChatGPT/Codex Desktop before updating, then run update.sh from an independent Terminal.");
+  }
 }
 
 function runFile(executable, args, { cwd = repositoryRoot, capture = false, allowFailure = false, env = process.env } = {}) {
@@ -271,6 +294,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   const testMode = options.has("test-mode");
   if (!VERSION_PATTERN.test(version)) throw new Error("--version must be an explicit semantic release tag such as v1.2.3.");
   await assertTestMode(testMode);
+  await assertSafeUpdateContext({ testMode });
 
   const gitDirectory = path.join(repositoryRoot, ".git");
   if (!(await exists(gitDirectory))) throw new Error("This updater must run from a Git checkout of Feishu Codex Bridge.");

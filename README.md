@@ -220,7 +220,7 @@ Windows：
 .\update.ps1 -Version <目标 release tag>
 ```
 
-两个平台的升级器都会拒绝脏工作树，保留本机配置、凭据、绑定、Session 设置、待提交附件草稿、队列、输入账本和投递状态；失败时自动回滚。macOS 使用 `./update.sh --version <tag>`，Windows 使用 `.\update.ps1 -Version <tag>`；不得跨平台混用。详见 [macOS 更新](docs/INSTALL_MACOS.md#更新固定版本) 与 [Windows 更新](docs/INSTALL.md#更新)。
+两个平台的升级器都会拒绝脏工作树，保留本机配置、凭据、绑定、Session 设置、待提交附件草稿、队列、输入账本和投递状态；失败时自动回滚。macOS 使用 `./update.sh --version <tag>`，且必须先完全退出 Desktop，再从独立 Terminal 执行；updater 会拒绝从活跃 Codex 任务中自更新。Windows 使用 `.\update.ps1 -Version <tag>`；不得跨平台混用。详见 [macOS 更新](docs/INSTALL_MACOS.md#更新固定版本) 与 [Windows 更新](docs/INSTALL.md#更新)。
 
 ## 文档
 

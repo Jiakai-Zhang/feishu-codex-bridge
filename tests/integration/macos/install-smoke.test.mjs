@@ -106,6 +106,7 @@ test("macOS installer creates a valid private config and launchd package without
   assert.equal(stagedConfig.larkCliEntry, path.join(installation, "node_modules", "@larksuite", "cli", "scripts", "run.js"));
   assert.equal((await fs.stat(stagedConfigPath)).mode & 0o777, 0o600);
   await fs.access(path.join(installation, "src", "runtime", "platform", "macos", "app-server-entry.mjs"));
+  await fs.access(path.join(installation, "src", "runtime", "platform", "macos", "launch-environment.mjs"));
   await fs.access(stagedConfig.larkCliEntry);
 
   stagedConfig.sessionRelay.bindings = [{

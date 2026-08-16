@@ -18,11 +18,13 @@ import {
   buildLaunchAgentPlist,
   setLaunchAgentEnabled,
 } from "./launchd-service-manager.mjs";
+import { launchEnvironment } from "./launch-environment.mjs";
 import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 const execFile = promisify(nodeExecFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const REQUIRED_RUNTIME_PATHS = Object.freeze([
+  "src/runtime/platform/macos/launch-environment.mjs",
   "src/runtime/platform/macos/environment-entry.mjs",
   "src/runtime/platform/macos/app-server-entry.mjs",
   "src/runtime/platform/macos/bridge-supervisor-entry.mjs",
@@ -255,14 +257,6 @@ export async function installMacOSRuntime(config) {
     await fs.rm(stagingDir, { recursive: true, force: true });
     throw error;
   }
-}
-
-function launchEnvironment(nodeExecutable) {
-  return {
-    HOME: os.homedir(),
-    USERPROFILE: os.homedir(),
-    PATH: `${path.dirname(nodeExecutable)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
-  };
 }
 
 export async function writeMacOSLaunchAgents(config) {

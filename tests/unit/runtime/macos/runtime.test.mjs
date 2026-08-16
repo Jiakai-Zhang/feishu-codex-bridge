@@ -17,7 +17,9 @@ import {
 } from "../../../../src/runtime/shared/private-state.mjs";
 import { keychainIdentity } from "../../../../src/runtime/platform/macos/keychain-credential-store.mjs";
 import { buildLaunchAgentPlist } from "../../../../src/runtime/platform/macos/launchd-service-manager.mjs";
+import { launchEnvironment } from "../../../../src/runtime/platform/macos/launch-environment.mjs";
 import { runtimeLayout } from "../../../../src/runtime/platform/macos/runtime-layout.mjs";
+import { assertSafeUpdateContext } from "../../../../src/runtime/platform/macos/update.mjs";
 
 const execFile = promisify(nodeExecFile);
 
@@ -62,6 +64,52 @@ test("macOS runtime layout uses native Application Support, LaunchAgents, and Lo
   assert.equal(layout.installPointerPath, path.join(
     os.homedir(), "Library", "Application Support", "FeishuCodexBridge", "bootstrap", "installation.json",
   ));
+});
+
+test("macOS launch environment is shared by installer and relay launch agents", () => {
+  const nodeExecutable = path.join(os.tmpdir(), "node runtime", "bin", "node");
+  assert.deepEqual(launchEnvironment(nodeExecutable), {
+    HOME: os.homedir(),
+    USERPROFILE: os.homedir(),
+    PATH: `${path.dirname(nodeExecutable)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+  });
+});
+
+test("macOS updater refuses active Codex and Desktop contexts before changing services", async () => {
+  let desktopProbeCount = 0;
+  await assert.rejects(() => assertSafeUpdateContext({
+    environment: { CODEX_THREAD_ID: "private-thread-id" },
+    listDesktopApplications: async () => {
+      desktopProbeCount += 1;
+      return [];
+    },
+    isEmbeddedDesktopAppServerRunning: async () => false,
+  }), /independent Terminal/);
+  assert.equal(desktopProbeCount, 0);
+
+  await assert.rejects(() => assertSafeUpdateContext({
+    environment: {},
+    listDesktopApplications: async () => [{ bundlePath: "/Applications/ChatGPT.app" }],
+    isEmbeddedDesktopAppServerRunning: async () => false,
+  }), /Fully quit ChatGPT\/Codex Desktop/);
+
+  await assert.rejects(() => assertSafeUpdateContext({
+    environment: {},
+    listDesktopApplications: async () => [],
+    isEmbeddedDesktopAppServerRunning: async () => true,
+  }), /Fully quit ChatGPT\/Codex Desktop/);
+
+  await assert.doesNotReject(() => assertSafeUpdateContext({
+    environment: {},
+    listDesktopApplications: async () => [],
+    isEmbeddedDesktopAppServerRunning: async () => false,
+  }));
+  await assert.doesNotReject(() => assertSafeUpdateContext({
+    testMode: true,
+    environment: { CODEX_SESSION_ID: "test-session" },
+    listDesktopApplications: async () => [{ bundlePath: "/Applications/ChatGPT.app" }],
+    isEmbeddedDesktopAppServerRunning: async () => true,
+  }));
 });
 
 test("App Server readiness probe requires a successful /readyz response", async (t) => {
