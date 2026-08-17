@@ -18,7 +18,10 @@ import {
   buildLaunchAgentPlist,
   setLaunchAgentEnabled,
 } from "./launchd-service-manager.mjs";
-import { launchEnvironment } from "./launch-environment.mjs";
+import {
+  directNetworkEnvironment,
+  launchEnvironment,
+} from "./launch-environment.mjs";
 import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 const execFile = promisify(nodeExecFile);
@@ -117,6 +120,7 @@ export async function larkJson(nodeExecutable, entryPath, args) {
   try {
     const { stdout, stderr } = await execFile(nodeExecutable, [entryPath, ...args], {
       encoding: "utf8",
+      env: directNetworkEnvironment(),
       timeout: 30_000,
       maxBuffer: 2_000_000,
     });

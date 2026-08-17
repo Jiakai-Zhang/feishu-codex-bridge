@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文锁定到包含 `configure-feishu-app.sh` 与 `verify-feishu-app.sh` 的 `v0.3.2-macos-rc.8`。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文锁定到包含 `configure-feishu-app.sh`、`verify-feishu-app.sh`、watchdog 驻留重试与飞书直连校验隔离的 `v0.3.2-macos-rc.9`。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 使用方法
 
@@ -15,7 +15,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- tag：v0.3.2-macos-rc.8
+- tag：v0.3.2-macos-rc.9
 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
@@ -36,7 +36,7 @@
 
    如果缺少系统依赖，先说明缺少什么并请求用户批准；不要擅自选择 Homebrew 或其他系统安装方式。如果系统电脑名称为空，先让用户在 macOS“系统设置 > 通用 > 共享”中设置，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置，再克隆仓库并检出精确 tag v0.3.2-macos-rc.8。
+2. 让用户确认仓库的最终存放位置，再克隆仓库并检出精确 tag v0.3.2-macos-rc.9。
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
    - 不得使用 git reset、git clean 或 git stash；
@@ -121,7 +121,7 @@
    浏览器授权必须由用户本人确认。授权完成后运行：
    ./verify-feishu-app.sh
 
-   该验证器只输出不含身份标识的安全摘要。只有输出 ok=true，且应用、Bot、用户身份、四项用户 OAuth scope、消息事件发布状态和消息事件所需权限均通过，才能继续。不得运行后再把原始 auth status 或 event dry-run JSON 粘贴到聊天、Issue 或日志。
+   该验证器只输出不含身份标识的安全摘要。macOS 飞书 CLI 入口必须自动移除当前 Codex/Desktop 进程继承的 HTTP/HTTPS/ALL proxy 变量，使飞书身份与事件校验保持直连；不得要求用户临时修改已保存的 Desktop 代理。只有输出 ok=true，且应用、Bot、用户身份、四项用户 OAuth scope、消息事件发布状态和消息事件所需权限均通过，才能继续。不得运行后再把原始 auth status 或 event dry-run JSON 粘贴到聊天、Issue 或日志。
 
 10. 运行：
     ./install.sh --skip-dependency-install
@@ -147,6 +147,7 @@
     - 用户明确选择代理时，先验证 URL 为无认证且带明确端口的 127.0.0.1/localhost/[::1] 地址，再使用：
       ./launch-codex-desktop-with-relay.sh --proxy <用户确认的本机代理 URL>
     - 代理只应用于 Desktop 与共享 Codex App Server；飞书 Bridge、Channel 和 watchdog 保持直连。
+    - 代理状态变化后，启动脚本必须重启并验证共享 App Server，再重新注册 relay watchdog；必须等待 watchdog 保持加载并发布新鲜 ready 心跳。首次注册未驻留时由脚本自动完整重试一次，两次均失败才停止，不得继续打开 Desktop，也不得把手工重跑 configure-codex-desktop-relay.sh 当作正常安装步骤。
 
 13. 最终启动 Desktop 前：
     - 在当前仓库目录为用户打开一个独立 Terminal；

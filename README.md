@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.8` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：Windows 有固定 beta release；macOS 移植的下一候选版本为 `v0.3.2-macos-rc.9`，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -10,11 +10,12 @@
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
 | 上游 `7c8668e` | 已合并附件 PR #12，并完成领域目录迁移、稳定/实验代码隔离、Codex Session 拆分和 ESLint 语义检查 |
-| `v0.3.2-macos-rc.8` | 在该上游基线上提供 macOS Keychain、launchd、安装/Doctor、Desktop relay，并新增一次模板配置飞书应用、明确选择代理和免私聊初次绑定 |
+| `v0.3.2-macos-rc.9` | 在 rc.8 安装流程上修复代理切换后的 watchdog 驻留时序，并隔离飞书直连校验与 Desktop 代理环境 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
+- [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
 - [v0.3.2-macos-rc.8 Release Note](docs/releases/v0.3.2-macos-rc.8.md)
 - [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
 - [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
@@ -52,17 +53,17 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用固定候选 tag `v0.3.2-macos-rc.8`。把下面整段复制到这台 Mac 上一个新的 Codex 任务：
+macOS 请使用固定候选 tag `v0.3.2-macos-rc.9`。把下面整段复制到这台 Mac 上一个新的 Codex 任务：
 
 ```text
 请根据以下 GitHub 安装协议，在这台 Mac 上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.8/docs/INSTALL_MACOS_PROMPT.md
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.9/docs/INSTALL_MACOS_PROMPT.md
 
 要求：
 - 完整读取该文件，不要只做摘要。
 - 将文件中“可复制 Prompt”部分视为我的完整执行指令。
 - 安装仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- 必须安装精确版本：v0.3.2-macos-rc.8
+- 必须安装精确版本：v0.3.2-macos-rc.9
 - 从只读预检开始，按照协议自主执行所有安全步骤。
 - 需要我完成浏览器认证、应用名称确认、飞书应用模板确认、管理员审批、应用发布、OAuth、App Secret 安全输入或完整重启 Codex Desktop 时，明确告诉我并暂停等待。
 - 不得要求我在聊天中发送 App Secret、Token、App ID 或其他身份信息。

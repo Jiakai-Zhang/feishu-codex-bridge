@@ -54,16 +54,51 @@ test("macOS Desktop relay activation reloads the launchd registration", async ()
   const activationSource = source.slice(activationStart, activationEnd);
   const bootout = activationSource.indexOf("bootoutLaunchAgent(MACOS_LABELS.relay)");
   const activate = activationSource.indexOf("writeJsonAtomic(status.layout.relayStatePath, activation)");
-  const bootstrap = activationSource.indexOf("bootstrapLaunchAgent(MACOS_LABELS.relay");
+  const register = activationSource.indexOf("registerRelayWatchdog(status, activation)");
   assert.ok(bootout >= 0);
   assert.ok(activate > bootout);
-  assert.ok(bootstrap > activate);
+  assert.ok(register > activate);
+  const registrationStart = source.indexOf("async function registerRelayWatchdog");
+  const registrationEnd = source.indexOf("async function activateDesktopRelay", registrationStart);
+  const registrationSource = source.slice(registrationStart, registrationEnd);
+  assert.match(registrationSource, /attempt <= 2/);
+  assert.match(registrationSource, /bootoutLaunchAgent\(MACOS_LABELS\.relay\)/);
+  assert.match(registrationSource, /bootstrapLaunchAgent\(MACOS_LABELS\.relay/);
+  assert.match(registrationSource, /"kickstart", "-k"/);
+  assert.match(registrationSource, /relayActivationReady\(status, activation\)/);
   const proxyStart = source.indexOf("async function ensureSharedAppServerProxy");
   const proxyEnd = source.indexOf("async function launchDesktopRelayCommand", proxyStart);
   assert.match(source.slice(proxyStart, proxyEnd), /await activateDesktopRelay\(status, proxyUrl\)/);
   const configureStart = source.indexOf("async function configureRelayCommand");
   const configureEnd = source.indexOf("async function larkCliCommand", configureStart);
   assert.match(source.slice(configureStart, configureEnd), /await activateDesktopRelay\(status, desktopProxyUrl\)/);
+});
+
+test("macOS Feishu CLI checks remove inherited Desktop proxy variables", async () => {
+  const [admin, installer] = await Promise.all([
+    fs.readFile(path.join(
+      repositoryRoot,
+      "src",
+      "runtime",
+      "platform",
+      "macos",
+      "admin-cli.mjs",
+    ), "utf8"),
+    fs.readFile(path.join(
+      repositoryRoot,
+      "src",
+      "runtime",
+      "platform",
+      "macos",
+      "installer.mjs",
+    ), "utf8"),
+  ]);
+  const commandStart = admin.indexOf("async function larkCliCommand");
+  const commandEnd = admin.indexOf("async function main", commandStart);
+  assert.match(admin.slice(commandStart, commandEnd), /env: directNetworkEnvironment\(\)/);
+  const jsonStart = installer.indexOf("export async function larkJson");
+  const jsonEnd = installer.indexOf("async function larkIdentity", jsonStart);
+  assert.match(installer.slice(jsonStart, jsonEnd), /env: directNetworkEnvironment\(\)/);
 });
 
 test("macOS secret setup uses an interactive Keychain prompt, never a password argument", async () => {

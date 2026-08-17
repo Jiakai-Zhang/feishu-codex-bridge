@@ -16,8 +16,15 @@ import {
   writeFileAtomic,
 } from "../../../../src/runtime/shared/private-state.mjs";
 import { keychainIdentity } from "../../../../src/runtime/platform/macos/keychain-credential-store.mjs";
-import { buildLaunchAgentPlist } from "../../../../src/runtime/platform/macos/launchd-service-manager.mjs";
-import { launchEnvironment } from "../../../../src/runtime/platform/macos/launch-environment.mjs";
+import {
+  buildLaunchAgentPlist,
+  waitForLaunchAgentState,
+} from "../../../../src/runtime/platform/macos/launchd-service-manager.mjs";
+import {
+  directNetworkEnvironment,
+  launchEnvironment,
+  NETWORK_PROXY_ENVIRONMENT_VARIABLES,
+} from "../../../../src/runtime/platform/macos/launch-environment.mjs";
 import { openPrivateFeishuUrl } from "../../../../src/runtime/platform/macos/private-browser-redirect.mjs";
 import { runtimeLayout } from "../../../../src/runtime/platform/macos/runtime-layout.mjs";
 import { assertSafeUpdateContext } from "../../../../src/runtime/platform/macos/update.mjs";
@@ -74,6 +81,47 @@ test("macOS launch environment is shared by installer and relay launch agents", 
     USERPROFILE: os.homedir(),
     PATH: `${path.dirname(nodeExecutable)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   });
+});
+
+test("macOS direct network environment removes inherited Desktop proxy variables", () => {
+  const source = {
+    PATH: "/usr/bin:/bin",
+    CUSTOM_VALUE: "preserved",
+    HTTP_PROXY: "http://127.0.0.1:7897",
+    HTTPS_PROXY: "http://127.0.0.1:7897",
+    ALL_PROXY: "socks5://127.0.0.1:7897",
+    http_proxy: "http://127.0.0.1:7897",
+    https_proxy: "http://127.0.0.1:7897",
+    all_proxy: "socks5://127.0.0.1:7897",
+    NO_PROXY: "127.0.0.1",
+    no_proxy: "localhost",
+  };
+  const direct = directNetworkEnvironment(source);
+  assert.equal(direct.CUSTOM_VALUE, "preserved");
+  for (const name of NETWORK_PROXY_ENVIRONMENT_VARIABLES) {
+    assert.equal(name in direct, false, name);
+    assert.equal(name in source, true, `source ${name}`);
+  }
+});
+
+test("macOS launchd state wait covers asynchronous unregister completion", async () => {
+  const states = [true, true, false];
+  let calls = 0;
+  const settled = await waitForLaunchAgentState("com.example.test", false, {
+    timeoutMs: 100,
+    intervalMs: 1,
+    probe: async () => {
+      calls += 1;
+      return states.shift() ?? false;
+    },
+  });
+  assert.equal(settled, true);
+  assert.equal(calls, 3);
+  assert.equal(await waitForLaunchAgentState("com.example.test", true, {
+    timeoutMs: 5,
+    intervalMs: 1,
+    probe: async () => false,
+  }), false);
 });
 
 test("macOS updater refuses active Codex and Desktop contexts before changing services", async () => {

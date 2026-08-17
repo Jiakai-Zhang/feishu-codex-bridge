@@ -25,15 +25,35 @@ export async function launchAgentIsLoaded(label) {
   return (await launchctl(["print", `${launchDomain()}/${label}`], { allowFailure: true })).ok;
 }
 
+export async function waitForLaunchAgentState(label, expectedLoaded, {
+  timeoutMs = 5_000,
+  intervalMs = 100,
+  probe = launchAgentIsLoaded,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (Boolean(await probe(label)) === Boolean(expectedLoaded)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  } while (Date.now() <= deadline);
+  return false;
+}
+
 export async function bootstrapLaunchAgent(label, plistPath) {
-  if (!(await launchAgentIsLoaded(label))) {
-    await launchctl(["bootstrap", launchDomain(), plistPath]);
+  if (await launchAgentIsLoaded(label)) return;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await launchctl(["bootstrap", launchDomain(), plistPath], { allowFailure: true });
+    if (await waitForLaunchAgentState(label, true, { timeoutMs: 2_000 })) return;
   }
+  throw new Error(`LaunchAgent ${label} did not remain loaded after registration.`);
 }
 
 export async function bootoutLaunchAgent(label) {
   if (await launchAgentIsLoaded(label)) {
     await launchctl(["bootout", `${launchDomain()}/${label}`], { allowFailure: true });
+    if (!(await waitForLaunchAgentState(label, false))) {
+      throw new Error(`LaunchAgent ${label} did not unload before re-registration.`);
+    }
   }
 }
 

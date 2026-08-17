@@ -78,7 +78,7 @@ Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `
 ./verify-feishu-app.sh
 ```
 
-浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。只有 `ok=true`，且应用、Bot、用户身份、四项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
+浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。所有 macOS 飞书 CLI 入口都会从子进程环境中移除 Desktop 的 HTTP/HTTPS/ALL proxy 变量，确保身份和事件校验继续走飞书直连，不会因为当前 Codex 任务继承了 Desktop 代理而产生假阴性。只有 `ok=true`，且应用、Bot、用户身份、四项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
 
 ## 4. 生成本机配置
 
@@ -127,7 +127,9 @@ Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `
 ./launch-codex-desktop-with-relay.sh --proxy http://127.0.0.1:7897
 ```
 
-`--proxy` 只接受带明确端口、无认证的 loopback URL。代理环境只应用到 Desktop 与共享 Codex App Server；Feishu Bridge、Channel 和 watchdog 仍使用直连。
+`--proxy` 只接受带明确端口、无认证的 loopback URL。代理环境只应用到 Desktop 与共享 Codex App Server；Feishu Bridge、Channel、watchdog 以及 Doctor 使用的飞书 CLI 校验仍使用直连。
+
+代理状态发生变化时，启动器会保存选择、重启共享 App Server、等待其继承目标代理，再重新注册 relay watchdog。launchd 卸载必须确认旧注册已真正消失；新 watchdog 必须保持加载并发布新鲜的 `ready` 心跳。首次注册未驻留时，启动器会自动执行第二轮完整注册与 `kickstart`，两轮都失败才停止，且不会继续打开 Desktop。
 
 选定命令后，先在仓库目录打开独立 Terminal，再由用户完全退出 ChatGPT/Codex Desktop，并从该 Terminal 运行唯一选定的启动命令。macOS 上从 Dock 或自动恢复启动的 GUI 进程不一定会继承 relay 环境；安装脚本不会强制结束 Desktop 进程。
 

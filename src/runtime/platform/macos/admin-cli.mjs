@@ -47,7 +47,10 @@ import {
   setLaunchAgentEnabled,
   unsetLaunchEnvironmentIfOwned,
 } from "./launchd-service-manager.mjs";
-import { launchEnvironment } from "./launch-environment.mjs";
+import {
+  directNetworkEnvironment,
+  launchEnvironment,
+} from "./launch-environment.mjs";
 import {
   keychainHasSecret,
   keychainIdentity,
@@ -323,6 +326,51 @@ async function launchDesktopRelayCommand(args) {
   process.stdout.write("ChatGPT/Codex Desktop launched with the verified shared App Server relay.\n");
 }
 
+async function relayActivationReady(status, activation) {
+  if (!(await launchAgentIsLoaded(MACOS_LABELS.relay))) return false;
+  try {
+    const snapshot = JSON.parse(await fs.readFile(status.layout.relayStatusPath, "utf8"));
+    const heartbeatAge = Date.now() - Date.parse(snapshot.heartbeatAt);
+    return snapshot.activationId === activation.activationId
+      && snapshot.state === "ready"
+      && heartbeatAge >= -5_000
+      && heartbeatAge <= 10_000
+      && await getLaunchEnvironment(RELAY_ENVIRONMENT_VARIABLE) === status.endpoint.href;
+  } catch {
+    return false;
+  }
+}
+
+async function registerRelayWatchdog(status, activation) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    if (attempt > 1) {
+      await bootoutLaunchAgent(MACOS_LABELS.relay);
+      await unsetLaunchEnvironmentIfOwned(RELAY_ENVIRONMENT_VARIABLE, status.endpoint.href);
+    }
+    await fs.rm(status.layout.relayStatusPath, { force: true });
+    await setLaunchAgentEnabled(MACOS_LABELS.relay, true);
+    try {
+      await bootstrapLaunchAgent(MACOS_LABELS.relay, status.layout.relayPlistPath);
+      await launchctl(
+        ["kickstart", "-k", `${launchDomain()}/${MACOS_LABELS.relay}`],
+        { allowFailure: true },
+      );
+    } catch {
+      continue;
+    }
+    const ready = await waitUntil(
+      () => relayActivationReady(status, activation),
+      15_000,
+      250,
+    );
+    if (ready) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (await relayActivationReady(status, activation)) return true;
+    }
+  }
+  return false;
+}
+
 async function activateDesktopRelay(status, desktopProxyUrl) {
   const activation = {
     schemaVersion: 1,
@@ -350,16 +398,9 @@ async function activateDesktopRelay(status, desktopProxyUrl) {
   await bootoutLaunchAgent(MACOS_LABELS.relay);
   await unsetLaunchEnvironmentIfOwned(RELAY_ENVIRONMENT_VARIABLE, status.endpoint.href);
   await writeJsonAtomic(status.layout.relayStatePath, activation);
-  await setLaunchAgentEnabled(MACOS_LABELS.relay, true);
-  await bootstrapLaunchAgent(MACOS_LABELS.relay, status.layout.relayPlistPath);
-  const ready = await waitUntil(async () => {
-    try {
-      const snapshot = JSON.parse(await fs.readFile(status.layout.relayStatusPath, "utf8"));
-      return snapshot.activationId === activation.activationId && snapshot.state === "ready"
-        && await getLaunchEnvironment(RELAY_ENVIRONMENT_VARIABLE) === status.endpoint.href;
-    } catch { return false; }
-  }, 20_000, 250);
-  if (!ready) throw new Error("Desktop relay watchdog did not become ready.");
+  if (!(await registerRelayWatchdog(status, activation))) {
+    throw new Error("Desktop relay watchdog did not remain loaded and ready after two registration attempts.");
+  }
 }
 
 async function configureRelayCommand(args) {
@@ -388,7 +429,11 @@ async function larkCliCommand(args) {
   const entryPath = path.join(repositoryRoot, "node_modules", "@larksuite", "cli", "scripts", "run.js");
   await fs.access(entryPath);
   const code = await new Promise((resolve, reject) => {
-    const child = spawn(nodeExecutable, [entryPath, ...args], { cwd: repositoryRoot, stdio: "inherit" });
+    const child = spawn(nodeExecutable, [entryPath, ...args], {
+      cwd: repositoryRoot,
+      env: directNetworkEnvironment(),
+      stdio: "inherit",
+    });
     child.once("error", reject);
     child.once("close", (status) => resolve(status ?? 1));
   });
