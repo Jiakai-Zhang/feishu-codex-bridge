@@ -14,6 +14,7 @@ import {
   parseAttachmentsAction,
   parseSessionCommand,
   parseSettingsAction,
+  parseSteerAction,
 } from "../../../src/relay/session-relay-commands.mjs";
 
 test("recognizes only Bridge-owned slash commands and leaves unknown slash text as a prompt", () => {
@@ -25,6 +26,11 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   });
   assert.deepEqual(parseSessionCommand("/stop@relay_bot"), { name: "stop", args: "", raw: "/stop@relay_bot" });
   assert.deepEqual(parseSessionCommand("/queue run tests"), { name: "queue", args: "run tests", raw: "/queue run tests" });
+  assert.deepEqual(parseSessionCommand("/steer focus on the failing test"), {
+    name: "steer",
+    args: "focus on the failing test",
+    raw: "/steer focus on the failing test",
+  });
   assert.deepEqual(parseSessionCommand("/settings progress on"), {
     name: "settings",
     args: "progress on",
@@ -35,6 +41,7 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   assert.deepEqual(parseAttachmentsAction("clear"), { action: "clear" });
   assert.deepEqual(parseSessionCommand("/attachments"), { name: "attachments", args: "", raw: "/attachments" });
   assert.deepEqual(parseQueueAction("-- clear the cache"), { action: "enqueue", text: "clear the cache" });
+  assert.deepEqual(parseSteerAction("focus on tests"), { action: "submit", text: "focus on tests" });
   assert.deepEqual(parseSettingsAction("input queue"), { action: "input", value: "queue" });
   assert.deepEqual(parseSettingsAction("thinking on"), { action: "progress", value: true });
   assert.deepEqual(parseSettingsAction("mention off"), { action: "mention", value: false });
@@ -161,6 +168,22 @@ test("rejects malformed recognized commands instead of sending them to Codex", a
     () => executeSessionCommand(parseSessionCommand("/stop now"), { controller, threadId: "thread-id" }),
     /用法/,
   );
+  assert.throws(() => parseSteerAction(""), /\/steer <Prompt>/);
+});
+
+test("submits a one-shot steer without changing the persistent input mode", async () => {
+  const calls = [];
+  const result = await executeSessionCommand(parseSessionCommand("/steer focus on the API"), {
+    controller: {},
+    threadId: "thread-id",
+    steerPrompt: async (text) => {
+      calls.push(text);
+      return { kind: "steered" };
+    },
+  });
+
+  assert.deepEqual(calls, ["focus on the API"]);
+  assert.deepEqual(result, { kind: "steered" });
 });
 
 test("queues, lists, removes, and clears prompts through the persistent queue context", async () => {

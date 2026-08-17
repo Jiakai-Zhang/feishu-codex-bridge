@@ -25,7 +25,7 @@ owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 
 - PDF、Office 文档、压缩包、音视频和其他普通文件先流式下载到 Bridge 受控缓存，再按 Codex Desktop 自身持久化文件 Prompt 的格式加入输入：`Files mentioned by the user`、安全文件名、受控缓存绝对路径和 `My request for Codex`。模型因此可以直接读取原文件，Desktop 可按原生文件消息呈现；
 - 纯普通文件消息不会立即启动 Codex，而是成为当前 Session 的附件草稿；可以连续上传多个文件，第一条普通文字 Prompt 会原子地取走全部草稿附件并提交一次；
 - 已有附件草稿时，后续纯图片消息也加入同一草稿；没有草稿时，单独图片仍按原行为立即成为 Prompt；同一条富文本中的文字和图片仍立即一起提交；
-- `/status`、`/model` 等 Bridge 命令不会消费草稿；`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
+- `/status`、`/model` 等 Bridge 命令不会消费草稿；`/steer <Prompt>` 会取走草稿并临时作为调整方向提交，`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
 - 草稿、排队记录和附件元数据都会持久保存，Bridge 重启后不会丢失或退化成空 Prompt；同一 Session 的入站消息串行处理，避免连续上传与首条文字发生竞态；
 - 默认限制为单文件 30 MiB，单条消息或整份草稿最多 10 个资源、总计 60 MiB；缓存默认保留 7 天且最多占用 1 GiB，可通过 `sessionRelay.inboundAttachments` 调整；
 - 最终 Prompt 回显只显示图片或安全附件名，不显示飞书资源 key 与本机绝对路径。
@@ -38,6 +38,8 @@ owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 
 - `steer`：有活动 Turn 时调用 App Server 原生 `turn/steer`，把消息作为“调整方向”；只有确认 Session 已 idle 后才新建 Turn。
 
 `/queue <Prompt>` 总是显式创建独立新 Turn，不受当前普通消息模式影响。多条队列不会合并；Bridge 或共享 App Server 重启后仍会恢复，并通过原飞书消息 ID 对账，避免重复启动。
+
+`/steer <Prompt>` 只覆盖这一条输入：有活动 Turn 时通过原生 `turn/steer` 调整当前回答，Session 已空闲时则开始新 Turn。它不会修改 `/settings input queue|steer` 保存的默认模式。
 
 Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群的长期绑定保持不变，但 `/chat [首条 Prompt]` 可以在当前群或 Bot 私聊中创建独立临时 Session；`/endchat` 结束后，群内返回原绑定 Session。除了精确识别的 Session、临时 Chat 与绑定管理命令，其他文本（包括未知的 `/xxx`）都按当前 `queue|steer` 设置交给 Codex。
 
@@ -107,6 +109,14 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 ### `/stop`
 
 按当前精确活动 Turn 调用 `turn/interrupt`。若原生 Goal 正在运行，会先暂停 Goal，再中止当前 Turn，防止自动续跑。已有 `/queue` 项目保持不变。
+
+### `/steer`
+
+```text
+/steer <Prompt>
+```
+
+临时把这一条输入作为调整方向提交，不修改 Session 的默认输入模式。若当前有活动 Turn，则调用原生 `turn/steer`；若当前已经空闲，则明确开始一个新 Turn。当前 Session 有暂存附件时，附件会与该 Prompt 一起提交。
 
 ### `/queue`
 

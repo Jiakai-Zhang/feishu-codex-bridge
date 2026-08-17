@@ -145,6 +145,7 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 | `/schedule <自然语言需求>` | 进入日历助理，先确认方案，再用用户身份创建或修改飞书日程 |
 | `/status` | 查看连接、Turn、模型、Plan、Token、Goal、队列和待提交附件摘要 |
 | `/stop` | 暂停活动 Goal（如有）并中止当前 Turn；不清空队列 |
+| `/steer <Prompt>` | 临时把这一条作为当前回答的调整方向，不修改默认输入模式 |
 | `/queue <Prompt>` | 把 Prompt 作为独立新 Turn 持久排队 |
 | `/queue` / `remove` / `clear` | 查看、删除或清空待执行 Prompt |
 | `/attachments` / `clear` | 查看或放弃当前 Session 暂存的待提交附件 |
@@ -173,7 +174,7 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 ## 输出、文件与可靠性
 
 - 飞书入站默认单文件不超过 30 MiB；单条消息或同一 Session 的整份暂存草稿最多 10 个资源、总计 60 MiB。暂存附件和已排队附件都会持久化，Bridge 重启后仍能继续。缓存默认保留 7 天，并受 1 GiB 总容量限制。
-- 只有第一条普通文字 Prompt 或 `/queue <Prompt>` 会消费暂存附件；`/status`、`/model` 等 Bridge 命令不会。已有附件草稿时，后续纯图片消息也会加入草稿；没有草稿时，单独图片仍立即作为 Prompt 发送。
+- 只有第一条普通文字 Prompt、`/steer <Prompt>` 或 `/queue <Prompt>` 会消费暂存附件；`/status`、`/model` 等 Bridge 命令不会。已有附件草稿时，后续纯图片消息也会加入草稿；没有草稿时，单独图片仍立即作为 Prompt 发送。
 - 入站图片在 Codex 与最终 Prompt 回显中按图片展示；普通附件只回显安全文件名，不显示飞书 `file_key` 或本机绝对路径。
 - 当前 `main` 的一个 Turn 使用一张可更新卡片；公开进度在原卡片刷新，完成后由最终答案原位替换，并显示完成时间、总用时和本轮真实 Token。
 - 公开进度始终不 `@`；最终提醒开启时只额外发送一条简短的 `@owner 已完成`，不重复卡片正文；私聊临时 Chat 不额外提醒。

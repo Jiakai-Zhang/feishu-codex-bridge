@@ -1,4 +1,4 @@
-const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "settings", "attachments"]);
+const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "steer", "queue", "settings", "attachments"]);
 
 export class SessionCommandError extends Error {
   constructor(code, message) {
@@ -37,6 +37,12 @@ export function parseQueueAction(value) {
     usage("用法：`/queue`、`/queue <Prompt>`、`/queue remove <序号>` 或 `/queue clear`");
   }
   return Object.freeze({ action: "enqueue", text });
+}
+
+export function parseSteerAction(value) {
+  const text = String(value || "").trim();
+  if (!text) usage("用法：`/steer <Prompt>`");
+  return Object.freeze({ action: "submit", text });
 }
 
 export function parseAttachmentsAction(value) {
@@ -463,6 +469,14 @@ async function executeSettings(command, context) {
   return formatSessionSettings(await settingsStore.update(threadId, patch), { changed: true });
 }
 
+async function executeSteer(command, context) {
+  const request = parseSteerAction(command.args);
+  if (typeof context.steerPrompt !== "function") {
+    throw new TypeError("Steer command execution requires the Feishu message context");
+  }
+  return context.steerPrompt(request.text);
+}
+
 export async function executeGlobalSettingsCommand(command, { settingsStore } = {}) {
   if (command?.name !== "settings") throw new TypeError("A parsed settings command is required");
   if (!settingsStore) throw new TypeError("Global settings command requires a Session settings store");
@@ -506,6 +520,7 @@ export async function executeSessionCommand(command, context) {
   }
   if (command.name === "model") return executeModel(command, context);
   if (command.name === "plan") return executePlan(command, context);
+  if (command.name === "steer") return executeSteer(command, context);
   if (command.name === "queue") return executeQueue(command, context);
   if (command.name === "attachments") return executeAttachments(command, context);
   if (command.name === "settings") return executeSettings(command, context);

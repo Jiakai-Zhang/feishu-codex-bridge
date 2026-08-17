@@ -58,6 +58,7 @@ import {
   executeSessionCommand,
   parseQueueAction,
   parseSessionCommand,
+  parseSteerAction,
   publicCommandFailure,
 } from "../relay/session-relay-commands.mjs";
 import {
@@ -1003,7 +1004,7 @@ async function enqueuePromptMessage(msg, binding, text, attachments = []) {
   });
 }
 
-async function processPromptMessage(msg, binding, prompt) {
+async function processPromptMessage(msg, binding, prompt, { inputModeOverride } = {}) {
   const startedAt = Date.now();
   let accepted = false;
   log(`accepted relay message ${msg.messageId}`);
@@ -1011,7 +1012,8 @@ async function processPromptMessage(msg, binding, prompt) {
     const content = String(prompt?.text || "");
     const attachments = Array.isArray(prompt?.attachments) ? prompt.attachments : [];
     const settings = relaySettings.get(binding.threadId);
-    if (settings.inputMode === "queue") {
+    const inputMode = inputModeOverride || settings.inputMode;
+    if (inputMode === "queue") {
       await inspectBinding(binding);
       const queued = await enqueuePromptMessage(msg, binding, content, attachments);
       await ensureQueuedStreamCard({
@@ -1151,17 +1153,21 @@ async function processCommandMessage(msg, binding, command) {
     await inspectBinding(binding);
     let markdown;
     let queueAction;
+    let steerAction;
     let draftClaim;
     let queuedAccepted = false;
     let queuedResult;
+    let steerHandled = false;
+    let steerAccepted = false;
     let commandFailed = false;
     let queuedCardsToRetire = [];
     try {
       queueAction = command.name === "queue" ? parseQueueAction(command.args) : undefined;
+      steerAction = command.name === "steer" ? parseSteerAction(command.args) : undefined;
       queuedCardsToRetire = queueAction?.action === "remove"
         ? [promptQueue.list(binding.threadId)[Number(queueAction.position) - 1]].filter(Boolean)
         : queueAction?.action === "clear" ? promptQueue.list(binding.threadId) : [];
-      if (queueAction?.action === "enqueue") {
+      if (queueAction?.action === "enqueue" || steerAction?.action === "submit") {
         draftClaim = await attachmentDrafts.claim(binding.threadId, msg.messageId);
       }
       markdown = await executeSessionCommand(command, {
@@ -1176,6 +1182,14 @@ async function processCommandMessage(msg, binding, command) {
           queuedResult = queued;
           return queued;
         },
+        steerPrompt: async (text) => {
+          steerHandled = true;
+          steerAccepted = await processPromptMessage(msg, binding, {
+            text,
+            attachments: draftClaim?.attachments || [],
+          }, { inputModeOverride: "steer" });
+          return { accepted: steerAccepted };
+        },
       });
     } catch (error) {
       commandFailed = true;
@@ -1184,12 +1198,13 @@ async function processCommandMessage(msg, binding, command) {
     }
     if (draftClaim) {
       try {
-        if (queuedAccepted) await attachmentDrafts.completeClaim(msg.messageId);
+        if (queuedAccepted || steerAccepted) await attachmentDrafts.completeClaim(msg.messageId);
         else await attachmentDrafts.releaseClaim(msg.messageId);
       } catch (error) {
-        log(`attachment draft settlement deferred for queue command ${msg.messageId}: ${safeError(error)}`);
+        log(`attachment draft settlement deferred for prompt command ${msg.messageId}: ${safeError(error)}`);
       }
     }
+    if (steerHandled) return;
     if (!inputLedger.has(msg.messageId)) {
       await inputLedger.put({
         messageId: msg.messageId,
