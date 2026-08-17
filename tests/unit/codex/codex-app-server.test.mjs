@@ -41,6 +41,7 @@ function fakeWebSocketServer() {
     send(data) {
       const request = JSON.parse(data);
       requests.push(request);
+      if (request.id === undefined) return;
       const result = request.method === "initialize"
         ? { userAgent: "test" }
         : request.method === "thread/start"
@@ -67,12 +68,14 @@ test("creates and names an empty Codex Project thread without starting a turn", 
   assert.deepEqual(result, { id: "thread-1", name: "Fix login" });
   assert.deepEqual(server.requests.map(({ method }) => method), [
     "initialize",
+    "initialized",
     "thread/start",
     "thread/name/set",
   ]);
   assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
-  assert.equal(server.requests[1].params.cwd, "C:/repo");
-  assert.equal(server.requests[1].params.sandbox, "workspace-write");
+  assert.deepEqual(server.requests[1], { method: "initialized", params: {} });
+  assert.equal(server.requests[2].params.cwd, "C:/repo");
+  assert.equal(server.requests[2].params.sandbox, "workspace-write");
 });
 
 test("fails closed when App Server rejects thread creation", async () => {
@@ -99,9 +102,9 @@ test("creates and names an empty task through the shared App Server", async () =
 
   assert.deepEqual(result, { id: "thread-shared", name: "Independent task" });
   assert.deepEqual(server.requests.map(({ method }) => method), [
-    "initialize", "thread/start", "thread/name/set",
+    "initialize", "initialized", "thread/start", "thread/name/set",
   ]);
-  assert.equal(server.requests[1].params.cwd, "C:/independent");
+  assert.equal(server.requests[2].params.cwd, "C:/independent");
   assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
 });
 
@@ -115,8 +118,8 @@ test("renames an existing Codex task without starting or resuming a turn", async
     spawnProcess: () => server.child,
   });
   assert.deepEqual(result, { threadId: "thread-existing", name: "Feishu group" });
-  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "thread/name/set"]);
-  assert.deepEqual(server.requests[1].params, { threadId: "thread-existing", name: "Feishu group" });
+  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "initialized", "thread/name/set"]);
+  assert.deepEqual(server.requests[2].params, { threadId: "thread-existing", name: "Feishu group" });
   assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
 });
 
@@ -131,5 +134,5 @@ test("renames through the shared App Server used by Codex Desktop and the relay"
     WebSocketImpl: server.FakeWebSocket,
   });
   assert.deepEqual(result, { threadId: "thread-existing", name: "Feishu group" });
-  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "thread/name/set"]);
+  assert.deepEqual(server.requests.map(({ method }) => method), ["initialize", "initialized", "thread/name/set"]);
 });

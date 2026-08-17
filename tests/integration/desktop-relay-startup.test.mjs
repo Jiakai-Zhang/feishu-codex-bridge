@@ -38,7 +38,8 @@ test("Desktop relay activation verifies listener and watchdog before completion"
   assert.ok(startTaskIndex > pointerIndex);
   assert.ok(heartbeatIndex > startTaskIndex);
   assert.match(source, /FeishuCodexBridge-DesktopRelay-Watchdog/);
-  assert.match(source, /did not publish a ready heartbeat within 20 seconds/);
+  assert.match(source, /did not remain running with a ready heartbeat after two registration attempts/);
+  assert.match(source, /\$watchdogAttempt -le 2/);
   assert.match(source, /Start the Bridge and wait for its authenticated Channel connection/);
 });
 

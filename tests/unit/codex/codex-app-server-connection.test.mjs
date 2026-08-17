@@ -46,6 +46,9 @@ test("owns request correlation, notifications, and unsupported server requests",
   connection.socket.receive({ id: request.id, result: { thread: { id: "thread" } } });
   assert.deepEqual(await pending, { thread: { id: "thread" } });
 
+  connection.notify("initialized");
+  assert.deepEqual(connection.socket.sent.at(-1), { method: "initialized", params: {} });
+
   connection.socket.receive({ method: "turn/started", params: { threadId: "thread" } });
   assert.deepEqual(notifications, [["turn/started", { threadId: "thread" }]]);
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { normalizeCodexCwd } from "./codex-session-store.mjs";
+import { fsPathComparisonKey, isWindowsAbsolutePath } from "../runtime/shared/fs-paths.mjs";
 
 const execFile = promisify(nodeExecFile);
 
@@ -82,15 +83,14 @@ function localProjects(state) {
 function canonicalFsPath(value) {
   const normalized = normalizeCodexCwd(value).trim();
   if (!normalized) return "";
-  const resolved = path.resolve(normalized);
-  const root = path.parse(resolved).root;
-  return (resolved.length > root.length ? resolved.replace(/[\\/]+$/g, "") : resolved).toLowerCase();
+  return fsPathComparisonKey(normalized);
 }
 
 function pathScopeScore(candidate, root) {
   if (!candidate || !root) return -1;
   if (candidate === root) return root.length;
-  return candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
+  const separator = isWindowsAbsolutePath(root) ? "\\" : path.sep;
+  return candidate.startsWith(root.endsWith(separator) ? root : `${root}${separator}`)
     ? root.length
     : -1;
 }

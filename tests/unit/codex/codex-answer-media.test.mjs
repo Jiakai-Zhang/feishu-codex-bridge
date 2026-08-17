@@ -52,6 +52,16 @@ test("normalizes Windows Markdown and file URL paths without accepting relative 
   assert.equal(normalizeCodexLocalAttachmentPath("C:/repo/file.mjs:42"), undefined);
 });
 
+test("normalizes POSIX images and attachment names", () => {
+  const result = extractCodexAnswerMedia([
+    "![chart](/private/output/chart.png)",
+    "[report](/private/output/report.pdf)",
+    '::visualize{"path":"/private/output/result.html"}',
+  ].join("\n"));
+  assert.equal(result.segments[0].path, "/private/output/chart.png");
+  assert.deepEqual(result.attachments.map(({ name }) => name), ["report", "result.html"]);
+});
+
 test("extracts local file links as native attachments without exposing their paths", () => {
   const result = extractCodexAnswerMedia([
     "结果见 [分析报告](C:/private/output/report.pdf)。",

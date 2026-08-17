@@ -11,6 +11,7 @@ $stdoutPath = Join-Path $runtimeDir 'bridge.stdout.log'
 $appServerPidPath = Join-Path $runtimeDir 'codex-app-server.pid'
 $supervisorPidPath = Join-Path $runtimeDir 'bridge-supervisor.pid'
 $watchdogState = 'disabled'
+$desktopNetworkMode = 'not-configured'
 if ($mode -eq 'session-relay') {
     $expectedRelayUrl = [string]$config.sessionRelay.appServerUrl
     $configuredRelayUrl = [Environment]::GetEnvironmentVariable(
@@ -22,6 +23,11 @@ if ($mode -eq 'session-relay') {
         $watchdogStatusPath = Join-Path $bootstrapRoot 'desktop-relay-watchdog-status.json'
         try {
             $relayState = Get-Content -Raw -LiteralPath $relayStatePath | ConvertFrom-Json
+            $desktopNetworkMode = if ([string]::IsNullOrWhiteSpace([string]$relayState.desktopProxyUrl)) {
+                'direct'
+            } else {
+                'local-proxy'
+            }
             $watchdogStatus = Get-Content -Raw -LiteralPath $watchdogStatusPath | ConvertFrom-Json
             $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
             $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
@@ -70,4 +76,4 @@ if ($mode -eq 'session-relay') {
         if ($appServerProcess) { $appServerState = "running:$appServerPid" }
     }
 }
-Write-Output "Bridge status: running; PID=$bridgePid; mode=$mode; connected=$ready; supervisor=$supervisorState; sharedAppServer=$appServerState; desktopRelayWatchdog=$watchdogState"
+Write-Output "Bridge status: running; PID=$bridgePid; mode=$mode; connected=$ready; supervisor=$supervisorState; sharedAppServer=$appServerState; desktopRelayWatchdog=$watchdogState; desktopNetwork=$desktopNetworkMode"

@@ -78,13 +78,29 @@ if (-not $supervisorProcess) {
     Remove-Item -LiteralPath $supervisorStopPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $supervisorStdoutPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $supervisorStderrPath -Force -ErrorAction SilentlyContinue
-    $supervisorProcess = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$supervisorScript`"") `
-        -WorkingDirectory $projectRoot `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $supervisorStdoutPath `
-        -RedirectStandardError $supervisorStderrPath `
-        -PassThru
+    $proxyEnvironmentNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+    $savedEnvironment = @{}
+    try {
+        foreach ($name in $proxyEnvironmentNames) {
+            $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($item) { $savedEnvironment[$name] = [string]$item.Value }
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        }
+        $supervisorProcess = Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$supervisorScript`"") `
+            -WorkingDirectory $projectRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $supervisorStdoutPath `
+            -RedirectStandardError $supervisorStderrPath `
+            -PassThru
+    } finally {
+        foreach ($name in $proxyEnvironmentNames) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($savedEnvironment.ContainsKey($name)) {
+                Set-Item -LiteralPath "Env:$name" -Value $savedEnvironment[$name]
+            }
+        }
+    }
     [System.IO.File]::WriteAllText($supervisorPidPath, [string]$supervisorProcess.Id)
 }
 

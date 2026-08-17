@@ -1,6 +1,8 @@
 import { createReadStream, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { basenameFsPath } from "../runtime/shared/fs-paths.mjs";
 import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
@@ -84,11 +86,12 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../..");
 const configPath = path.join(repositoryRoot, "bridge.config.json");
 const config = await loadSessionRelayConfig(configPath);
-const userProfile = process.env.USERPROFILE;
-if (!userProfile) throw new Error("USERPROFILE is required to locate Codex state");
+const userProfile = process.env.USERPROFILE || process.env.HOME || os.homedir();
+if (!userProfile) throw new Error("The user home directory is required to locate Codex state");
 
 const runtimeDir = path.join(config.workspace, "work", "feishu-codex-bridge");
 const pidPath = path.join(runtimeDir, "bridge.pid");
+const readyPath = path.join(runtimeDir, "bridge-ready.json");
 const stopPath = path.join(runtimeDir, "stop.request");
 const completedPath = path.join(runtimeDir, "session-relay-completed.json");
 const deliveryOutboxPath = path.join(runtimeDir, "session-relay-pending-deliveries.json");
@@ -117,9 +120,10 @@ const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
 if (!appSecret) throw new Error("LARK_APP_SECRET was not supplied by the secure launcher");
 
-await fs.mkdir(runtimeDir, { recursive: true });
+await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 await fs.rm(stopPath, { force: true });
-await fs.writeFile(pidPath, String(process.pid), "utf8");
+await fs.rm(readyPath, { force: true });
+await fs.writeFile(pidPath, String(process.pid), { encoding: "utf8", mode: 0o600 });
 let sessionController;
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
 const inputLedger = await SessionInputLedger.open(inputLedgerPath);
@@ -1472,7 +1476,7 @@ async function prepareFinalAnswerMedia(answer) {
         continue;
       }
       if (delivery === "file") {
-        await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
+        await addNativeAttachment({ localPath: segment.path, fileName: basenameFsPath(segment.path) });
         addDeliveryNotice("（图片已作为群内原生附件发送。）");
         continue;
       }
@@ -1497,7 +1501,7 @@ async function prepareFinalAnswerMedia(answer) {
     } catch (error) {
       try {
         if (!stat || stat.size > FEISHU_FILE_MAX_BYTES) throw error;
-        await addNativeAttachment({ localPath: segment.path, fileName: path.win32.basename(segment.path) });
+        await addNativeAttachment({ localPath: segment.path, fileName: basenameFsPath(segment.path) });
         addDeliveryNotice("（图片未能内嵌，已改为群内原生附件。）");
         log(`final answer image fell back to a native attachment: ${safeError(error)}`);
       } catch (fallbackError) {
@@ -2089,6 +2093,12 @@ try {
     await reconcilePendingQueueCards();
     dispatchAllQueuedPrompts();
   }
+  await fs.writeFile(readyPath, `${JSON.stringify({
+    schemaVersion: 1,
+    pid: process.pid,
+    mode: "session-relay",
+    readyAt: new Date().toISOString(),
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   log(`READY: Channel SDK connected; mode=session-relay; bindings=${config.sessionRelay.bindings.length}; ready=${readyBindings}`);
   void retryPendingDeliveries();
   void syncConfiguredFeedGroups();
@@ -2104,6 +2114,7 @@ try {
   clearInterval(promptQueueTimer);
   await sessionController?.stop().catch(() => {});
   await channel.disconnect().catch(() => {});
+  await fs.rm(readyPath, { force: true });
   await fs.rm(pidPath, { force: true });
   await fs.rm(stopPath, { force: true });
   log("Session Relay stopped");

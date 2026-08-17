@@ -3,21 +3,15 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  isPathInside,
+  normalizeFsPath,
+  sameFsPath,
+} from "../../../runtime/shared/fs-paths.mjs";
 
 const execFileAsync = promisify(nodeExecFile);
 
-export function normalizeFsPath(value) {
-  const stripped = String(value || "").replace(/^\\\\\?\\/, "");
-  return path.resolve(stripped);
-}
-
-export function isPathInside(basePath, candidatePath, { allowEqual = true } = {}) {
-  const base = normalizeFsPath(basePath);
-  const candidate = normalizeFsPath(candidatePath);
-  const relative = path.relative(base, candidate);
-  if (!relative) return allowEqual;
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
-}
+export { isPathInside, normalizeFsPath, sameFsPath } from "../../../runtime/shared/fs-paths.mjs";
 
 export function parseWorktreePorcelain(text) {
   const records = [];
@@ -98,7 +92,7 @@ export class ProjectContext {
       this.git(["remote"]),
     ]);
     const topLevel = normalizeFsPath(topLevelText.trim());
-    if (topLevel.toLowerCase() !== repoRoot.toLowerCase()) {
+    if (!sameFsPath(topLevel, repoRoot)) {
       throw new Error(`project.repoRoot must be the Git top-level directory: ${topLevel}`);
     }
 

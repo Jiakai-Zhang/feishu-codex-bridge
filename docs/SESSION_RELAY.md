@@ -247,13 +247,13 @@ Session Relay 和 Codex Desktop 必须连接同一个本机 App Server。独立 
 
 首次启用：
 
-1. `start-bridge.ps1` 启动或复用经过 PID、可执行文件和 loopback 端口验证的 App Server，再启动 Bridge supervisor；
-2. Bridge connected 后运行 `configure-codex-desktop-relay.ps1`；
+1. `start-bridge.sh`/`.ps1` 启动或复用经过 PID、可执行文件和 loopback 健康检查验证的 App Server，再启动 Bridge supervisor；macOS 使用 `/readyz`，不把“端口可连接”误判为服务就绪；
+2. Bridge connected 后运行 `configure-codex-desktop-relay.sh`/`.ps1`；
 3. 激活器验证监听器，安装并启动连续 watchdog，再设置 `CODEX_APP_SERVER_WS_URL`；
-4. `doctor.ps1 -RequireRunning -RequireDesktopRelay` 验证 pointer、watchdog、heartbeat、监听器所有权和 Bridge；
+4. 对应平台的严格 `doctor` 验证 pointer、watchdog、heartbeat、监听器所有权和 Bridge；
 5. 完全退出并重新打开 Codex Desktop，让新进程读取环境变量。
 
-watchdog 默认每 3 秒检查监听器。监听器消失时先移除 Bridge 拥有的 pointer，再尝试恢复 App Server；只有进程、命令行与端口重新验证后才恢复 pointer。它会检测但不会停止或删除用户自建 guardian、计划任务或服务。
+watchdog 默认每 3 秒检查监听器。监听器消失或健康检查失败时先移除 Bridge 拥有的 pointer，再尝试恢复 App Server；只有进程、命令行与健康状态重新验证后才恢复 pointer。它会检测但不会停止或删除用户自建 guardian、计划任务或服务。
 
 当前 `main` 中，Bridge 启动时只有在连接成功后才设置 pointer；正常停止或 supervisor 最终退出时暂停 watchdog 并移除 pointer。停止 Bridge 不会立即结束仍供 Desktop 使用的共享 App Server。
 
@@ -261,6 +261,12 @@ watchdog 默认每 3 秒检查监听器。监听器消失时先移除 Bridge 拥
 
 ```powershell
 .\configure-codex-desktop-relay.ps1 -Disable
+```
+
+macOS 使用：
+
+```bash
+./configure-codex-desktop-relay.sh --disable
 ```
 
 随后完全重启 Codex Desktop。稳定 bootstrap 只清理由本地 activation state 精确记录的 URL，不会删除其他软件的 loopback pointer。

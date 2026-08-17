@@ -1,12 +1,24 @@
+param(
+    [string]$Workspace
+)
+
 $ErrorActionPreference = 'Stop'
 $Host.UI.RawUI.WindowTitle = 'Feishu Channel SDK secure setup'
 
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
-if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-    throw 'bridge.config.json not found. Copy bridge.config.example.json and fill in your local values first.'
+if ([string]::IsNullOrWhiteSpace($Workspace)) {
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $Workspace = [string]$config.workspace
+    } else {
+        $Workspace = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge'
+    }
 }
-$config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-$runtimeDir = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
+if ([string]::IsNullOrWhiteSpace($Workspace)) {
+    throw 'A Windows runtime workspace could not be determined.'
+}
+$resolvedWorkspace = [IO.Path]::GetFullPath($Workspace)
+$runtimeDir = Join-Path $resolvedWorkspace 'work\feishu-codex-bridge'
 $secretPath = Join-Path $runtimeDir 'channel-secret.dpapi'
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null

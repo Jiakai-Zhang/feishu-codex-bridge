@@ -97,6 +97,7 @@ export class CodexSessionObserver {
           version: "1.0.0",
         },
       });
+      connection.notify("initialized");
       const catchUpAfterMs = this.hasConnected ? this.disconnectedAtMs : undefined;
       for (const target of this.targets) {
         const result = await connection.request("thread/resume", {

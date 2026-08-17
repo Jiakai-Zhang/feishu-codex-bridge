@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { basenameFsPath, extnameFsPath } from "../runtime/shared/fs-paths.mjs";
 
 export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
@@ -98,9 +99,9 @@ export function classifyFeishuNativeMedia(fileName, fileSize) {
 
 export function safeNativeAttachmentName(value, localPath) {
   const requested = String(value || "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
-  const fallback = path.win32.basename(String(localPath || "")) || path.basename(String(localPath || ""));
-  const fallbackExtension = path.win32.extname(fallback);
-  const requestedWithExtension = requested && fallbackExtension && !path.win32.extname(requested)
+  const fallback = basenameFsPath(localPath);
+  const fallbackExtension = extnameFsPath(fallback);
+  const requestedWithExtension = requested && fallbackExtension && !extnameFsPath(requested)
     ? `${requested}${fallbackExtension}`
     : requested;
   const name = (requestedWithExtension || fallback || "Codex-attachment.bin")
