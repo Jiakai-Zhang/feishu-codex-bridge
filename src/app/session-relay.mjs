@@ -135,6 +135,7 @@ const longAnswerDocumentManager = config.larkCliEntry
     })
   : undefined;
 const streamCards = await SessionStreamCardStore.open(streamCardsPath);
+const queuedWriterConflictNotices = new Set();
 const inboundAttachmentStore = new FeishuInboundAttachmentStore(
   inboundAttachmentsPath,
   config.sessionRelay.inboundAttachments,
@@ -146,6 +147,7 @@ const attachmentDrafts = await SessionAttachmentDraftStore.open(attachmentDrafts
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => {
+    queuedWriterConflictNotices.delete(queued.messageId);
     await inputLedger.put({
       messageId: queued.messageId,
       chatId: queued.chatId,
@@ -160,9 +162,10 @@ const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
       queuedMessageId: queued.messageId,
     });
   },
-  onError: (error, queued) => log(
-    `queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`,
-  ),
+  onError: (error, queued) => {
+    log(`queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`);
+    if (error?.code === "session_writer_conflict") void showQueuedWriterConflict(error, queued);
+  },
 });
 await attachmentDrafts.reconcile({
   isPromptAccepted: (messageId) => inputLedger.has(messageId) || promptQueue.has(messageId),
@@ -690,6 +693,7 @@ async function syncConfiguredFeedGroups() {
 }
 
 function publicFailure(error) {
+  if (error?.publicMessage) return String(error.publicMessage);
   switch (error?.code) {
     case "session_system_error":
       return "绑定的 Codex 任务当前处于系统错误状态。请先在 Codex Desktop 中查看并恢复该任务。";
@@ -860,6 +864,24 @@ async function ensureQueuedStreamCard({ queued, position, alreadyQueued = false 
   return created;
 }
 
+async function showQueuedWriterConflict(error, queued) {
+  if (!queued?.messageId || !channelConnected) return;
+  const current = streamCards.get(
+    queued.sessionThreadId,
+    queuedStreamCardTurnId(queued.messageId),
+  );
+  if (!current || queuedWriterConflictNotices.has(queued.messageId)) return;
+  queuedWriterConflictNotices.add(queued.messageId);
+  try {
+    await channel.updateCard(current.messageId, buildSessionStreamCard({
+      queued: { status: "blocked", reason: publicFailure(error) },
+    }));
+  } catch (updateError) {
+    queuedWriterConflictNotices.delete(queued.messageId);
+    log(`queue writer-conflict notice could not be delivered: ${safeError(updateError)}`);
+  }
+}
+
 async function tryAdoptQueuedStreamCard({ threadId, turnId, chatId, queuedMessageId }) {
   if (!threadId || !turnId || !chatId || !queuedMessageId) {
     return tryEnsureTurnStreamCard({ threadId, turnId, chatId });
@@ -889,6 +911,7 @@ async function tryAdoptQueuedStreamCard({ threadId, turnId, chatId, queuedMessag
 
 async function retireQueuedStreamCard(queued, reason) {
   if (!queued) return;
+  queuedWriterConflictNotices.delete(queued.messageId);
   const current = streamCards.get(queued.sessionThreadId, queuedStreamCardTurnId(queued.messageId));
   if (!current) return;
   try {

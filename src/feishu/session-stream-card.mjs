@@ -148,10 +148,19 @@ export function buildSessionStreamCard({
   } else if (queued) {
     const position = Math.max(1, Number(queued.position) || 1);
     const cancelled = queued.status === "cancelled";
+    const blocked = queued.status === "blocked";
     elements = [{
       tag: "markdown",
       content: cancelled
         ? `**已从下一轮队列移除**\n\n${String(queued.reason || "这条 Prompt 不会再自动开始。")}`
+        : blocked
+          ? [
+              "**Session 写入权限冲突**",
+              "",
+              String(queued.reason || "当前 Session 暂时无法由 Bridge 写入。"),
+              "",
+              "*这条 Prompt 仍保留在队列中；写入权限释放后，Bridge 会自动重试。*",
+            ].join("\n")
         : [
             `**${queued.alreadyQueued ? "已在下一轮队列中" : "已按默认设置加入下一轮队列"}**`,
             "",
@@ -161,7 +170,9 @@ export function buildSessionStreamCard({
             "*如需改为调整方向，请先使用 `/settings input steer`。*",
           ].join("\n"),
     }];
-    summarySource = cancelled ? "已从下一轮队列移除" : `排队中 · 当前排位 ${position}`;
+    summarySource = cancelled
+      ? "已从下一轮队列移除"
+      : blocked ? "Session 写入权限冲突 · 等待自动重试" : `排队中 · 当前排位 ${position}`;
   } else {
     const elapsedMs = Number.isFinite(Number(startedAtMs))
       ? Math.max(0, Number(nowMs) - Number(startedAtMs))

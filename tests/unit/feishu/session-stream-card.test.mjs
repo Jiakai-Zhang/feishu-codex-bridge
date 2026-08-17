@@ -96,6 +96,20 @@ test("builds the queued acknowledgement as the initial stream card state", () =>
   assert.match(card.config.summary.content, /排队中/);
 });
 
+test("keeps a queued Prompt visible when its Session writer is occupied", () => {
+  const card = buildSessionStreamCard({
+    queued: {
+      status: "blocked",
+      reason: "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。",
+    },
+  });
+
+  assert.equal(card.schema, "2.0");
+  assert.match(card.body.elements[0].content, /Session 写入权限冲突/);
+  assert.match(card.body.elements[0].content, /Codex Desktop 或 CLI/);
+  assert.match(card.body.elements[0].content, /仍保留在队列中/);
+});
+
 test("preserves markdown and images when the same card becomes the final answer", () => {
   const card = buildSessionStreamCard({
     answerSegments: [

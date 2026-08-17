@@ -13,7 +13,7 @@ function userInputItem(clientId, input, id = `user-${clientId}`) {
   return { id, type: "userMessage", clientId, content: structuredClone(input) };
 }
 
-function fakeControllerServer({ activeTurn, goal = null } = {}) {
+function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds = [] } = {}) {
   const server = {
     requests: [],
     sockets: [],
@@ -34,6 +34,7 @@ function fakeControllerServer({ activeTurn, goal = null } = {}) {
       },
     },
     goal: goal ? structuredClone(goal) : null,
+    resumeConflictThreadIds: new Set(resumeConflictThreadIds),
     turns: activeTurn ? [structuredClone(activeTurn)] : [],
     status: activeTurn ? { type: "active", activeFlags: [] } : { type: "idle" },
   };
@@ -68,6 +69,13 @@ function fakeControllerServer({ activeTurn, goal = null } = {}) {
     if (request.method === "initialize") {
       respond(socket, request.id, { userAgent: "test" });
     } else if (request.method === "thread/resume") {
+      if (server.resumeConflictThreadIds.has(request.params.threadId)) {
+        respond(socket, request.id, undefined, {
+          code: -32603,
+          message: "thread already has an active writer",
+        });
+        return;
+      }
       respond(socket, request.id, {
         thread: threadSnapshot(false, request.params.threadId),
         model: server.settings.model,
@@ -291,6 +299,45 @@ test("adds a newly created temporary Chat without reconnecting existing Sessions
   )), true);
   assert.equal(client.removeTarget(temporaryThreadId), true);
   assert.equal(client.hasTarget(temporaryThreadId), false);
+  await client.stop();
+});
+
+test("isolates an active-writer resume conflict to one Session and retries it after release", async () => {
+  const healthyThreadId = "039ff5b8-decb-7ca3-802c-f115f2f196de";
+  const server = fakeControllerServer({ resumeConflictThreadIds: [threadId] });
+  const logs = [];
+  const client = controller(server, {
+    targets: [target, { threadId: healthyThreadId, chatId: "oc_healthy", cwd: "C:/repo" }],
+    log: (message) => logs.push(message),
+  });
+
+  await client.start();
+
+  assert.equal(client.connected, true);
+  assert.equal((await client.getStatus(healthyThreadId)).status.type, "idle");
+  await assert.rejects(
+    () => client.submitPrompt({ threadId, text: "blocked prompt", clientUserMessageId: "om_blocked" }),
+    (error) => {
+      assert.equal(error.code, "session_writer_conflict");
+      assert.match(error.publicMessage, /Codex Desktop|CLI/);
+      return true;
+    },
+  );
+  assert.equal(client.connected, true);
+  assert.equal(logs.some((message) => /active writer conflict/i.test(message)), true);
+
+  server.resumeConflictThreadIds.delete(threadId);
+  const result = await client.submitPrompt({
+    threadId,
+    text: "retry after release",
+    clientUserMessageId: "om_retry",
+  });
+
+  assert.equal(result.kind, "started");
+  assert.equal(
+    server.requests.filter(({ method, params }) => method === "thread/resume" && params.threadId === threadId).length,
+    3,
+  );
   await client.stop();
 });
 
