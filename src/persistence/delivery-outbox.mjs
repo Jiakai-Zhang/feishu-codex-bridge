@@ -28,6 +28,8 @@ function normalizeRecord(record) {
     post: post ? structuredClone(post) : undefined,
     dependsOn: record.dependsOn ? String(record.dependsOn) : undefined,
     fileKey,
+    coverImageKey: record.coverImageKey ? String(record.coverImageKey) : undefined,
+    durationMs: Number(record.durationMs) > 0 ? Number(record.durationMs) : undefined,
     localPath,
     fileName: record.fileName ? String(record.fileName).slice(0, 200) : undefined,
     mediaType: kind === "file" && (record.mediaType === "image" || record.mediaType === "video")

@@ -363,11 +363,13 @@ async function persistCompleted(messageId) {
 }
 
 async function resolveNativeFileDelivery(record) {
-  if (record.fileKey) return record;
+  if (record.fileKey && (record.mediaType !== "video" || record.coverImageKey)) return record;
   const uploaded = await uploadFeishuNativeAttachment(channel.rawClient, record);
   const updated = {
     ...record,
     fileKey: uploaded.fileKey,
+    coverImageKey: uploaded.coverImageKey,
+    durationMs: uploaded.durationMs,
     fileName: uploaded.fileName,
     fileSize: uploaded.fileSize,
     modifiedAtMs: uploaded.modifiedAtMs,
