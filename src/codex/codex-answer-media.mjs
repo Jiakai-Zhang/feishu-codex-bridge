@@ -39,7 +39,7 @@ export function normalizeCodexLocalAttachmentPath(value) {
   if (/^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(target)) {
     return path.win32.normalize(target.replaceAll("/", "\\"));
   }
-  if (path.isAbsolute(target)) return path.normalize(target);
+  if (target.startsWith("/")) return path.posix.normalize(target);
   return undefined;
 }
 
