@@ -9,7 +9,7 @@ import {
   SessionStreamCardStore,
 } from "../../../src/feishu/session-stream-card.mjs";
 
-test("reposts the final answer after updating the stream card", () => {
+test("sends only a brief completion mention after updating the stream card", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "reply",
     deliveryId: "final-a",
@@ -22,28 +22,46 @@ test("reposts the final answer after updating the stream card", () => {
     fileName: "report.pdf",
     fileSize: 42,
     modifiedAtMs: 10,
-  }]);
+  }], { mentionOpenId: "ou_owner" });
 
   assert.equal(records.length, 2);
   assert.equal(records[0].deliveryId, "final-a");
   assert.equal(records[0].kind, "reply");
+  assert.deepEqual(records[0].post.zh_cn.content, [[
+    { tag: "at", user_id: "ou_owner" },
+    { tag: "text", text: " 已完成" },
+  ]]);
   assert.equal(records[1].kind, "file");
   assert.equal(records[1].dependsOn, "final-a");
 });
 
-test("reposts proactive final answers before native attachments", () => {
+test("sends a brief proactive completion mention before native attachments", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "send",
     deliveryId: "final-b",
     chatId: "chat-b",
     createdAt: 100,
-  }, [{ localPath: "C:\\tmp\\result.zip", fileName: "result.zip" }]);
+  }, [{ localPath: "C:\\tmp\\result.zip", fileName: "result.zip" }], {
+    mentionOpenId: "ou_owner",
+  });
 
   assert.equal(records.length, 2);
   assert.equal(records[0].kind, "send");
   assert.equal(records[1].kind, "file");
   assert.equal(records[1].dependsOn, "final-b");
   assert.equal(records[0].messageId, undefined);
+});
+
+test("does not duplicate card content when final mentions are disabled", () => {
+  const records = buildSessionStreamCardFollowups({
+    kind: "reply",
+    deliveryId: "final-c",
+    messageId: "message-c",
+    chatId: "chat-c",
+    post: { zh_cn: { content: [[{ tag: "md", text: "full answer" }]] } },
+  }, []);
+
+  assert.deepEqual(records, []);
 });
 
 test("builds one updateable progress card from public commentary", () => {

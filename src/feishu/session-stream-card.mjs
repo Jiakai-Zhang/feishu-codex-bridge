@@ -3,9 +3,26 @@ import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs"
 
 const MAX_STORED_PROGRESS = 12;
 
-export function buildSessionStreamCardFollowups(baseRecord, attachments) {
+function buildCompletionNotice(baseRecord, mentionOpenId) {
+  const userId = String(mentionOpenId || "").trim();
+  if (!userId) return undefined;
+  return Object.freeze({
+    ...baseRecord,
+    post: {
+      zh_cn: {
+        content: [[
+          { tag: "at", user_id: userId },
+          { tag: "text", text: " 已完成" },
+        ]],
+      },
+    },
+  });
+}
+
+export function buildSessionStreamCardFollowups(baseRecord, attachments, { mentionOpenId } = {}) {
+  const completionNotice = buildCompletionNotice(baseRecord, mentionOpenId);
   return Object.freeze([
-    Object.freeze({ ...baseRecord }),
+    ...(completionNotice ? [completionNotice] : []),
     ...buildNativeAttachmentDeliveries(baseRecord, attachments),
   ]);
 }

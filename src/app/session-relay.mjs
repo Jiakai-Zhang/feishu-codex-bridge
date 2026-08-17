@@ -946,14 +946,14 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
   }
 }
 
-async function queueStreamCardFollowups(baseRecord, attachments) {
-  const records = buildSessionStreamCardFollowups(baseRecord, attachments);
+async function queueStreamCardFollowups(baseRecord, attachments, mentionOpenId) {
+  const records = buildSessionStreamCardFollowups(baseRecord, attachments, { mentionOpenId });
   await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
+async function tryCompleteTurnStreamCard(record, baseDelivery, media, mentionOpenId) {
   if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
-  await queueStreamCardFollowups(baseDelivery, media.attachments);
+  await queueStreamCardFollowups(baseDelivery, media.attachments, mentionOpenId);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
   return true;
@@ -1624,7 +1624,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1661,7 +1661,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -1701,7 +1701,7 @@ async function processCompletedTurn(record) {
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media, mentionOpenId)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }
