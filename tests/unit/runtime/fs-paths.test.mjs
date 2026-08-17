@@ -28,7 +28,7 @@ test("uses native filesystem identity and resolves existing POSIX symlinks", asy
   const link = path.join(directory, "link");
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   await fs.mkdir(target);
-  await fs.symlink(target, link);
+  await fs.symlink(target, link, process.platform === "win32" ? "junction" : undefined);
 
   assert.equal(isAbsoluteFsPath(target), true);
   assert.equal(normalizeFsPath(link), normalizeFsPath(target));
