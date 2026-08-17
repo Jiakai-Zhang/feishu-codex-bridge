@@ -28,6 +28,24 @@ test("accepts an unmentioned owner text message in the exact bound group", () =>
   assert.equal(content, "  continue this task  ");
 });
 
+test("accepts the owner in a temporary private Chat without weakening group bindings", () => {
+  const content = assertRelayMessage({
+    chatId: "private-conversation",
+    chatType: "p2p",
+    senderId: "owner",
+    senderIsBot: false,
+    rawContentType: "text",
+    content: "continue privately",
+  }, {
+    groupChatId: "private-conversation",
+    threadId: "temporary-thread",
+    ownerOpenId: "owner",
+    temporary: true,
+    chatType: "p2p",
+  });
+  assert.equal(content, "continue privately");
+});
+
 test("rejects another human, a bot, another group, and unsupported content", () => {
   const message = {
     chatId: "oc_bound",

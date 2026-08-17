@@ -81,6 +81,25 @@ function resolveServiceTier(model, value) {
   return String(value);
 }
 
+function controllerState(target) {
+  return {
+    target,
+    status: { type: "notLoaded" },
+    activeTurnId: undefined,
+    activeTurnStartedAt: undefined,
+    settings: {
+      model: undefined,
+      serviceTier: null,
+      effort: null,
+      collaborationMode: undefined,
+    },
+    tokenUsage: undefined,
+    goal: undefined,
+    lastTurn: undefined,
+    collaborationModeKnown: false,
+  };
+}
+
 function normalizeModelEntry(model) {
   return {
     ...model,
@@ -121,22 +140,7 @@ export class CodexSessionController {
     this.reconnectDelayMs = reconnectDelayMs;
     this.sleepImpl = sleepImpl;
     this.log = log;
-    this.states = new Map([...this.targets].map(([threadId, target]) => [threadId, {
-      target,
-      status: { type: "notLoaded" },
-      activeTurnId: undefined,
-      activeTurnStartedAt: undefined,
-      settings: {
-        model: undefined,
-        serviceTier: null,
-        effort: null,
-        collaborationMode: undefined,
-      },
-      tokenUsage: undefined,
-      goal: undefined,
-      lastTurn: undefined,
-      collaborationModeKnown: false,
-    }]));
+    this.states = new Map([...this.targets].map(([threadId, target]) => [threadId, controllerState(target)]));
     this.collector = new CodexTurnCollector({
       targets: [...this.targets.values()],
       onTurnCompleted: (record) => this.#emitCompletedTurn(record),
@@ -144,6 +148,7 @@ export class CodexSessionController {
       onError: (error) => this.log(`turn completion callback failed: ${error instanceof Error ? error.name : "unknown"}`),
     });
     this.connection = undefined;
+    this.connectPromise = undefined;
     this.reconnectTimer = undefined;
     this.stopped = true;
     this.hasConnected = false;
@@ -155,6 +160,42 @@ export class CodexSessionController {
 
   get connected() {
     return Boolean(this.connection?.ready && !this.stopped);
+  }
+
+  hasTarget(threadId) {
+    return this.targets.has(String(threadId || ""));
+  }
+
+  async addTarget(target) {
+    const threadId = String(target?.threadId || "");
+    const cwd = String(target?.cwd || "");
+    if (!threadId || !cwd) throw new TypeError("Session controller target requires threadId and cwd");
+    if (this.targets.has(threadId)) return this.getStatus(threadId, { refresh: false });
+    const normalized = Object.freeze({ ...target, threadId, cwd });
+    const state = controllerState(normalized);
+    this.targets.set(threadId, normalized);
+    this.states.set(threadId, state);
+    this.collector.addTarget(normalized);
+    try {
+      if (this.connectPromise) await this.connectPromise;
+      if (this.connected && statusType(state.status) === "notLoaded") {
+        await this.#hydrateState(this.connection, state);
+      }
+      return this.getStatus(threadId, { refresh: false });
+    } catch (error) {
+      this.targets.delete(threadId);
+      this.states.delete(threadId);
+      this.collector.removeTarget(threadId);
+      throw error;
+    }
+  }
+
+  removeTarget(threadId) {
+    const key = String(threadId || "");
+    if (!this.targets.delete(key)) return false;
+    this.states.delete(key);
+    this.collector.removeTarget(key);
+    return true;
   }
 
   async start() {
@@ -225,6 +266,17 @@ export class CodexSessionController {
   }
 
   async #connect() {
+    if (this.connectPromise) return this.connectPromise;
+    const running = this.#openConnection();
+    this.connectPromise = running;
+    try {
+      return await running;
+    } finally {
+      if (this.connectPromise === running) this.connectPromise = undefined;
+    }
+  }
+
+  async #openConnection() {
     let connection;
     connection = new CodexAppServerConnection({
       url: this.appServerUrl,
@@ -259,28 +311,7 @@ export class CodexSessionController {
       });
       const catchUpAfterMs = this.hasConnected ? this.disconnectedAtMs : undefined;
       for (const state of this.states.values()) {
-        const result = await connection.request("thread/resume", {
-          threadId: state.target.threadId,
-          cwd: state.target.cwd,
-          approvalPolicy: "never",
-          sandbox: this.sandboxMode,
-        });
-        if (result?.thread?.id !== state.target.threadId) {
-          throw new Error("Codex session controller resumed a different task than its binding");
-        }
-        this.#applyResume(state, result);
-        const snapshot = await connection.request("thread/read", {
-          threadId: state.target.threadId,
-          includeTurns: true,
-        });
-        this.#applyThreadSnapshot(state, snapshot?.thread);
-        try {
-          const goalResult = await connection.request("thread/goal/get", { threadId: state.target.threadId });
-          state.goal = clone(goalResult?.goal);
-        } catch (error) {
-          this.log(`could not hydrate goal state for ${state.target.threadId}: ${error instanceof Error ? error.name : "unknown"}`);
-        }
-        this.collector.seedThread(snapshot?.thread, { catchUpAfterMs });
+        await this.#hydrateState(connection, state, { catchUpAfterMs });
       }
       connection.activate();
       this.hasConnected = true;
@@ -290,6 +321,31 @@ export class CodexSessionController {
       if (this.connection === connection) this.connection = undefined;
       throw error;
     }
+  }
+
+  async #hydrateState(connection, state, { catchUpAfterMs } = {}) {
+    const result = await connection.request("thread/resume", {
+      threadId: state.target.threadId,
+      cwd: state.target.cwd,
+      approvalPolicy: "never",
+      sandbox: this.sandboxMode,
+    });
+    if (result?.thread?.id !== state.target.threadId) {
+      throw new Error("Codex session controller resumed a different task than its binding");
+    }
+    this.#applyResume(state, result);
+    const snapshot = await connection.request("thread/read", {
+      threadId: state.target.threadId,
+      includeTurns: true,
+    });
+    this.#applyThreadSnapshot(state, snapshot?.thread);
+    try {
+      const goalResult = await connection.request("thread/goal/get", { threadId: state.target.threadId });
+      state.goal = clone(goalResult?.goal);
+    } catch (error) {
+      this.log(`could not hydrate goal state for ${state.target.threadId}: ${error instanceof Error ? error.name : "unknown"}`);
+    }
+    this.collector.seedThread(snapshot?.thread, { catchUpAfterMs });
   }
 
   #applyResume(state, result) {

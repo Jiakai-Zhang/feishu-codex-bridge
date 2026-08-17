@@ -12,7 +12,8 @@ export function assertRelayMessage(msg, binding) {
   if (!msg || msg.chatId !== binding.groupChatId) {
     throw new SessionRelayError("wrong_group", "Message is outside the bound group");
   }
-  if (msg.chatType !== "group") {
+  const expectedChatType = binding.temporary === true ? binding.chatType : "group";
+  if (msg.chatType !== expectedChatType) {
     throw new SessionRelayError("not_group", "Session Relay accepts group messages only");
   }
   if (msg.senderIsBot !== false || msg.senderId !== binding.ownerOpenId) {
