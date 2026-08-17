@@ -384,7 +384,7 @@ export async function runInstallCommand(args) {
       ]);
     }
   }
-  process.stdout.write("macOS installation prepared. Next: save the Channel secret, start the Bridge, and run doctor.\n");
+  process.stdout.write("macOS installation prepared. Next: confirm the Channel secret is stored, start the Bridge, and run doctor.\n");
 }
 
 

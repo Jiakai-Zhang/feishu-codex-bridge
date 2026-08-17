@@ -22,6 +22,8 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
     ["bootstrap.sh", "dependencies"],
     ["install.sh", "install"],
     ["setup-channel-secret.sh", "setup-secret"],
+    ["configure-feishu-app.sh", "configure-feishu-app"],
+    ["verify-feishu-app.sh", "verify-feishu-app"],
     ["start-bridge.sh", "start"],
     ["stop-bridge.sh", "stop"],
     ["status-bridge.sh", "status"],
@@ -77,6 +79,58 @@ test("macOS secret setup uses an interactive Keychain prompt, never a password a
   assert.match(content, /identity\.label, "-w"/);
   assert.doesNotMatch(content, /"-w",\s*(?:secret|options|get\()/i);
   assert.doesNotMatch(content, /bridge\.config\.json[\s\S]{0,120}LARK_APP_SECRET/);
+
+  const admin = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "admin-cli.mjs",
+  ), "utf8");
+  const setupStart = admin.indexOf("async function setupSecretCommand");
+  const setupEnd = admin.indexOf("async function configureFeishuAppCommand", setupStart);
+  assert.doesNotMatch(admin.slice(setupStart, setupEnd), /readBridgeConfig/);
+});
+
+test("macOS Feishu app template handoff never prints or passes the App ID to open", async () => {
+  const admin = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "admin-cli.mjs",
+  ), "utf8");
+  const configureStart = admin.indexOf("async function configureFeishuAppCommand");
+  const configureEnd = admin.indexOf("async function resumeRelayIfEnabled", configureStart);
+  const configureSource = admin.slice(configureStart, configureEnd);
+  assert.match(configureSource, /buildFeishuBridgeAppTemplateUrl\(appId\)/);
+  assert.match(configureSource, /openPrivateFeishuUrl\(targetUrl\)/);
+  assert.doesNotMatch(configureSource, /process\.stdout\.write\([^)]*appId/s);
+
+  const redirect = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "private-browser-redirect.mjs",
+  ), "utf8");
+  assert.match(redirect, /execFile\("\/usr\/bin\/open", \[url\]/);
+  assert.match(redirect, /http:\/\/127\.0\.0\.1:/);
+});
+
+test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI profile", async () => {
+  const prompt = await fs.readFile(path.join(
+    repositoryRoot,
+    "docs",
+    "INSTALL_MACOS_PROMPT.md",
+  ), "utf8");
+  assert.match(prompt, /scutil --get ComputerName/);
+  assert.match(prompt, /应用展示名称必须与运行 Codex Desktop.*系统.*电脑名称.*完全一致/);
+  assert.match(prompt, /--name 参数表示 Lark CLI 本地 profile 名称，不是飞书应用展示名称/);
+  assert.doesNotMatch(prompt, /\.\/lark-cli\.sh config init[^\n]*--name/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {

@@ -18,6 +18,7 @@ import {
 import { keychainIdentity } from "../../../../src/runtime/platform/macos/keychain-credential-store.mjs";
 import { buildLaunchAgentPlist } from "../../../../src/runtime/platform/macos/launchd-service-manager.mjs";
 import { launchEnvironment } from "../../../../src/runtime/platform/macos/launch-environment.mjs";
+import { openPrivateFeishuUrl } from "../../../../src/runtime/platform/macos/private-browser-redirect.mjs";
 import { runtimeLayout } from "../../../../src/runtime/platform/macos/runtime-layout.mjs";
 import { assertSafeUpdateContext } from "../../../../src/runtime/platform/macos/update.mjs";
 
@@ -145,6 +146,40 @@ test("Keychain identity is stable without embedding the repository path", () => 
   assert.deepEqual(first, second);
   assert.match(first.service, /^com\.feishu-codex-bridge\.channel-secret\.[0-9a-f]{16}$/);
   assert.equal(first.service.includes(root), false);
+});
+
+test("private Feishu browser handoff keeps the target out of process arguments", async () => {
+  const target = "https://open.feishu.cn/page/launcher?clientID=cli_private_test&addons=encoded";
+  let openedUrl;
+  let redirectedTo;
+  await openPrivateFeishuUrl(target, {
+    timeoutMs: 2_000,
+    open: async (localUrl) => {
+      openedUrl = localUrl;
+      await new Promise((resolve, reject) => {
+        http.get(localUrl, (response) => {
+          redirectedTo = response.headers.location;
+          response.resume();
+          response.once("end", resolve);
+        }).once("error", reject);
+      });
+    },
+  });
+  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f-]+$/);
+  assert.equal(openedUrl.includes("cli_private_test"), false);
+  assert.equal(redirectedTo, target);
+  await assert.rejects(
+    () => openPrivateFeishuUrl("https://example.com/not-feishu"),
+    /Feishu Open Platform/,
+  );
+  await assert.rejects(
+    () => openPrivateFeishuUrl("https://open.feishu.cn:444/page/launcher"),
+    /Feishu Open Platform/,
+  );
+  await assert.rejects(
+    () => openPrivateFeishuUrl("https://user:password@open.feishu.cn/page/launcher"),
+    /Feishu Open Platform/,
+  );
 });
 
 test("launchd plist escapes values and passes no shell command string", async (t) => {

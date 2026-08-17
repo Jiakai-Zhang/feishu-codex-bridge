@@ -12,7 +12,7 @@
 - 已安装并登录 ChatGPT/Codex Desktop；
 - Git；
 - Node.js `>=22.13.0`。若 Desktop 自带可用的 Node，脚本会自动发现，无需全局安装；
-- 飞书企业自建应用，已启用 Bot 和长连接事件。
+- 可创建飞书企业自建应用的组织账号；应用可在安装过程中通过仓库脚本配置。
 
 先执行只读预检：
 
@@ -33,49 +33,59 @@ git --version
 
 `bootstrap.sh` 使用发现到的 Node/npm 执行 `npm ci`，只安装 `package-lock.json` 锁定的飞书 CLI 和 Channel SDK，不依赖全局飞书 CLI。
 
-## 3. 创建或绑定飞书应用
+## 3. 创建并配置飞书应用
 
-先只读检查现有本机身份：
+全新 Mac 使用一个新的专用应用。应用展示名称必须与运行 Codex Desktop 的当前 Mac 系统电脑名称完全一致。先只读取得名称：
 
 ```bash
-./lark-cli.sh auth status --json --verify
+/usr/sbin/scutil --get ComputerName
 ```
 
-完整 JSON 包含应用和用户标识，不要粘贴到聊天、Issue 或日志中。
+保留名称的精确大小写、空格和字符。若结果为空，先由用户在 macOS“系统设置 > 通用 > 共享”中设置。创建应用、添加权限/事件以及发布版本都属于外部变更；由 Agent 执行安装时，必须先向用户说明完整变更范围和应用名称，并取得一次明确批准。
 
-如果需要创建新应用，先取得用户对这项外部变更的明确同意，再运行：
+批准后运行：
 
 ```bash
 ./lark-cli.sh config init --new --brand feishu --lang zh_cn
 ```
 
-如果使用已有的专用应用：
+用户使用实际部署 Bridge 的飞书组织账号完成浏览器认证、CAPTCHA/MFA 和应用创建，并在创建页把“应用名称”设为上面取得的系统电脑名称。若创建流程没有名称输入框，创建后只需在“基础信息”修改这一项，确认完全一致再继续。
+
+`config init --name` 设置的是 Lark CLI 本地 profile 名称，不是飞书应用展示名称，不得用它代替页面中的应用名称。若飞书拒绝当前电脑名称，暂停让用户决定是否先修改 macOS 电脑名称，不要自行追加后缀。认证临时凭据、App ID 与身份标识不得粘贴到聊天、命令参数或日志。
+
+应用创建完成后，立即由用户在本机可见 Terminal 中运行：
 
 ```bash
-./lark-cli.sh config init
+./setup-channel-secret.sh
 ```
 
-两种情况下都由用户在本机可见终端或浏览器中完成 App Secret、CAPTCHA/MFA 和管理员审批；不要把凭据发到 Codex 聊天。
+`setup-channel-secret.sh` 不依赖 `bridge.config.json`，因此可以在安装器生成配置前执行。macOS `security` 会显示隐藏输入提示；用户只在这里粘贴 Channel App Secret。密钥保存在当前用户 Keychain，不写入命令参数、配置、仓库或日志。如果之后移动仓库目录，需要在新位置重新运行该脚本。
 
-按[飞书自建应用配置](FEISHU_APP_SETUP.md)完成：
+然后运行一次应用模板配置：
 
-1. 启用 Bot；
-2. 添加消息、群、资源、Feed 和文档权限；
-3. 用长连接订阅 `im.message.receive_v1`；
-4. 将当前用户加入可用范围，创建并发布应用版本。
+```bash
+./configure-feishu-app.sh
+```
 
-用户身份还需授予：
+该脚本从本机已验证的 Lark CLI 配置读取应用身份，通过随机 loopback 跳转打开飞书官方模板确认页，不会把 App ID 打印到终端或传给 `open` 的进程参数。用户在一个页面核对并确认 Bridge 所需的 7 项应用/Bot 权限、4 项用户权限和 `im.message.receive_v1`；完整清单与手工故障回退见[飞书自建应用配置](FEISHU_APP_SETUP.md)。
+
+Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `im.message.receive_v1`。正常流程不要再逐页重复设置这些默认项。若飞书要求可用范围、版本发布或管理员审批，将可用范围限制为当前安装用户，由用户本人提交，并等待状态明确生效。
+
+再完成当前用户 OAuth：
 
 ```bash
 ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+./verify-feishu-app.sh
 ```
 
-授权后再运行 `auth status --json --verify`，只确认 Bot 和 User 均为 available/verified，且上述四个 scope 不再缺失。
+浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。只有 `ok=true`，且应用、Bot、用户身份、四项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
 
 ## 4. 生成本机配置
 
+第 2 节已完成锁定依赖安装，因此运行：
+
 ```bash
-./install.sh
+./install.sh --skip-dependency-install
 ```
 
 安装器会：
@@ -87,21 +97,9 @@ git --version
 - 安装 `$HOME/.agents/skills/feishu-session-bind`；
 - 生成当前用户的 LaunchAgent，但在第一次显式启动前保持 Bridge、App Server 和 relay 禁用。
 
-现有配置默认保留。不要在未审核本机数据的情况下使用 `--force-config`。
+现有配置默认保留。不要在未审核本机数据的情况下使用 `--force-config`，也不要手工编辑或输出 `bridge.config.json`。
 
-## 5. 将 Channel Secret 存入 Keychain
-
-由用户在本机可见 Terminal 中运行：
-
-```bash
-./setup-channel-secret.sh
-```
-
-macOS `security` 会显示隐藏输入提示。用户只在这里粘贴 App Secret。密钥保存在当前用户 Keychain，不写入命令参数、配置、仓库或日志。
-
-如果移动了仓库目录，Keychain service 标识会随安装路径改变，需要在新位置重新执行这一步。
-
-## 6. 启动与 Desktop relay
+## 5. 启动与 Desktop relay
 
 ```bash
 ./start-bridge.sh
@@ -111,39 +109,42 @@ macOS `security` 会显示隐藏输入提示。用户只在这里粘贴 App Secr
 
 `configure-codex-desktop-relay.sh` 只在确认 App Server 是本安装启动的进程、`/readyz` 健康检查通过、Bridge 已连接 Channel 后，才会通过 `launchctl setenv` 设置 `CODEX_APP_SERVER_WS_URL`。watchdog 每 3 秒验证一次；监听器失效或健康检查失败时先移除本安装拥有的 pointer，恢复成功后才重新设置。
 
-严格 Doctor 通过后，由用户完全退出 ChatGPT/Codex Desktop，再从终端执行：
+在重启 Desktop 前，安装执行者必须明确询问用户：
 
-```bash
-./launch-codex-desktop-with-relay.sh
-./doctor.sh --require-running --require-desktop-relay --require-desktop-attached
-```
+> 这台 Mac 上 Codex 访问服务是直连，还是需要本机代理？不需要代理请回复“直连”；需要代理请提供一个无认证、带明确端口的 loopback URL，例如 `http://127.0.0.1:7897`。
 
-macOS 上从 Dock 或自动恢复启动的 GUI 进程不一定会继承后设置的 `launchctl` 环境。该入口使用系统 `open --env` 把经验证的本机 relay 地址直接注入 Desktop，且拒绝在 Desktop 尚未完全退出时启动第二个实例。安装脚本不会强制结束 Desktop 进程。
-
-启动器默认使用直连：
+不得根据当前网络、Clash 是否运行或旧配置替用户推断。用户选择直连时使用：
 
 ```bash
 ./launch-codex-desktop-with-relay.sh
 ```
 
-即使上一次使用了代理，不带参数的启动也会清除保存的 Desktop 代理，验证共享 App Server 不再带 HTTP/HTTPS/ALL proxy 环境，再以直连方式打开 Desktop。`--no-proxy` 仍作为兼容别名保留，但已不需要使用。
+不带参数会清除保存的 Desktop 代理并验证共享 App Server 为直连；`--no-proxy` 仅作为兼容别名保留。
 
-只有需要代理时才显式添加 `--proxy`：
+用户明确选择代理时使用：
 
 ```bash
 ./launch-codex-desktop-with-relay.sh --proxy http://127.0.0.1:7897
 ```
 
-`--proxy` 只接受带明确端口、无认证的 loopback URL。代理环境只会应用到 Desktop 与共享 Codex App Server；Feishu Bridge、Channel 和 watchdog 仍使用直连。首次应用、代理变更或切回直连时，入口会在 Desktop 已完全退出的前提下重载共享 App Server，验证新进程的代理状态后才打开 Desktop。
+`--proxy` 只接受带明确端口、无认证的 loopback URL。代理环境只应用到 Desktop 与共享 Codex App Server；Feishu Bridge、Channel 和 watchdog 仍使用直连。
 
-## 7. 真实验收
+选定命令后，先在仓库目录打开独立 Terminal，再由用户完全退出 ChatGPT/Codex Desktop，并从该 Terminal 运行唯一选定的启动命令。macOS 上从 Dock 或自动恢复启动的 GUI 进程不一定会继承 relay 环境；安装脚本不会强制结束 Desktop 进程。
 
-1. 在飞书中私聊 Bot 发送 `/add`，选择 Project/“独立”与现有 Codex 任务；
-2. 确认 Bridge 自动创建只有当前用户和 Bot 的绑定群；
+Desktop 重新打开后运行：
+
+```bash
+./doctor.sh --require-running --require-desktop-relay --require-desktop-attached
+```
+
+## 6. 真实验收
+
+1. 在当前 Codex 任务中使用安装后的 `$feishu-session-bind`，为本任务创建或复用只有当前用户与 Bot 的专属绑定群；
+2. 以该 skill 返回的绑定群作为初次绑定结果，不要求用户先创建 Bot 私聊或发送 `/add`；`/add` 只是以后在已存在的 Bot 私聊或绑定群中的可选入口；
 3. 在绑定群发一条 Prompt，确认 Codex Desktop 中的同一任务收到并执行，最终答案返回群；
 4. 在 Desktop 的同一任务再发一条 Prompt，确认最终答案也返回飞书群；
 5. 从飞书上传一张小图和一个普通小文件，确认 Codex 能读取；让 Codex 最终回答引用一个本地文件，确认飞书收到原生附件；
-6. 再运行 `./status-bridge.sh` 和严格 Doctor，确认 Channel、App Server、watchdog 和 Desktop pointer 仍全部正常。
+6. 再运行 `./status-bridge.sh` 和 `./doctor.sh --require-running --require-desktop-relay --require-desktop-attached`，确认 Channel、App Server、watchdog、Desktop pointer 与 Desktop attachment 仍全部正常。
 
 只有上述实测完成才算部署成功。
 

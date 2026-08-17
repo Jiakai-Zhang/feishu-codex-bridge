@@ -69,18 +69,62 @@ import {
 } from "./health.mjs";
 import {
   discoverNode,
+  larkJson,
   runDependenciesCommand,
   runInstallCommand,
   writeMacOSLaunchAgents,
 } from "./installer.mjs";
+import {
+  buildFeishuBridgeAppTemplateUrl,
+  summarizeFeishuBridgeAppVerification,
+} from "../../../feishu/feishu-app-template.mjs";
+import { openPrivateFeishuUrl } from "./private-browser-redirect.mjs";
 
 const execFile = promisify(nodeExecFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 async function setupSecretCommand() {
   assertMacOS();
-  await readBridgeConfig(repositoryRoot);
   const identity = keychainIdentity(repositoryRoot);
   await promptAndStoreKeychainSecret(identity);
+}
+
+async function configureFeishuAppCommand(args) {
+  assertMacOS();
+  if (args.length > 0) throw new Error("configure-feishu-app does not accept arguments.");
+  let existing;
+  try { existing = (await readBridgeConfig(repositoryRoot)).raw; } catch {}
+  const nodeExecutable = await discoverNode(existing?.nodeExecutable);
+  const entryPath = path.join(repositoryRoot, "node_modules", "@larksuite", "cli", "scripts", "run.js");
+  await fs.access(entryPath);
+  const status = await larkJson(nodeExecutable, entryPath, ["auth", "status", "--json", "--verify"]);
+  const appId = status?.appId;
+  if (!/^cli_[A-Za-z0-9_-]+$/.test(String(appId || ""))) {
+    throw new Error("Lark CLI is not bound to a verified Feishu app. Complete config init first.");
+  }
+  const targetUrl = buildFeishuBridgeAppTemplateUrl(appId);
+  await openPrivateFeishuUrl(targetUrl);
+  process.stdout.write(
+    "Feishu app template opened in the browser. Review and confirm the requested scopes and message event; no change is applied until you confirm there.\n",
+  );
+}
+
+async function verifyFeishuAppCommand(args) {
+  assertMacOS();
+  if (args.length > 0) throw new Error("verify-feishu-app does not accept arguments.");
+  let existing;
+  try { existing = (await readBridgeConfig(repositoryRoot)).raw; } catch {}
+  const nodeExecutable = await discoverNode(existing?.nodeExecutable);
+  const entryPath = path.join(repositoryRoot, "node_modules", "@larksuite", "cli", "scripts", "run.js");
+  await fs.access(entryPath);
+  const [authStatus, eventDryRun] = await Promise.all([
+    larkJson(nodeExecutable, entryPath, ["auth", "status", "--json", "--verify"]),
+    larkJson(nodeExecutable, entryPath, [
+      "event", "consume", "im.message.receive_v1", "--as", "bot", "--dry-run",
+    ]),
+  ]);
+  const summary = summarizeFeishuBridgeAppVerification(authStatus, eventDryRun);
+  process.stdout.write(`${JSON.stringify(summary)}\n`);
+  if (!summary.ok) process.exitCode = 1;
 }
 
 async function resumeRelayIfEnabled(layout) {
@@ -356,6 +400,8 @@ async function main() {
   switch (command) {
     case "install": return runInstallCommand(args);
     case "setup-secret": return setupSecretCommand(args);
+    case "configure-feishu-app": return configureFeishuAppCommand(args);
+    case "verify-feishu-app": return verifyFeishuAppCommand(args);
     case "start": return startCommand(args);
     case "stop": return stopCommand(args);
     case "status": return runStatusCommand(args);
@@ -365,7 +411,7 @@ async function main() {
     case "lark-cli": return larkCliCommand(args);
     case "dependencies": return runDependenciesCommand();
     case "update": return (await import("./update.mjs")).runMacOSUpdate(args);
-    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
+    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|configure-feishu-app|verify-feishu-app|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
   }
 }
 

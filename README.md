@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.7` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.8` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -10,11 +10,12 @@
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
 | 上游 `7c8668e` | 已合并附件 PR #12，并完成领域目录迁移、稳定/实验代码隔离、Codex Session 拆分和 ESLint 语义检查 |
-| `v0.3.2-macos-rc.7` | 在该上游基线上提供共享跨平台核心、POSIX 路径、Keychain、launchd、安装/Doctor 和 Desktop relay 支持 |
+| `v0.3.2-macos-rc.8` | 在该上游基线上提供 macOS Keychain、launchd、安装/Doctor、Desktop relay，并新增一次模板配置飞书应用、明确选择代理和免私聊初次绑定 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
+- [v0.3.2-macos-rc.8 Release Note](docs/releases/v0.3.2-macos-rc.8.md)
 - [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
 - [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
 - [`main`：长回答文档与媒体转发](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/10)
@@ -51,7 +52,28 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用固定候选 tag `v0.3.2-macos-rc.7`，并直接复制[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。Windows 仍使用下面的固定 release 流程：
+macOS 请使用固定候选 tag `v0.3.2-macos-rc.8`。把下面整段复制到这台 Mac 上一个新的 Codex 任务：
+
+```text
+请根据以下 GitHub 安装协议，在这台 Mac 上部署并完整验收 Feishu Codex Bridge：
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.8/docs/INSTALL_MACOS_PROMPT.md
+
+要求：
+- 完整读取该文件，不要只做摘要。
+- 将文件中“可复制 Prompt”部分视为我的完整执行指令。
+- 安装仓库：https://github.com/ninmon/feishu-codex-bridge.git
+- 必须安装精确版本：v0.3.2-macos-rc.8
+- 从只读预检开始，按照协议自主执行所有安全步骤。
+- 需要我完成浏览器认证、应用名称确认、飞书应用模板确认、管理员审批、应用发布、OAuth、App Secret 安全输入或完整重启 Codex Desktop 时，明确告诉我并暂停等待。
+- 不得要求我在聊天中发送 App Secret、Token、App ID 或其他身份信息。
+- 飞书应用名称必须使用运行 Codex Desktop 的这台 Mac 的系统电脑名称。
+- 重启 Desktop 前必须询问我选择直连还是本机代理，不得自行假设。
+- 初次绑定使用安装后的 feishu-session-bind，不得把 Bot 私聊或 /add 作为前置条件。
+- 不得跳过 Doctor、飞书双向消息和附件验收。
+- 先简要说明即将执行的第一步，然后立即开始。
+```
+
+完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。Windows 仍使用下面的固定 release 流程：
 
 把下面这段发到一个新的 Codex 对话：
 
@@ -76,13 +98,13 @@ macOS 请使用固定候选 tag `v0.3.2-macos-rc.7`，并直接复制[给 Codex 
 | Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用 |
 | Node.js | `>=22.13.0`，并带 npm |
 | 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git |
-| 飞书 | 启用 Bot 与长连接事件的企业自建应用 |
+| 飞书 | 可创建企业自建应用的组织账号；macOS 安装脚本会打开官方模板配置权限和事件 |
 
 仓库依赖通过 `npm ci` 安装，锁定 `@larksuite/channel` 和 `@larksuite/cli`；日常使用仓库内的 `lark-cli.sh` 或 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
 ## 飞书权限速查
 
-应用权限必须在开发者后台添加；权限或事件变化后需要创建并发布新版本。若企业要求管理员审批，等待审批通过后再继续。
+应用权限与事件必须配置并生效；macOS 推荐由 `configure-feishu-app.sh` 打开官方模板一次确认，手工后台配置仅用于故障回退。若飞书要求发布新版本或管理员审批，等待状态生效后再继续。
 
 | 应用权限 | 用途 |
 | --- | --- |
