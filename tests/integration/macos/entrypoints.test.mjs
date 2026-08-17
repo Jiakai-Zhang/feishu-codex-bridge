@@ -112,6 +112,7 @@ test("macOS secret setup uses an interactive Keychain prompt, never a password a
   ), "utf8");
   assert.match(content, /"add-generic-password", "-U"/);
   assert.match(content, /identity\.label, "-w"/);
+  assert.match(content, /Full access/);
   assert.doesNotMatch(content, /"-w",\s*(?:secret|options|get\()/i);
   assert.doesNotMatch(content, /bridge\.config\.json[\s\S]{0,120}LARK_APP_SECRET/);
 
@@ -141,19 +142,32 @@ test("macOS Feishu app template handoff never prints or passes the App ID to ope
   const configureEnd = admin.indexOf("async function resumeRelayIfEnabled", configureStart);
   const configureSource = admin.slice(configureStart, configureEnd);
   assert.match(configureSource, /buildFeishuBridgeAppTemplateUrl\(appId\)/);
-  assert.match(configureSource, /openPrivateFeishuUrl\(targetUrl\)/);
+  assert.match(configureSource, /openPrivateFeishuUrl\(targetUrl, \{/);
+  assert.match(configureSource, /timeoutMs: 120_000/);
+  assert.match(configureSource, /onReady: \(localUrl\)/);
+  assert.match(configureSource, /process\.stdout\.write[\s\S]*localUrl/);
   assert.doesNotMatch(configureSource, /process\.stdout\.write\([^)]*appId/s);
 
-  const redirect = await fs.readFile(path.join(
-    repositoryRoot,
-    "src",
-    "runtime",
-    "platform",
-    "macos",
-    "private-browser-redirect.mjs",
-  ), "utf8");
+  const [redirect, sharedRedirect] = await Promise.all([
+    fs.readFile(path.join(
+      repositoryRoot,
+      "src",
+      "runtime",
+      "platform",
+      "macos",
+      "private-browser-redirect.mjs",
+    ), "utf8"),
+    fs.readFile(path.join(
+      repositoryRoot,
+      "src",
+      "runtime",
+      "shared",
+      "private-browser-redirect.mjs",
+    ), "utf8"),
+  ]);
   assert.match(redirect, /execFile\("\/usr\/bin\/open", \[url\]/);
-  assert.match(redirect, /http:\/\/127\.0\.0\.1:/);
+  assert.match(sharedRedirect, /http:\/\/127\.0\.0\.1:/);
+  assert.match(sharedRedirect, /onReady\?\.\(localUrl\)/);
 });
 
 test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI profile", async () => {
@@ -166,6 +180,10 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /应用展示名称必须与运行 Codex Desktop.*系统.*电脑名称.*完全一致/);
   assert.match(prompt, /--name 参数表示 Lark CLI 本地 profile 名称，不是飞书应用展示名称/);
   assert.doesNotMatch(prompt, /\.\/lark-cli\.sh config init[^\n]*--name/);
+  assert.match(prompt, /完全访问（Full access）/);
+  assert.ok(prompt.indexOf("完全访问（Full access）") < prompt.indexOf("1. 先做只读预检"));
+  assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
+  assert.match(prompt, /临时本机 loopback 备用 URL/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {

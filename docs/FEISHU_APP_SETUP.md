@@ -2,7 +2,7 @@
 
 每台同时运行 Bridge 的电脑都必须使用一个独立的企业自建应用和 Bot，即使这些电脑由同一个飞书账号使用也不例外。飞书长连接的消息推送是集群模式，同一应用建立多个客户端时，只会由其中随机一个客户端收到事件；详见[飞书长连接注意事项](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case)。不要与飞书 CLI 智能体或其他生产机器人共用 App ID。
 
-macOS 推荐使用仓库的一次模板确认流程。Windows 和故障回退仍可按本文的手工清单配置。任何 App Secret、OAuth token、App ID、open ID 或 chat ID 都不得发到聊天、放入命令参数、日志、文档或 Git。
+macOS 和 Windows 都推荐使用仓库的一次模板确认流程；手工清单只用于模板页不可用或安全校验明确指出缺项时的故障回退。任何 App Secret、OAuth token、App ID、open ID 或 chat ID 都不得发到聊天、放入命令参数、日志、文档或 Git。
 
 ## A. 创建专用应用
 
@@ -21,7 +21,13 @@ macOS 应先只读取得运行 Codex Desktop 的电脑名称：
 /usr/sbin/scutil --get ComputerName
 ```
 
-飞书应用展示名称必须与该结果完全一致，包括大小写、空格和字符。若结果为空，先由用户在 macOS“系统设置 > 通用 > 共享”中设置电脑名称。
+飞书应用展示名称必须与该结果完全一致，包括大小写、空格和字符。若结果为空，先由用户在 macOS“系统设置 > 通用 > 共享”中设置电脑名称。Windows 对应使用：
+
+```powershell
+[Environment]::MachineName
+```
+
+Windows 应用展示名称也必须与该结果完全一致。
 
 创建应用是外部变更。Agent 必须先向用户说明应用名称以及后续还会添加的权限/事件，并取得明确批准。macOS 执行：
 
@@ -35,13 +41,17 @@ Windows PowerShell 执行：
 .\lark-cli.ps1 config init --new --brand feishu --lang zh_cn
 ```
 
-用户使用实际部署 Bridge 的飞书组织账号完成浏览器认证、CAPTCHA/MFA 和应用创建。macOS 创建页中的“应用名称”使用上面取得的系统电脑名称；如果创建流程没有名称输入框，创建后在“基础信息”中只修改这一项，并核对完全一致。
+用户使用实际部署 Bridge 的飞书组织账号完成浏览器认证、CAPTCHA/MFA 和应用创建。macOS 与 Windows 创建页中的“应用名称”都使用上面取得的系统电脑名称；如果创建流程没有名称输入框，创建后在“基础信息”中只修改这一项，并核对完全一致。
+
+Lark CLI 会输出一次性 verification URL。不能假定浏览器一定会自动弹出；安装执行者应将 CLI 当次原样输出的 verification URL 作为可点击备用链接交给用户，然后暂停等待。只转交该 URL，不输出 device code、原始 JSON、App ID、Secret 或 Token，也不重跑会使原 URL 失效的命令。
 
 `config init --name` 中的 `--name` 只会命名 Lark CLI 本地 profile，不会设置飞书应用展示名称，不得混用。若飞书不接受当前电脑名称，暂停让用户决定是否先修改系统电脑名称，不要自行加后缀。Agent 可以启动 CLI 和浏览器流程，但必须在需要用户认证时暂停，不得把认证临时凭据或应用身份数据复制到聊天。
 
-如确有需要绑定一个已有的、只供本机使用的专用应用，可运行不带 `--new` 的 `config init`。全新 Mac 的标准安装不使用这条分支。
+如确有需要绑定一个已有的、只供本机使用的专用应用，可运行不带 `--new` 的 `config init`。全新 macOS 或 Windows 电脑的标准安装不使用这条分支。
 
-## B. macOS 推荐：一次模板确认
+## B. 推荐：一次模板确认
+
+macOS 由 Codex Desktop 执行安装时，当前对话必须先设为“完全访问（Full access）”。否则沙盒内的 `security` 子进程可能无法写入或读取当前用户 Keychain，并把已有 Secret 误报为缺失。
 
 应用创建完成后，先由用户在本机可见 Terminal 安全保存 Channel App Secret：
 
@@ -51,13 +61,29 @@ Windows PowerShell 执行：
 
 该脚本可以在 `bridge.config.json` 生成前运行。用户只在 macOS `security` 的隐藏输入提示中粘贴 Secret；Bridge 将其保存到当前用户 Keychain。
 
+Windows 也必须在创建应用后立即运行：
+
+```powershell
+.\setup-channel-secret.ps1
+```
+
+该脚本同样不依赖 `bridge.config.json`，并使用当前 Windows 用户 DPAPI 加密。
+
 然后运行：
 
 ```bash
 ./configure-feishu-app.sh
 ```
 
-脚本从本机 Lark CLI 配置读取应用身份，通过随机 loopback 地址把浏览器转到飞书官方应用模板确认页。App ID 不会出现在终端输出或 `open` 的进程参数中。用户只需在一个页面核对以下模板并确认。
+脚本从本机 Lark CLI 配置读取应用身份，通过随机 loopback 地址把浏览器转到飞书官方应用模板确认页。App ID 不会出现在终端输出或浏览器启动进程参数中。macOS 和 Windows 脚本都会先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试自动打开浏览器。如果浏览器没有弹出，必须明确让用户打开这个本机 URL，不要暴露它最终跳转的飞书目标 URL。用户只需在一个页面核对以下模板并确认。
+
+Windows 对应运行：
+
+```powershell
+.\configure-feishu-app.ps1
+```
+
+Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用机制，也不在浏览器启动进程参数中暴露 App ID。
 
 应用/Bot 权限：
 
@@ -106,6 +132,13 @@ Feed 标签和长回答云文档由当前用户身份调用，需要单独授权
 
 验证器只输出以下安全状态，不输出应用或用户身份：
 
+Windows 使用完全对应的入口：
+
+```powershell
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+.\verify-feishu-app.ps1
+```
+
 - 应用配置存在；
 - Bot 身份 available/verified；
 - 用户身份 available/verified；
@@ -115,9 +148,9 @@ Feed 标签和长回答云文档由当前用户身份调用，需要单独授权
 
 只有 `ok=true` 才能继续安装。不要把 `auth status --json --verify` 或 `event consume ... --dry-run` 的原始 JSON 粘贴到聊天、Issue 或日志。模板中其他群、Feed、文档和附件能力最终还必须通过真实绑定及双向附件验收。
 
-## D. 手工故障回退或 Windows 配置
+## D. 手工故障回退
 
-只有 macOS 的 `verify-feishu-app.sh` 指出缺项、飞书模板页不可用，或当前平台没有模板脚本时，才进入开发者后台逐项检查。不要在校验通过后重复这些步骤。
+只有 macOS 的 `verify-feishu-app.sh` 或 Windows 的 `verify-feishu-app.ps1` 指出缺项，或飞书模板页不可用时，才进入开发者后台逐项检查。不要在校验通过后重复这些步骤。
 
 ### 1. Bot
 
@@ -137,16 +170,16 @@ Feed 标签和长回答云文档由当前用户身份调用，需要单独授权
 
 在“版本管理与发布”确认当前用户位于可用范围，相关权限和事件已经发布。若组织要求审批，等待管理员批准。
 
-Windows 完成后台配置后，可运行：
+Windows 完成故障回退后，必须运行：
 
 ```powershell
-.\lark-cli.ps1 auth status --json --verify
+.\verify-feishu-app.ps1
 ```
 
-只在本机检查 Bot 与 User 是否 available/verified 以及所需用户 scope，不要复制完整 JSON。随后继续 Windows 安装协议中的 Doctor 与真实消息/附件测试。
+只使用安全摘要，不要复制原始 JSON。随后继续 Windows 安装协议中的 Doctor 与真实消息/附件测试。
 
 ## E. Channel Secret
 
-Lark CLI 的本机应用配置不能代替 Channel Bridge 自己的安全凭据。macOS 已在 B 节通过 `setup-channel-secret.sh` 存入 Keychain。Windows 由用户运行 `setup-channel-secret.ps1`，使用 DPAPI 保存。
+Lark CLI 的本机应用配置不能代替 Channel Bridge 自己的安全凭据。macOS 已在 B 节通过 `setup-channel-secret.sh` 存入 Keychain；Windows 已在 B 节通过 `setup-channel-secret.ps1` 使用 DPAPI 保存。两个脚本都可在生成 `bridge.config.json` 前执行。
 
 Secret 必须由用户在本机可见的隐藏提示中输入。不要从飞书 CLI 配置、进程、日志或系统凭据中提取明文，也不要要求用户在聊天中发送。

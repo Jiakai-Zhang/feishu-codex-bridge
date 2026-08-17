@@ -102,9 +102,11 @@ checks, and update rollback.
 
 Root `.sh` and `.ps1` files remain compatibility entrypoints. The macOS shell
 wrappers dispatch to `admin-cli.mjs`; the current Windows operational
-implementation remains in the established PowerShell entrypoints until it is
-migrated independently. Product domains may depend on shared runtime modules,
-but must not import a concrete platform adapter.
+implementation remains in the established PowerShell entrypoints, with the
+narrow `runtime/platform/windows/feishu-app-entry.mjs` adapter used only for
+the shared Feishu template and safe verification flow. Product domains may
+depend on shared runtime modules, but must not import a concrete platform
+adapter.
 
 ## Dependency direction
 

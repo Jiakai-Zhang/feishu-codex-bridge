@@ -1,8 +1,8 @@
 # 给 Codex 的 macOS 全新安装 Prompt
 
-本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
+本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”，确保安装和 Doctor 能访问当前用户的 macOS Keychain。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文锁定到包含 `configure-feishu-app.sh`、`verify-feishu-app.sh`、watchdog 驻留重试与飞书直连校验隔离的 `v0.3.2-macos-rc.10`。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文锁定到包含当前对话 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试与飞书直连校验隔离的 `v0.3.2-macos-rc.11`。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -10,14 +10,14 @@
 
 1. 完整读取本文件直到末尾，不得只读取开头或提供摘要；
 2. 将下方“可复制 Prompt”中的全部内容视为用户的完整执行指令，不要求用户再次复制或重复确认这些规则；
-3. 从只读预检开始，在不需要用户操作时自主连续执行；
-4. 先简要说明即将执行的第一步，然后立即开始。
+3. 先完成下方规定的当前对话“完全访问（Full access）”人工停点，再从只读预检开始，在不需要用户操作时自主连续执行；
+4. 先简要说明为什么需要“完全访问”，然后立即请用户切换并暂停等待。
 
 浏览器认证、外部变更批准、管理员审批、应用发布、OAuth、Secret 安全输入与 Desktop 完整重启等人工停点，以“可复制 Prompt”中的具体规则为准。
 
 ## 使用方法
 
-把下方整段内容复制到新 Mac 上的一个新 Codex 任务中。用户仍需本人完成飞书浏览器认证、应用模板确认、可能出现的管理员审批与版本发布、用户 OAuth、App Secret 安全输入，以及 ChatGPT/Codex Desktop 的完整退出和重启。
+把下方整段内容复制到新 Mac 上的一个新 Codex 任务中。用户仍需本人将当前对话设为“完全访问”，并完成飞书浏览器认证、应用模板确认、可能出现的管理员审批与版本发布、用户 OAuth、App Secret 安全输入，以及 ChatGPT/Codex Desktop 的完整退出和重启。
 
 ## 可复制 Prompt
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- tag：v0.3.2-macos-rc.10
+- tag：v0.3.2-macos-rc.11
 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
@@ -36,6 +36,12 @@
 - 即使两台 Mac 使用同一个飞书账号，每台 Mac 也分别使用自己的应用和 Bot。
 
 工作规则：
+
+开始前必须先完成一个人工权限停点：
+- 告诉用户在当前 Codex 对话输入框下方的权限菜单中选择“完全访问（Full access）”；
+- 说明 Bridge 的 Secret 保存在当前 macOS 用户的 Keychain，沙盒模式下的 Codex 子进程可能将已存在的密钥误报为缺失；
+- 暂停并等待用户明确回复已完成，在此之前不得运行预检或安装命令；
+- 不得通过修改 Codex 全局配置、关闭系统安全机制或伪造 Keychain 检查来代替这个停点。
 
 1. 先做只读预检，确认：
    - macOS 13 或更高；
@@ -47,7 +53,7 @@
 
    如果缺少系统依赖，先说明缺少什么并请求用户批准；不要擅自选择 Homebrew 或其他系统安装方式。如果系统电脑名称为空，先让用户在 macOS“系统设置 > 通用 > 共享”中设置，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置，再克隆仓库并检出精确 tag v0.3.2-macos-rc.10。
+2. 让用户确认仓库的最终存放位置，再克隆仓库并检出精确 tag v0.3.2-macos-rc.11。
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
    - 不得使用 git reset、git clean 或 git stash；
@@ -83,9 +89,11 @@
 
    使用飞书 CLI 自带的浏览器或设备认证流程，让用户使用实际部署 Bridge 的飞书组织账号完成应用创建。在创建页面把“应用名称”设置为第 1 步取得的系统电脑名称；如果创建流程没有名称输入框，创建后只进入一次“基础信息”修改应用名称，确认页面显示完全一致后再继续。
 
+   CLI 输出 verification URL 后，无论浏览器是否自动打开，都要立即把 CLI 原样输出的该 URL 作为可点击的备用链接交给用户，然后暂停等待用户完成。只能转交该一次性 verification URL；不得同时输出 device code、原始 JSON、App ID、App Secret、Token 或其他身份数据。不得因为自动打开失败就重跑命令，以免让已交给用户的 URL 失效。
+
    注意：config init 的 --name 参数表示 Lark CLI 本地 profile 名称，不是飞书应用展示名称，因此不得用 --name 尝试设置应用名。若飞书拒绝该电脑名称，不得擅自添加 Codex、Bridge、序号或其他后缀；应暂停并让用户决定是否先修改 macOS 电脑名称。
 
-   不要把认证链接中的临时凭据、App ID、App Secret 或任何身份标识粘贴到聊天或命令参数。浏览器登录、CAPTCHA/MFA 或管理员确认时必须暂停，由用户本人操作。
+   不要把 URL 之外的临时凭据、App ID、App Secret 或任何身份标识粘贴到聊天或命令参数。浏览器登录、CAPTCHA/MFA 或管理员确认时必须暂停，由用户本人操作。
 
 7. 应用创建完成后，先让用户在本机可见的独立 Terminal 中运行：
    ./setup-channel-secret.sh
@@ -99,7 +107,7 @@
 8. 运行：
    ./configure-feishu-app.sh
 
-   该脚本应通过本机私有跳转打开飞书官方应用模板确认页，且不在终端、进程参数或聊天中暴露 App ID。让用户在同一个确认页核对并确认以下完整模板：
+   该脚本应先输出一个最多两分钟有效的临时本机 loopback 备用 URL，再尝试自动打开浏览器。这个本机 URL 不包含 App ID，可以显式交给用户点击；不得输出它最终跳转的飞书目标 URL。如果没有自动弹出浏览器，立即明确告诉用户点击该本机备用 URL，不得只说“请在浏览器中完成”。让用户在同一个确认页核对并确认以下完整模板：
 
    应用/Bot 权限（7 项）：
    - im:message
@@ -129,7 +137,7 @@
 9. 完成当前用户 OAuth：
    ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
 
-   浏览器授权必须由用户本人确认。授权完成后运行：
+   浏览器授权必须由用户本人确认。与第 6 步相同，CLI 一旦输出 verification URL，必须将该 URL 原样作为可点击备用链接交给用户并暂停；不输出 device code 或原始 JSON，不重跑令已交付 URL 失效的登录命令。授权完成后运行：
    ./verify-feishu-app.sh
 
    该验证器只输出不含身份标识的安全摘要。macOS 飞书 CLI 入口必须自动移除当前 Codex/Desktop 进程继承的 HTTP/HTTPS/ALL proxy 变量，使飞书身份与事件校验保持直连；不得要求用户临时修改已保存的 Desktop 代理。只有输出 ok=true，且应用、Bot、用户身份、四项用户 OAuth scope、消息事件发布状态和消息事件所需权限均通过，才能继续。不得运行后再把原始 auth status 或 event dry-run JSON 粘贴到聊天、Issue 或日志。
@@ -187,7 +195,7 @@
     - 再运行 ./status-bridge.sh 和严格 Doctor。
 
 17. 安全与完成标准：
-    - 不得在聊天、日志、命令参数、文档或 Git 中输出 App Secret、OAuth token、App ID、user/bot open ID、chat ID、Codex task ID、本机配置或任务路径；
+    - 除人工认证停点中 Lark CLI 原样生成的一次性 verification URL，以及应用模板脚本生成的临时本机 loopback URL 外，不得在聊天、日志、命令参数、文档或 Git 中输出 App Secret、OAuth token、App ID、device code、user/bot open ID、chat ID、Codex task ID、本机配置或任务路径；
     - 不得修改 Codex 全局状态来伪造 Project 归属；
     - 不得删除或覆盖用户文件；
     - 必须在每个需要用户的安全停点真正暂停，不得伪造认证、审批、发布、Secret 存储或 Desktop 重启成功；
@@ -198,9 +206,11 @@
 ## 设计说明
 
 - Prompt 固定到明确 tag，避免安装过程读到正在变化的分支。
+- 当前 Codex 对话在任何命令前切换为“完全访问”，避免 Keychain 读取被沙盒拒绝后造成假阴性。
 - `bootstrap.sh` 安装仓库锁定的 Lark CLI，无需全局安装。
 - `configure-feishu-app.sh` 把 11 项权限和消息事件合并到飞书官方的一次确认页；默认已有的 Bot、长连接与消息事件不再重复逐页设置。
 - `setup-channel-secret.sh` 现在可以在生成 Bridge 配置前运行，因此 Secret 输入紧跟应用创建。
 - 直连或代理是用户必须明确回答的安装选项，安装代理不得自行假设。
 - 初次绑定直接使用 `$feishu-session-bind`；Bot 私聊中的 `/add` 不再是验收前置条件。
+- Lark CLI 认证始终向用户提供当次 verification URL；应用模板脚本提供不含 App ID 的临时本机备用 URL。
 - 浏览器确认、可能出现的管理员审批/应用发布、OAuth、Secret 输入与 Desktop 重启仍是必须的人工停点。

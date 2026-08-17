@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.10` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.11`；Windows 当前固定候选版为 `v0.3.2-windows-rc.1`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -11,13 +11,17 @@
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
 | 上游 `7c8668e` | 已合并附件 PR #12，并完成领域目录迁移、稳定/实验代码隔离、Codex Session 拆分和 ESLint 语义检查 |
 | `v0.3.2-macos-rc.10` | 保留 rc.9 的代理与 watchdog 修复，并把完整安装要求收拢到固定版本协议链接 |
+| `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
+| `v0.3.2-windows-rc.1` | Windows 候选目标：对齐应用模板、Secret 前置存储、直连/代理选择、安全验证与 Skill 初次绑定 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
+- [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
 - [v0.3.2-macos-rc.8 Release Note](docs/releases/v0.3.2-macos-rc.8.md)
+- [v0.3.2-windows-rc.1 Release Note](docs/releases/v0.3.2-windows-rc.1.md)
 - [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
 - [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
 - [`main`：长回答文档与媒体转发](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/10)
@@ -54,19 +58,20 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用固定候选 tag `v0.3.2-macos-rc.10`。把下面两行复制到这台 Mac 上一个新的 Codex 任务；完整执行要求都在固定版本协议内：
+macOS 请使用固定候选 tag `v0.3.2-macos-rc.11`。把下面两行复制到这台 Mac 上一个新的 Codex 任务；完整执行要求都在固定版本协议内：
 
 ```text
 请按照以下 GitHub 安装协议，在这台 Mac 上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.10/docs/INSTALL_MACOS_PROMPT.md
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.11/docs/INSTALL_MACOS_PROMPT.md
 ```
 
-完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。Windows 仍使用下面的固定 release 流程：
+完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。
 
-把下面这段发到一个新的 Codex 对话：
+Windows 固定候选版 `v0.3.2-windows-rc.1` 同样只需复制两行：
 
 ```text
-请按照 https://github.com/ninmon/feishu-codex-bridge/releases/tag/v0.3.1-beta.1 中的 AGENTS.md 和 docs/INSTALL_AGENT.md，在这台 Windows 电脑安装并部署 Codex Session Relay。先做只读预检；需要安装系统依赖、创建或修改飞书应用、浏览器授权、管理员审批、输入 App Secret、重启 Codex Desktop 时先说明并等我操作。不得在聊天、日志或仓库中输出 App Secret、token 或账户/会话标识。完成后运行 doctor.ps1 -RequireRunning -RequireDesktopRelay，并实际验证飞书和 Desktop 双向消息。
+请按照以下 GitHub 安装协议，在这台 Windows 电脑上部署并完整验收 Feishu Codex Bridge：
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1/docs/INSTALL_WINDOWS_PROMPT.md
 ```
 
 固定 tag 可以避免安装期间读到正在变化的分支。完整协议和人工步骤：
@@ -74,6 +79,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.10/
 - [Windows 安装指南](docs/INSTALL.md)
 - [macOS 安装指南](docs/INSTALL_MACOS.md)
 - [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
+- [给 Codex 的 Windows 全新安装 Prompt](docs/INSTALL_WINDOWS_PROMPT.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [可复制的安装与升级 Prompt](docs/INSTALL_AGENT_PROMPT.md)
 - [飞书自建应用配置](docs/FEISHU_APP_SETUP.md)
@@ -83,16 +89,16 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.10/
 | 依赖 | 要求 |
 | --- | --- |
 | 操作系统 | macOS 13+ 或 Windows 10/11 |
-| Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用 |
+| Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用；macOS 由 Codex 执行安装时，当前对话已设为“完全访问（Full access）”以读取 Keychain |
 | Node.js | `>=22.13.0`，并带 npm |
 | 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git |
-| 飞书 | 可创建企业自建应用的组织账号；macOS 安装脚本会打开官方模板配置权限和事件 |
+| 飞书 | 可创建企业自建应用的组织账号；macOS 和 Windows 安装脚本都会打开官方模板配置权限和事件 |
 
 仓库依赖通过 `npm ci` 安装，锁定 `@larksuite/channel` 和 `@larksuite/cli`；日常使用仓库内的 `lark-cli.sh` 或 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
 ## 飞书权限速查
 
-应用权限与事件必须配置并生效；macOS 推荐由 `configure-feishu-app.sh` 打开官方模板一次确认，手工后台配置仅用于故障回退。若飞书要求发布新版本或管理员审批，等待状态生效后再继续。
+应用权限与事件必须配置并生效；macOS 使用 `configure-feishu-app.sh`，Windows 使用 `configure-feishu-app.ps1` 打开官方模板一次确认，手工后台配置仅用于故障回退。若飞书要求发布新版本或管理员审批，等待状态生效后再继续。
 
 | 应用权限 | 用途 |
 | --- | --- |
@@ -121,13 +127,15 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.10/
 
 ### 1. 创建绑定
 
-启动并完成 Desktop relay 验证后，私聊 Bot 发送：
+启动并完成 Desktop relay 验证后，在目标 Codex 任务中使用 `$feishu-session-bind`，为当前任务创建或复用专属绑定群。初次安装不需要先建 Bot 私聊。
+
+在已经存在的 Bot 私聊或绑定群中，仍可选发送：
 
 ```text
 /add
 ```
 
-按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会创建私有群、校验成员、应用个人 Agent 标签并写入固定绑定。也可以在目标 Codex 对话里调用 `$feishu-session-bind`，或直接说“帮我把当前 Session 绑定到飞书群”。
+该可选向导会按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会创建私有群、校验成员、应用个人 Agent 标签并写入固定绑定。
 
 Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。Project 暂时为空时，向导会提供“重新扫描”“返回 Project 列表”和“新建任务”。
 
@@ -219,7 +227,7 @@ macOS：
 Windows：
 
 ```powershell
-.\configure-codex-desktop-relay.ps1
+.\launch-codex-desktop-with-relay.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
@@ -238,11 +246,12 @@ Windows：
 - [Session Relay 行为、命令与生命周期参考](docs/SESSION_RELAY.md)
 - [macOS 安装与运维](docs/INSTALL_MACOS.md)
 - [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
+- [给 Codex 的 Windows 全新安装 Prompt](docs/INSTALL_WINDOWS_PROMPT.md)
 - [Windows 安装与升级](docs/INSTALL.md)
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [Windows rc.1](docs/releases/v0.3.2-windows-rc.1.md)
 
 ## 开发与验证
 

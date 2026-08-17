@@ -6,6 +6,10 @@ import { promisify } from "node:util";
 
 const execFile = promisify(nodeExecFile);
 
+export const KEYCHAIN_FULL_ACCESS_HINT =
+  "When running this command from Codex Desktop, set the current conversation to Full access "
+  + "(\u5b8c\u5168\u8bbf\u95ee), then retry.";
+
 export function keychainIdentity(repositoryRoot) {
   const suffix = createHash("sha256").update(path.resolve(repositoryRoot), "utf8").digest("hex").slice(0, 16);
   return Object.freeze({
@@ -35,7 +39,9 @@ export async function readKeychainSecret(identity) {
     if (!secret) throw new Error("empty credential");
     return secret;
   } catch {
-    throw new Error("The macOS Keychain does not contain a readable Channel secret.");
+    throw new Error(
+      `The macOS Keychain does not contain a readable Channel secret. ${KEYCHAIN_FULL_ACCESS_HINT}`,
+    );
   }
 }
 
@@ -50,7 +56,9 @@ export async function promptAndStoreKeychainSecret(identity) {
     child.once("close", (status) => resolve(status ?? 1));
   });
   if (code !== 0 || !(await keychainHasSecret(identity))) {
-    throw new Error("The Channel secret was not saved to macOS Keychain.");
+    throw new Error(
+      `The Channel secret was not saved to macOS Keychain. ${KEYCHAIN_FULL_ACCESS_HINT}`,
+    );
   }
   process.stdout.write("Channel secret saved in macOS Keychain; no plaintext file was created.\n");
 }

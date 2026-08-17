@@ -14,6 +14,8 @@
 - Node.js `>=22.13.0`。若 Desktop 自带可用的 Node，脚本会自动发现，无需全局安装；
 - 可创建飞书企业自建应用的组织账号；应用可在安装过程中通过仓库脚本配置。
 
+如果由 Codex Desktop 在当前对话中执行安装，在运行任何命令前，先在输入框下方的权限菜单中将当前对话设为“完全访问（Full access）”。按 [OpenAI Codex 沙盒说明](https://developers.openai.com/codex/sandboxing)，该模式取消当前 Agent 的文件系统与网络沙盒边界。Bridge 还需要从当前 macOS 用户的 Keychain 读取 Channel Secret；实际部署中，沙盒对话内的 `security` 子进程可能无法读取已存在的项目，并造成 Doctor 假阴性。不要修改 Codex 全局配置来代替这个当前对话权限。
+
 先执行只读预检：
 
 ```bash
@@ -51,6 +53,8 @@ git --version
 
 用户使用实际部署 Bridge 的飞书组织账号完成浏览器认证、CAPTCHA/MFA 和应用创建，并在创建页把“应用名称”设为上面取得的系统电脑名称。若创建流程没有名称输入框，创建后只需在“基础信息”修改这一项，确认完全一致再继续。
 
+Lark CLI 会输出一次性 verification URL。无论系统是否自动弹出浏览器，安装执行者都应把这个 URL 原样作为可点击备用链接交给用户，然后等待认证完成。只转交 verification URL，不输出 device code、原始 JSON、App ID、Secret 或 Token；不要重跑命令使已交付的 URL 失效。
+
 `config init --name` 设置的是 Lark CLI 本地 profile 名称，不是飞书应用展示名称，不得用它代替页面中的应用名称。若飞书拒绝当前电脑名称，暂停让用户决定是否先修改 macOS 电脑名称，不要自行追加后缀。认证临时凭据、App ID 与身份标识不得粘贴到聊天、命令参数或日志。
 
 应用创建完成后，立即由用户在本机可见 Terminal 中运行：
@@ -67,7 +71,7 @@ git --version
 ./configure-feishu-app.sh
 ```
 
-该脚本从本机已验证的 Lark CLI 配置读取应用身份，通过随机 loopback 跳转打开飞书官方模板确认页，不会把 App ID 打印到终端或传给 `open` 的进程参数。用户在一个页面核对并确认 Bridge 所需的 7 项应用/Bot 权限、4 项用户权限和 `im.message.receive_v1`；完整清单与手工故障回退见[飞书自建应用配置](FEISHU_APP_SETUP.md)。
+该脚本从本机已验证的 Lark CLI 配置读取应用身份，通过随机 loopback 跳转打开飞书官方模板确认页，不会把 App ID 打印到终端或传给 `open` 的进程参数。脚本会在尝试自动打开浏览器前，先输出一个最多两分钟有效、不含 App ID 的临时本机 URL。如果浏览器未弹出，直接在同一台 Mac 上打开这个 URL；超时后重跑脚本获取新链接。不要输出最终飞书目标 URL。用户在一个页面核对并确认 Bridge 所需的 7 项应用/Bot 权限、4 项用户权限和 `im.message.receive_v1`；完整清单与手工故障回退见[飞书自建应用配置](FEISHU_APP_SETUP.md)。
 
 Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `im.message.receive_v1`。正常流程不要再逐页重复设置这些默认项。若飞书要求可用范围、版本发布或管理员审批，将可用范围限制为当前安装用户，由用户本人提交，并等待状态明确生效。
 
@@ -79,6 +83,8 @@ Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `
 ```
 
 浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。所有 macOS 飞书 CLI 入口都会从子进程环境中移除 Desktop 的 HTTP/HTTPS/ALL proxy 变量，确保身份和事件校验继续走飞书直连，不会因为当前 Codex 任务继承了 Desktop 代理而产生假阴性。只有 `ok=true`，且应用、Bot、用户身份、四项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
+
+OAuth 命令同样会输出 verification URL。自动打开失败时，使用 CLI 当次输出的原样 URL，不输出 device code 或原始 JSON，不重新发起授权使原 URL 失效。
 
 ## 4. 生成本机配置
 

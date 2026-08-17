@@ -95,6 +95,7 @@ test("macOS direct network environment removes inherited Desktop proxy variables
     all_proxy: "socks5://127.0.0.1:7897",
     NO_PROXY: "127.0.0.1",
     no_proxy: "localhost",
+    Http_Proxy: "http://127.0.0.1:9999",
   };
   const direct = directNetworkEnvironment(source);
   assert.equal(direct.CUSTOM_VALUE, "preserved");
@@ -102,6 +103,7 @@ test("macOS direct network environment removes inherited Desktop proxy variables
     assert.equal(name in direct, false, name);
     assert.equal(name in source, true, `source ${name}`);
   }
+  assert.equal("Http_Proxy" in direct, false);
 });
 
 test("macOS launchd state wait covers asynchronous unregister completion", async () => {
@@ -199,9 +201,13 @@ test("Keychain identity is stable without embedding the repository path", () => 
 test("private Feishu browser handoff keeps the target out of process arguments", async () => {
   const target = "https://open.feishu.cn/page/launcher?clientID=cli_private_test&addons=encoded";
   let openedUrl;
+  let readyUrl;
   let redirectedTo;
   await openPrivateFeishuUrl(target, {
     timeoutMs: 2_000,
+    onReady: (localUrl) => {
+      readyUrl = localUrl;
+    },
     open: async (localUrl) => {
       openedUrl = localUrl;
       await new Promise((resolve, reject) => {
@@ -214,6 +220,7 @@ test("private Feishu browser handoff keeps the target out of process arguments",
     },
   });
   assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f-]+$/);
+  assert.equal(readyUrl, openedUrl);
   assert.equal(openedUrl.includes("cli_private_test"), false);
   assert.equal(redirectedTo, target);
   await assert.rejects(
@@ -228,6 +235,31 @@ test("private Feishu browser handoff keeps the target out of process arguments",
     () => openPrivateFeishuUrl("https://user:password@open.feishu.cn/page/launcher"),
     /Feishu Open Platform/,
   );
+});
+
+test("private Feishu browser handoff remains usable when automatic opening fails", async () => {
+  const target = "https://open.feishu.cn/page/launcher?clientID=cli_private_manual";
+  let fallbackUrl;
+  let redirectedTo;
+  await openPrivateFeishuUrl(target, {
+    timeoutMs: 2_000,
+    onReady: async (localUrl) => {
+      fallbackUrl = localUrl;
+      await new Promise((resolve, reject) => {
+        http.get(localUrl, (response) => {
+          redirectedTo = response.headers.location;
+          response.resume();
+          response.once("end", resolve);
+        }).once("error", reject);
+      });
+    },
+    open: async () => {
+      throw new Error("browser opener unavailable");
+    },
+  });
+  assert.match(fallbackUrl, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f-]+$/);
+  assert.equal(fallbackUrl.includes("cli_private_manual"), false);
+  assert.equal(redirectedTo, target);
 });
 
 test("launchd plist escapes values and passes no shell command string", async (t) => {

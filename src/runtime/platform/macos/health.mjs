@@ -18,6 +18,7 @@ import {
   larkJson,
 } from "./installer.mjs";
 import {
+  KEYCHAIN_FULL_ACCESS_HINT,
   keychainHasSecret,
   keychainIdentity,
 } from "./keychain-credential-store.mjs";
@@ -130,7 +131,14 @@ export async function runDoctorCommand(args) {
     add("Node.js", await executableWorks(nodeExecutable, ["--version"], nodeVersionSupported), "version is supported");
     add("Codex App Server", await executableWorks(codexExecutable, ["app-server", "--help"], /--listen\s+<URL>/m), "listener capability is available");
     add("Codex state", await fs.access(path.join(os.homedir(), ".codex", "state_5.sqlite")).then(() => true, () => false), "state database is present");
-    add("Keychain secret", await keychainHasSecret(keychainIdentity(repositoryRoot)), "item is present and readable for the current user");
+    const keychainReady = await keychainHasSecret(keychainIdentity(repositoryRoot));
+    add(
+      "Keychain secret",
+      keychainReady,
+      keychainReady
+        ? "item is present and readable for the current user"
+        : `item is missing or unreadable. ${KEYCHAIN_FULL_ACCESS_HINT}`,
+    );
     for (const [name, filePath] of [
       ["Environment LaunchAgent", layout.environmentPlistPath],
       ["App Server LaunchAgent", layout.appServerPlistPath],

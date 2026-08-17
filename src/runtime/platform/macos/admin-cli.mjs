@@ -52,6 +52,7 @@ import {
   launchEnvironment,
 } from "./launch-environment.mjs";
 import {
+  KEYCHAIN_FULL_ACCESS_HINT,
   keychainHasSecret,
   keychainIdentity,
   promptAndStoreKeychainSecret,
@@ -105,7 +106,16 @@ async function configureFeishuAppCommand(args) {
     throw new Error("Lark CLI is not bound to a verified Feishu app. Complete config init first.");
   }
   const targetUrl = buildFeishuBridgeAppTemplateUrl(appId);
-  await openPrivateFeishuUrl(targetUrl);
+  await openPrivateFeishuUrl(targetUrl, {
+    timeoutMs: 120_000,
+    onReady: (localUrl) => {
+      process.stdout.write([
+        "Temporary local browser fallback (valid for up to two minutes):",
+        localUrl,
+        "If no browser opens automatically, open that URL on this Mac.",
+      ].join("\n") + "\n");
+    },
+  });
   process.stdout.write(
     "Feishu app template opened in the browser. Review and confirm the requested scopes and message event; no change is applied until you confirm there.\n",
   );
@@ -145,7 +155,12 @@ async function startCommand(args) {
   const { options } = optionMap(args);
   const { raw: config } = await readBridgeConfig(repositoryRoot);
   const identity = keychainIdentity(repositoryRoot);
-  if (!(await keychainHasSecret(identity))) throw new Error("Channel secret is missing from macOS Keychain. Run setup-channel-secret.sh first.");
+  if (!(await keychainHasSecret(identity))) {
+    throw new Error(
+      `Channel secret is missing or unreadable in macOS Keychain. ${KEYCHAIN_FULL_ACCESS_HINT} `
+      + "Run setup-channel-secret.sh if the item has not been stored yet.",
+    );
+  }
   const layout = await writeMacOSLaunchAgents(config);
   const endpoint = parseLoopbackAppServerUrl(config.sessionRelay?.appServerUrl);
   await Promise.all([

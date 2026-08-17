@@ -17,12 +17,26 @@ function Add-Check {
 
 function Invoke-LarkJson {
     param([string]$NodePath, [string]$EntryPath, [string[]]$Arguments)
+    $proxyNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+    $savedEnvironment = @{}
     try {
+        foreach ($name in $proxyNames) {
+            $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($item) { $savedEnvironment[$name] = [string]$item.Value }
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        }
         $lines = & $NodePath $EntryPath @Arguments 2>&1
         if ($LASTEXITCODE -ne 0) { return $null }
         return (($lines | ForEach-Object { [string]$_ }) -join "`n") | ConvertFrom-Json
     } catch {
         return $null
+    } finally {
+        foreach ($name in $proxyNames) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($savedEnvironment.ContainsKey($name)) {
+                Set-Item -LiteralPath "Env:$name" -Value $savedEnvironment[$name]
+            }
+        }
     }
 }
 
@@ -230,6 +244,48 @@ if ($config) {
             'listener is missing or not owned by the configured Codex executable'
         })
 
+    $appServerEnvironmentPath = Join-Path $runtimeDir 'codex-app-server-environment.json'
+    $appServerNetworkReady = $false
+    try {
+        if (-not ($appServerListening -and $appServerProcessVerified)) {
+            throw 'the verified shared App Server is not running'
+        }
+        if (-not (Test-Path -LiteralPath $appServerEnvironmentPath -PathType Leaf)) {
+            throw 'the App Server network-mode record is missing; reconfigure Desktop relay networking'
+        }
+        $networkState = Get-Content -Raw -LiteralPath $appServerEnvironmentPath | ConvertFrom-Json
+        if ([int]$networkState.processId -ne $appServerProcessId) {
+            throw 'the App Server network-mode record belongs to another process'
+        }
+        $expectedDesktopProxyUrl = if ($relayState) { [string]$relayState.desktopProxyUrl } else { '' }
+        if ([string]::IsNullOrWhiteSpace($expectedDesktopProxyUrl)) {
+            $appServerNetworkReady = [string]$networkState.mode -eq 'direct' -and
+                [string]::IsNullOrWhiteSpace([string]$networkState.desktopProxyUrl)
+        } else {
+            $appServerNetworkReady = [string]$networkState.mode -eq 'proxy' -and
+                [string]$networkState.desktopProxyUrl -eq $expectedDesktopProxyUrl
+        }
+        if (-not $appServerNetworkReady) {
+            throw 'the shared App Server does not match the saved direct/proxy selection'
+        }
+        $networkDetail = if ($expectedDesktopProxyUrl) {
+            'shared App Server uses the explicitly selected local proxy'
+        } else {
+            'shared App Server is in direct mode'
+        }
+    } catch {
+        $networkDetail = $_.Exception.Message
+    }
+    $networkCheckPassed = $appServerNetworkReady -or $relayActivationDeferred
+    Add-Check -Name 'Shared App Server network mode' -Passed $networkCheckPassed `
+        -Detail $(if ($appServerNetworkReady) {
+            $networkDetail
+        } elseif ($relayActivationDeferred) {
+            'not required while the Bridge is stopped or before final activation'
+        } else {
+            $networkDetail
+        })
+
     $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
     $skillRoot = Join-Path $userProfile '.agents\skills\feishu-session-bind'
     $skillReady = (Test-Path -LiteralPath (Join-Path $skillRoot 'SKILL.md') -PathType Leaf) -and
@@ -266,6 +322,21 @@ if ($config) {
         $documentsReady = $missingDocumentScopes.Count -eq 0
         Add-Check -Name 'Feishu long-answer document OAuth scopes' -Passed $documentsReady `
             -Detail $(if ($documentsReady) { 'create and write scopes granted' } else { "missing: $($missingDocumentScopes -join ', ')" })
+
+        $eventDryRun = Invoke-LarkJson -NodePath $nodePath -EntryPath $larkCliEntry `
+            -Arguments @('event', 'consume', 'im.message.receive_v1', '--as', 'bot', '--dry-run')
+        $eventPreconditions = @{}
+        foreach ($precondition in @($eventDryRun.data.decision.preconditions)) {
+            if ($precondition -and -not [string]::IsNullOrWhiteSpace([string]$precondition.name)) {
+                $eventPreconditions[[string]$precondition.name] = [string]$precondition.status
+            }
+        }
+        $messageEventPublished = $eventPreconditions['console_event_published'] -eq 'ok'
+        Add-Check -Name 'Feishu message event publication' -Passed $messageEventPublished `
+            -Detail $(if ($messageEventPublished) { 'im.message.receive_v1 is published' } else { 'im.message.receive_v1 is missing or not published' })
+        $messageEventScopesReady = $eventPreconditions['scopes_granted'] -eq 'ok'
+        Add-Check -Name 'Feishu message event scopes' -Passed $messageEventScopesReady `
+            -Detail $(if ($messageEventScopesReady) { 'event-required application scopes are active' } else { 'event-required application scopes are missing or not active' })
     }
 
     if ($RequireRunning) {

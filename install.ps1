@@ -31,7 +31,14 @@ function Invoke-LarkJson {
         [Parameter(Mandatory)][string]$EntryPath,
         [Parameter(Mandatory)][string[]]$Arguments
     )
+    $proxyNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+    $savedEnvironment = @{}
     try {
+        foreach ($name in $proxyNames) {
+            $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($item) { $savedEnvironment[$name] = [string]$item.Value }
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        }
         $lines = & $NodePath $EntryPath @Arguments 2>&1
         if ($LASTEXITCODE -ne 0) { return $null }
         $text = ($lines | ForEach-Object { [string]$_ }) -join "`n"
@@ -39,6 +46,13 @@ function Invoke-LarkJson {
         return $text | ConvertFrom-Json
     } catch {
         return $null
+    } finally {
+        foreach ($name in $proxyNames) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            if ($savedEnvironment.ContainsKey($name)) {
+                Set-Item -LiteralPath "Env:$name" -Value $savedEnvironment[$name]
+            }
+        }
     }
 }
 
@@ -234,8 +248,16 @@ if (-not $NoUserChanges) {
 
 Write-Output ''
 Write-Output 'Local installation is prepared.'
-Write-Output 'Next: publish the Feishu app, complete user OAuth, run setup-channel-secret.ps1, then start-bridge.ps1.'
+$effectiveConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+$effectiveRuntimeDir = Join-Path ([string]$effectiveConfig.workspace) 'work\feishu-codex-bridge'
+$effectiveSecretPath = Join-Path $effectiveRuntimeDir 'channel-secret.dpapi'
+if (Test-Path -LiteralPath $effectiveSecretPath -PathType Leaf) {
+    Write-Output 'The preconfigured DPAPI Channel Secret is available in the selected runtime workspace.'
+} else {
+    Write-Warning 'The DPAPI Channel Secret is missing from the selected runtime workspace. Run setup-channel-secret.ps1 before starting the Bridge.'
+}
+Write-Output 'Next: start the Bridge, configure Desktop relay networking, then complete strict Doctor and real message tests.'
 if (-not $NoUserChanges) {
-    Write-Output 'After the Bridge is connected, run configure-codex-desktop-relay.ps1, then fully exit and reopen Codex Desktop.'
+    Write-Output 'After the Bridge is connected, choose direct or local-proxy mode, fully exit Codex Desktop, then run launch-codex-desktop-with-relay.ps1.'
     Write-Output 'A fresh install does not change Codex Desktop until that final activation succeeds.'
 }
