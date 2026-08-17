@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：Windows 有固定 beta release；macOS 移植的下一候选版本为 `v0.3.2-macos-rc.9`，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：Windows 有固定 beta release；macOS 移植目前以 `v0.3.2-macos-rc.9` 提供固定候选 tag，基于上游提交 `7c8668e` 的领域目录与静态检查基线，尚未提升为稳定 release。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
