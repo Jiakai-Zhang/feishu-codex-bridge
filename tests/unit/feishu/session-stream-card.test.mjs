@@ -65,6 +65,19 @@ test("builds one updateable progress card from public commentary", () => {
   assert.doesNotMatch(JSON.stringify(card), /reasoning|tool output/i);
 });
 
+test("builds the queued acknowledgement as the initial stream card state", () => {
+  const card = buildSessionStreamCard({
+    queued: { position: 2, alreadyQueued: false },
+  });
+
+  assert.equal(card.schema, "2.0");
+  assert.equal(card.body.elements.length, 1);
+  assert.match(card.body.elements[0].content, /已按默认设置加入下一轮队列/);
+  assert.match(card.body.elements[0].content, /当前排位：\*\*2\*\*/);
+  assert.match(card.body.elements[0].content, /独立的新 Turn/);
+  assert.match(card.config.summary.content, /排队中/);
+});
+
 test("preserves markdown and images when the same card becomes the final answer", () => {
   const card = buildSessionStreamCard({
     answerSegments: [
@@ -118,6 +131,25 @@ test("persists one card per turn and deduplicates progress", async () => {
   assert.equal(reopened.get("thread-a", "turn-a"), undefined);
 });
 
+test("reassigns a queued card to its real Turn without changing the Feishu message", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "session-stream-card-adopt-"));
+  const filePath = path.join(directory, "cards.json");
+  const store = await SessionStreamCardStore.open(filePath);
+  await store.start({
+    threadId: "thread-a",
+    turnId: "queued:input-a",
+    chatId: "chat-a",
+    messageId: "card-a",
+    createdAt: 100,
+  });
+
+  const adopted = await store.reassign("thread-a", "queued:input-a", "turn-a", { createdAt: 200 });
+  assert.equal(adopted.messageId, "card-a");
+  assert.equal(adopted.createdAt, 200);
+  assert.equal(store.get("thread-a", "queued:input-a"), undefined);
+  assert.equal(store.get("thread-a", "turn-a").messageId, "card-a");
+});
+
 test("routes public progress and completion through the persistent card only in turn handlers", async () => {
   const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
   const commandStart = source.indexOf("async function processCommandMessage");
@@ -132,5 +164,6 @@ test("routes public progress and completion through the persistent card only in 
   assert.match(progressBody, /appendProgress/);
   assert.match(progressBody, /channel\.updateCard/);
   assert.match(completionBody, /tryCompleteTurnStreamCard/);
-  assert.match(source, /onAccepted:[\s\S]*tryEnsureTurnStreamCard/);
+  assert.match(source, /onAccepted:[\s\S]*tryAdoptQueuedStreamCard/);
+  assert.doesNotMatch(source, /deliveryId: `default-queue:/);
 });

@@ -107,6 +107,31 @@ test("keeps a prompt queued while busy and removes it only after a new Turn is a
   });
 });
 
+test("does not dispatch a new prompt until its queue card is durable", async () => {
+  let calls = 0;
+  await fixture(async ({ queue }) => {
+    await queue.enqueue({ ...record("om_1", "first"), dispatchReady: false });
+
+    assert.deepEqual(await queue.dispatch("codex-thread"), {
+      kind: "waiting",
+      reason: "queue_card_pending",
+      reconciled: 0,
+    });
+    assert.equal(calls, 0);
+
+    await queue.markDispatchReady("om_1");
+    assert.equal((await queue.dispatch("codex-thread")).kind, "started");
+    assert.equal(calls, 1);
+  }, {
+    getController: () => ({
+      startQueuedPrompt: async () => {
+        calls += 1;
+        return { kind: "started", turnId: "turn-new", turnStatus: "inProgress" };
+      },
+    }),
+  });
+});
+
 test("restores an accepted prompt in memory when removing it from durable storage fails", async () => {
   const errors = [];
   let calls = 0;

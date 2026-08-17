@@ -27,6 +27,7 @@ function normalizeRecord(record) {
     feishuThreadId: record.feishuThreadId ? String(record.feishuThreadId) : undefined,
     text,
     attachments,
+    dispatchReady: record.dispatchReady !== false,
     createdAt: Number(record.createdAt) || Date.now(),
   };
 }
@@ -154,6 +155,20 @@ export class SessionPromptQueue {
     });
   }
 
+  async markDispatchReady(messageId) {
+    const current = this.records.get(String(messageId));
+    if (!current) return undefined;
+    return this.#serialize(current.sessionThreadId, async () => {
+      const record = this.records.get(String(messageId));
+      if (!record) return undefined;
+      if (!record.dispatchReady) {
+        record.dispatchReady = true;
+        await this.persist();
+      }
+      return Object.freeze(cloneRecord(record));
+    });
+  }
+
   async clear(sessionThreadId) {
     const target = String(sessionThreadId);
     return this.#serialize(target, async () => {
@@ -173,6 +188,9 @@ export class SessionPromptQueue {
       for (;;) {
         const record = this.list(target)[0];
         if (!record) return Object.freeze({ kind: "empty", reconciled });
+        if (!record.dispatchReady) {
+          return Object.freeze({ kind: "waiting", reason: "queue_card_pending", reconciled });
+        }
         const controller = this.getController();
         if (!controller) return Object.freeze({ kind: "waiting", reason: "controller_unavailable", reconciled });
         let result;

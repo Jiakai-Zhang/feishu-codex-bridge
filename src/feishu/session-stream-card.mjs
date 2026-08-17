@@ -101,6 +101,7 @@ function finalElements({ answer, answerSegments, maxAnswerChars }) {
 
 export function buildSessionStreamCard({
   progress = [],
+  queued,
   startedAtMs,
   nowMs = Date.now(),
   answer,
@@ -127,6 +128,23 @@ export function buildSessionStreamCard({
       content: `*回答时间：${formatTimestamp(completedAtMs, timeZone)} · 用时：${formatDuration(durationMs)} · 本轮 Token：${tokenText}*`,
     });
     summarySource = answer || answerSegments?.find((segment) => segment?.type === "text")?.text || "Codex 回复完成";
+  } else if (queued) {
+    const position = Math.max(1, Number(queued.position) || 1);
+    const cancelled = queued.status === "cancelled";
+    elements = [{
+      tag: "markdown",
+      content: cancelled
+        ? `**已从下一轮队列移除**\n\n${String(queued.reason || "这条 Prompt 不会再自动开始。")}`
+        : [
+            `**${queued.alreadyQueued ? "已在下一轮队列中" : "已按默认设置加入下一轮队列"}**`,
+            "",
+            `- 当前排位：**${position}**`,
+            "- 执行方式：任务空闲后作为独立的新 Turn 开始",
+            "",
+            "*如需改为调整方向，请先使用 `/settings input steer`。*",
+          ].join("\n"),
+    }];
+    summarySource = cancelled ? "已从下一轮队列移除" : `排队中 · 当前排位 ${position}`;
   } else {
     const elapsedMs = Number.isFinite(Number(startedAtMs))
       ? Math.max(0, Number(nowMs) - Number(startedAtMs))
@@ -239,6 +257,31 @@ export class SessionStreamCardStore {
       .slice(-MAX_STORED_PROGRESS);
     await this.persist();
     return structuredClone(current);
+  }
+
+  async reassign(threadId, fromTurnId, toTurnId, { createdAt = Date.now() } = {}) {
+    const sourceKey = recordKey(threadId, fromTurnId);
+    const targetKey = recordKey(threadId, toTurnId);
+    const target = this.records.get(targetKey);
+    if (target) return structuredClone(target);
+    const source = this.records.get(sourceKey);
+    if (!source) return undefined;
+    const reassigned = normalizeRecord({
+      ...source,
+      turnId: toTurnId,
+      progress: [],
+      createdAt,
+    });
+    this.records.delete(sourceKey);
+    this.records.set(targetKey, reassigned);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.records.delete(targetKey);
+      this.records.set(sourceKey, source);
+      throw error;
+    }
+    return structuredClone(reassigned);
   }
 
   async remove(threadId, turnId) {

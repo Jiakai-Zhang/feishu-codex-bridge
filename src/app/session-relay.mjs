@@ -153,10 +153,11 @@ const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
       kind: `queued:${result?.kind || "accepted"}`,
       createdAt: queued.createdAt,
     });
-    await tryEnsureTurnStreamCard({
+    await tryAdoptQueuedStreamCard({
       threadId: queued.sessionThreadId,
       turnId: result?.turnId,
       chatId: queued.chatId,
+      queuedMessageId: queued.messageId,
     });
   },
   onError: (error, queued) => log(
@@ -817,6 +818,104 @@ async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
   return created;
 }
 
+function queuedStreamCardTurnId(messageId) {
+  return `queued:${String(messageId)}`;
+}
+
+async function ensureQueuedStreamCard({ queued, position, alreadyQueued = false }) {
+  const { sessionThreadId: threadId, chatId, messageId } = queued;
+  const turnId = queuedStreamCardTurnId(messageId);
+  const existing = streamCards.get(threadId, turnId);
+  const card = buildSessionStreamCard({ queued: { position, alreadyQueued } });
+  if (existing) {
+    await channel.updateCard(existing.messageId, card);
+    return existing;
+  }
+  if (!channelConnected) throw new Error("Feishu channel is disconnected while creating the queue card");
+  const binding = resolveRelayBinding(chatId, threadId);
+  if (!binding) throw new Error("Queued prompt has no available Session binding");
+  await inspectBinding(binding);
+  const response = await channel.rawClient.im.message.reply({
+    data: {
+      content: JSON.stringify(card),
+      msg_type: "interactive",
+      reply_in_thread: Boolean(queued.feishuThreadId),
+      uuid: deliveryIdempotencyKey(`codex-queue-card:${messageId}`),
+    },
+    path: { message_id: messageId },
+  });
+  if (response?.code !== undefined && response.code !== 0) {
+    throw new Error(`Feishu queue card creation failed with code ${response.code}`);
+  }
+  const cardMessageId = response?.data?.message_id || response?.data?.message?.message_id;
+  if (!cardMessageId) throw new Error("Feishu queue card creation returned no message id");
+  const created = await streamCards.start({
+    threadId,
+    turnId,
+    chatId,
+    messageId: cardMessageId,
+    createdAt: Date.now(),
+  });
+  log("created a queue card that can become the turn stream card");
+  return created;
+}
+
+async function tryAdoptQueuedStreamCard({ threadId, turnId, chatId, queuedMessageId }) {
+  if (!threadId || !turnId || !chatId || !queuedMessageId) {
+    return tryEnsureTurnStreamCard({ threadId, turnId, chatId });
+  }
+  try {
+    const startedAtMs = Date.now();
+    const adopted = await streamCards.reassign(
+      threadId,
+      queuedStreamCardTurnId(queuedMessageId),
+      turnId,
+      { createdAt: startedAtMs },
+    );
+    if (!adopted) return tryEnsureTurnStreamCard({ threadId, turnId, chatId });
+    if (channelConnected) {
+      await channel.updateCard(adopted.messageId, buildSessionStreamCard({
+        startedAtMs,
+        nowMs: startedAtMs,
+      }));
+    }
+    log("queue card adopted as the turn stream card");
+    return adopted;
+  } catch (error) {
+    log(`queue card could not be adopted: ${safeError(error)}`);
+    return tryEnsureTurnStreamCard({ threadId, turnId, chatId });
+  }
+}
+
+async function retireQueuedStreamCard(queued, reason) {
+  if (!queued) return;
+  const current = streamCards.get(queued.sessionThreadId, queuedStreamCardTurnId(queued.messageId));
+  if (!current) return;
+  try {
+    if (channelConnected) {
+      await channel.updateCard(current.messageId, buildSessionStreamCard({
+        queued: { status: "cancelled", reason },
+      }));
+    }
+  } catch (error) {
+    log(`removed queue card could not be updated: ${safeError(error)}`);
+  }
+  await streamCards.remove(queued.sessionThreadId, queuedStreamCardTurnId(queued.messageId));
+}
+
+async function reconcilePendingQueueCards() {
+  for (const queued of promptQueue.list().filter((record) => !record.dispatchReady)) {
+    const position = promptQueue.list(queued.sessionThreadId)
+      .findIndex((record) => record.messageId === queued.messageId) + 1;
+    try {
+      await ensureQueuedStreamCard({ queued, position });
+      await promptQueue.markDispatchReady(queued.messageId);
+    } catch (error) {
+      log(`pending queue card reconciliation deferred: ${safeError(error)}`);
+    }
+  }
+}
+
 async function tryEnsureTurnStreamCard(record) {
   try {
     return await ensureTurnStreamCard(record);
@@ -868,6 +967,7 @@ async function enqueuePromptMessage(msg, binding, text, attachments = []) {
     feishuThreadId: msg.threadId,
     text,
     attachments,
+    dispatchReady: false,
     createdAt: Date.now(),
   }, {
     afterPersist: async (queued) => inputLedger.put({
@@ -891,23 +991,13 @@ async function processPromptMessage(msg, binding, prompt) {
     if (settings.inputMode === "queue") {
       await inspectBinding(binding);
       const queued = await enqueuePromptMessage(msg, binding, content, attachments);
+      await ensureQueuedStreamCard({
+        queued: queued.record,
+        position: queued.position,
+        alreadyQueued: queued.alreadyQueued,
+      });
+      await promptQueue.markDispatchReady(msg.messageId);
       accepted = true;
-      await queueDelivery({
-        kind: "reply",
-        deliveryId: `default-queue:${msg.messageId}`,
-        messageId: msg.messageId,
-        chatId: msg.chatId,
-        threadId: msg.threadId,
-        markdown: [
-          `### ${queued.alreadyQueued ? "已在下一轮队列中" : "已按默认设置加入下一轮队列"}`,
-          "",
-          `- 当前排位：${queued.position}`,
-          "- 执行方式：任务空闲后作为独立的新 Turn 开始",
-          "- 如需改为调整方向：使用 `/settings input steer` 后再发送",
-        ].join("\n"),
-        publicStatus: true,
-        createdAt: Date.now(),
-      }, `default queue acknowledged for ${msg.messageId}`);
       dispatchQueuedPrompts(binding.threadId);
       log(`queued relay message ${msg.messageId}; position=${queued.position}; elapsedMs=${Date.now() - startedAt}`);
       return true;
@@ -1040,8 +1130,14 @@ async function processCommandMessage(msg, binding, command) {
     let queueAction;
     let draftClaim;
     let queuedAccepted = false;
+    let queuedResult;
+    let commandFailed = false;
+    let queuedCardsToRetire = [];
     try {
       queueAction = command.name === "queue" ? parseQueueAction(command.args) : undefined;
+      queuedCardsToRetire = queueAction?.action === "remove"
+        ? [promptQueue.list(binding.threadId)[Number(queueAction.position) - 1]].filter(Boolean)
+        : queueAction?.action === "clear" ? promptQueue.list(binding.threadId) : [];
       if (queueAction?.action === "enqueue") {
         draftClaim = await attachmentDrafts.claim(binding.threadId, msg.messageId);
       }
@@ -1054,10 +1150,12 @@ async function processCommandMessage(msg, binding, command) {
         enqueuePrompt: async (text) => {
           const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
           queuedAccepted = true;
+          queuedResult = queued;
           return queued;
         },
       });
     } catch (error) {
+      commandFailed = true;
       markdown = publicCommandFailure(error);
       log(`session command /${command.name} failed: ${safeError(error)}`);
     }
@@ -1078,16 +1176,31 @@ async function processCommandMessage(msg, binding, command) {
         createdAt: Date.now(),
       });
     }
-    await queueDelivery({
-      kind: "reply",
-      deliveryId: `command:${msg.messageId}`,
-      messageId: msg.messageId,
-      chatId: msg.chatId,
-      threadId: msg.threadId,
-      markdown,
-      publicStatus: queueAction?.action === "enqueue",
-      createdAt: Date.now(),
-    }, `session command /${command.name} replied for ${msg.messageId}`);
+    if (queuedResult && !commandFailed) {
+      await ensureQueuedStreamCard({
+        queued: queuedResult.record,
+        position: queuedResult.position,
+        alreadyQueued: queuedResult.alreadyQueued,
+      });
+      await promptQueue.markDispatchReady(msg.messageId);
+    } else {
+      await queueDelivery({
+        kind: "reply",
+        deliveryId: `command:${msg.messageId}`,
+        messageId: msg.messageId,
+        chatId: msg.chatId,
+        threadId: msg.threadId,
+        markdown,
+        createdAt: Date.now(),
+      }, `session command /${command.name} replied for ${msg.messageId}`);
+    }
+    if (!commandFailed && queueAction?.action === "remove") {
+      await retireQueuedStreamCard(queuedCardsToRetire[0], "这条 Prompt 已通过 `/queue remove` 删除。");
+    } else if (!commandFailed && queueAction?.action === "clear") {
+      for (const queued of queuedCardsToRetire) {
+        await retireQueuedStreamCard(queued, "队列已通过 `/queue clear` 清空。");
+      }
+    }
     if (queueAction?.action === "enqueue") dispatchQueuedPrompts(binding.threadId);
   } catch (error) {
     log(`session command /${command.name} could not be processed: ${safeError(error)}`);
@@ -1935,6 +2048,7 @@ try {
     sessionController = createSessionController(controllerTargets);
     await sessionController.start();
     log(`Codex session controller subscribed to ${controllerTargets.length} bound task(s)`);
+    await reconcilePendingQueueCards();
     dispatchAllQueuedPrompts();
   }
   log(`READY: Channel SDK connected; mode=session-relay; bindings=${config.sessionRelay.bindings.length}; ready=${readyBindings}`);
