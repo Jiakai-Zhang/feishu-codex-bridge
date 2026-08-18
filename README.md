@@ -9,7 +9,7 @@
 | 基线 | 包含内容 |
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
-| 上游 `ca4ac65` | 在附件与领域架构基线上继续合并原生媒体、串行 JSON 持久化和私聊临时 Chat |
+| 上游 `be75d65` | 在附件与领域架构基线上继续合并原生媒体、串行 JSON 持久化、私聊临时 Chat 和单 Session writer 冲突隔离 |
 | `v0.3.2-macos-rc.10` | 保留 rc.9 的代理与 watchdog 修复，并把完整安装要求收拢到固定版本协议链接 |
 | `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
 | `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
