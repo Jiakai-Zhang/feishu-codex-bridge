@@ -51,7 +51,7 @@ Lark CLI 会输出一次性 verification URL。不能假定浏览器一定会自
 
 ## B. 推荐：一次模板确认
 
-macOS 由 Codex Desktop 执行安装时，当前对话必须先设为“完全访问（Full access）”。否则沙盒内的 `security` 子进程可能无法写入或读取当前用户 Keychain，并把已有 Secret 误报为缺失。
+macOS 或 Windows 由 Codex Desktop 执行安装时，当前对话都必须先设为“完全访问（Full access）”。“替我审批（Approve for me）”不会解除沙盒边界；macOS 的 `security`/Keychain 子进程，或 Windows 的 PowerShell、DPAPI 检查、Scheduled Task 与 relay 配置可能因此无法访问当前用户资源，并造成 Secret 或连接状态假阴性。
 
 应用创建完成后，先由用户在本机可见 Terminal 安全保存 Channel App Secret：
 

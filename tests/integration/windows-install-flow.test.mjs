@@ -75,6 +75,8 @@ test("Windows Desktop launcher defaults direct and accepts only explicit loopbac
   assert.match(configure, /if \(\$proxyHostName -eq '\[::1\]'\) \{ \$proxyHostName = '::1' \}/);
   assert.match(configure, /Wait-RelayTaskStopped/);
   assert.match(configure, /watchdogStatus\.state -eq 'ready'/);
+  assert.match(configure, /current conversation to Full access/);
+  assert.match(configure, /Approve for me[^\r\n]*does not remove sandbox boundaries/);
   assert.match(appServer, /codex-app-server-environment\.json/);
   assert.match(appServer, /Start-AppServerWithNetworkEnvironment/);
   assert.match(appServer, /refusing to restart it for a proxy change/);
@@ -83,11 +85,15 @@ test("Windows Desktop launcher defaults direct and accepts only explicit loopbac
 });
 
 test("Windows install prompt matches the macOS onboarding contract", async () => {
-  const [prompt, index, readme] = await Promise.all([
+  const [prompt, index, readme, doctor] = await Promise.all([
     read("docs/INSTALL_WINDOWS_PROMPT.md"),
     read("docs/INSTALL_AGENT_PROMPT.md"),
     read("README.md"),
+    read("doctor.ps1"),
   ]);
+  assert.match(prompt, /完全访问（Full access）/);
+  assert.match(prompt, /替我审批（Approve for me）/);
+  assert.ok(prompt.indexOf("完全访问（Full access）") < prompt.indexOf("1. 先做只读预检"));
   assert.match(prompt, /\[Environment\]::MachineName/);
   assert.match(prompt, /setup-channel-secret\.ps1[\s\S]*configure-feishu-app\.ps1/);
   assert.match(prompt, /im\.message\.receive_v1/);
@@ -98,6 +104,8 @@ test("Windows install prompt matches the macOS onboarding contract", async () =>
   assert.match(prompt, /\u5c0f\u56fe[\s\S]*\u666e\u901a\u5c0f\u6587\u4ef6[\s\S]*\u539f\u751f\u9644\u4ef6/);
   assert.match(prompt, /CLI \u539f\u6837\u8f93\u51fa\u7684\u8be5 URL \u4f5c\u4e3a\u53ef\u70b9\u51fb\u7684\u5907\u7528\u94fe\u63a5/);
   assert.match(prompt, /\u4e34\u65f6\u672c\u673a loopback \u5907\u7528 URL/);
-  assert.match(index, /raw\.githubusercontent\.com\/ninmon\/feishu-codex-bridge\/v0\.3\.2-windows-rc\.1\/docs\/INSTALL_WINDOWS_PROMPT\.md/);
+  assert.match(index, /raw\.githubusercontent\.com\/ninmon\/feishu-codex-bridge\/v0\.3\.2-windows-rc\.3\/docs\/INSTALL_WINDOWS_PROMPT\.md/);
   assert.match(readme, /INSTALL_WINDOWS_PROMPT\.md/);
+  assert.match(doctor, /current conversation to Full access/);
+  assert.match(doctor, /Approve for me[^\r\n]*does not remove sandbox boundaries/);
 });

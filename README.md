@@ -2,17 +2,17 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.11`；Windows 当前固定候选版为 `v0.3.2-windows-rc.1`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.11`；Windows 当前固定候选版为 `v0.3.2-windows-rc.3`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
 | 基线 | 包含内容 |
 | --- | --- |
 | 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
-| 上游 `7c8668e` | 已合并附件 PR #12，并完成领域目录迁移、稳定/实验代码隔离、Codex Session 拆分和 ESLint 语义检查 |
+| 上游 `ca4ac65` | 在附件与领域架构基线上继续合并原生媒体、串行 JSON 持久化和私聊临时 Chat |
 | `v0.3.2-macos-rc.10` | 保留 rc.9 的代理与 watchdog 修复，并把完整安装要求收拢到固定版本协议链接 |
 | `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
-| `v0.3.2-windows-rc.1` | Windows 候选目标：对齐应用模板、Secret 前置存储、直连/代理选择、安全验证与 Skill 初次绑定 |
+| `v0.3.2-windows-rc.3` | Windows 安装前强制当前对话 Full access，并在 Doctor/relay 失败时提示“替我审批”不解除沙盒边界 |
 
 当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
 
@@ -21,6 +21,7 @@
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
 - [v0.3.2-macos-rc.8 Release Note](docs/releases/v0.3.2-macos-rc.8.md)
+- [v0.3.2-windows-rc.3 Release Note](docs/releases/v0.3.2-windows-rc.3.md)
 - [v0.3.2-windows-rc.1 Release Note](docs/releases/v0.3.2-windows-rc.1.md)
 - [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
 - [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
@@ -67,11 +68,11 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.11/
 
 完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。
 
-Windows 固定候选版 `v0.3.2-windows-rc.1` 同样只需复制两行：
+Windows 固定候选版 `v0.3.2-windows-rc.3` 同样只需复制两行。安装代理会先暂停，要求把当前 Codex 对话设为“完全访问（Full access）”；“替我审批”不能代替该权限：
 
 ```text
 请按照以下 GitHub 安装协议，在这台 Windows 电脑上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1/docs/INSTALL_WINDOWS_PROMPT.md
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.3/docs/INSTALL_WINDOWS_PROMPT.md
 ```
 
 固定 tag 可以避免安装期间读到正在变化的分支。完整协议和人工步骤：
@@ -89,7 +90,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1
 | 依赖 | 要求 |
 | --- | --- |
 | 操作系统 | macOS 13+ 或 Windows 10/11 |
-| Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用；macOS 由 Codex 执行安装时，当前对话已设为“完全访问（Full access）”以读取 Keychain |
+| Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用；macOS 或 Windows 由 Codex 执行安装时，当前对话均已设为“完全访问（Full access）”；“替我审批”不解除沙盒边界 |
 | Node.js | `>=22.13.0`，并带 npm |
 | 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git |
 | 飞书 | 可创建企业自建应用的组织账号；macOS 和 Windows 安装脚本都会打开官方模板配置权限和事件 |
@@ -263,7 +264,7 @@ Windows：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [Windows rc.1](docs/releases/v0.3.2-windows-rc.1.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [Windows rc.3](docs/releases/v0.3.2-windows-rc.3.md) · [Windows rc.1](docs/releases/v0.3.2-windows-rc.1.md)
 
 ## 开发与验证
 

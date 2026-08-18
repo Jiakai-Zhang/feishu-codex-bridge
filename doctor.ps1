@@ -370,4 +370,5 @@ if ($failureCount -eq 0) {
     exit 0
 }
 Write-Output "Bridge doctor: $failureCount check(s) failed."
+Write-Output 'If Codex Desktop started these checks, set the current conversation to Full access. Approve for me handles approvals but does not remove sandbox boundaries.'
 exit 1

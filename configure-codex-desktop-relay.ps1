@@ -516,5 +516,6 @@ try {
         try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
         try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
     }
+    Write-Warning 'If Codex Desktop started this command, set the current conversation to Full access. Approve for me handles approvals but does not remove sandbox boundaries.'
     throw $activationError
 }

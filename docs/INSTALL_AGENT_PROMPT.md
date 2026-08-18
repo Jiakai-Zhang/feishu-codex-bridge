@@ -6,10 +6,10 @@
 
 ```text
 请按照以下 GitHub 安装协议，在这台 Windows 电脑上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1/docs/INSTALL_WINDOWS_PROMPT.md
+https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.3/docs/INSTALL_WINDOWS_PROMPT.md
 ```
 
-协议会安装锁定的 Lark CLI，按计算机名创建专用应用，立即用 DPAPI 保存 Secret，始终交付浏览器认证备用 URL，通过一次官方模板确认配置权限/事件，明确询问直连或本机代理，并使用 `$feishu-session-bind` 完成初次绑定。详见 [Windows 完整安装 Prompt](INSTALL_WINDOWS_PROMPT.md)。
+协议会先强制当前对话切换为 Full access（“替我审批”不能代替），再安装锁定的 Lark CLI，按计算机名创建专用应用，立即用 DPAPI 保存 Secret，始终交付浏览器认证备用 URL，通过一次官方模板确认配置权限/事件，明确询问直连或本机代理，并使用 `$feishu-session-bind` 完成初次绑定。详见 [Windows 完整安装 Prompt](INSTALL_WINDOWS_PROMPT.md)。
 
 ## macOS 全新安装
 

@@ -1,8 +1,8 @@
 # 给 Codex 的 Windows 全新安装 Prompt
 
-本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Windows 电脑。新流程在飞书 CLI 创建专用应用后立即用 Windows DPAPI 安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。Lark CLI 认证始终提供可点击 verification URL，应用模板脚本会在尝试打开浏览器前输出不含 App ID 的临时本机备用 URL。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
+本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Windows 电脑。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”；“替我审批（Approve for me）”只处理审批请求，不会解除沙盒边界。新流程在飞书 CLI 创建专用应用后立即用 Windows DPAPI 安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。Lark CLI 认证始终提供可点击 verification URL，应用模板脚本会在尝试打开浏览器前输出不含 App ID 的临时本机备用 URL。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文为 `v0.3.2-windows-rc.1` 的固定安装协议；只能在该 tag 已公开发布并能解析到精确提交后使用。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文为 `v0.3.2-windows-rc.3` 的固定安装协议；只能在该 tag 已公开发布并能解析到精确提交后使用。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -10,14 +10,14 @@
 
 1. 完整读取本文件直到末尾，不得只读取开头或提供摘要；
 2. 将下方“可复制 Prompt”中的全部内容视为用户的完整执行指令，不要求用户再次复制或重复确认这些规则；
-3. 从只读预检开始，在不需要用户操作时自主连续执行；
-4. 先简要说明即将执行的第一步，然后立即开始。
+3. 先完成下方规定的当前对话“完全访问（Full access）”人工停点，再从只读预检开始，在不需要用户操作时自主连续执行；
+4. 先简要说明为什么“替我审批”不能代替“完全访问”，然后立即请用户切换并暂停等待。
 
 浏览器认证、外部变更批准、管理员审批、应用发布、OAuth、Secret 安全输入与 Desktop 完整重启等人工停点，以“可复制 Prompt”中的具体规则为准。
 
 ## 使用方法
 
-把下方整段内容复制到新 Windows 电脑上的一个新 Codex 任务中。用户仍需本人完成飞书浏览器认证、应用模板确认、可能出现的管理员审批与版本发布、用户 OAuth、App Secret 隐藏输入，以及 ChatGPT/Codex Desktop 的完整退出和重启。
+把下方整段内容复制到新 Windows 电脑上的一个新 Codex 任务中。用户仍需本人将当前对话设为“完全访问”，并完成飞书浏览器认证、应用模板确认、可能出现的管理员审批与版本发布、用户 OAuth、App Secret 隐藏输入，以及 ChatGPT/Codex Desktop 的完整退出和重启。
 
 ## 可复制 Prompt
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- tag：v0.3.2-windows-rc.1
+- tag：v0.3.2-windows-rc.3
 
 已知条件：
 - 这是一台独立的新 Windows 电脑，不迁移、复用或停止其他机器上的 Bridge。
@@ -36,6 +36,13 @@
 - 即使两台电脑使用同一个飞书账号，每台电脑也分别使用自己的应用和 Bot。
 
 工作规则：
+
+开始前必须先完成一个人工权限停点：
+- 告诉用户在当前 Codex 对话输入框下方的权限菜单中选择“完全访问（Full access）”；
+- 明确说明“替我审批（Approve for me）”只会代为处理审批请求，不会解除当前对话的文件系统、网络或 Windows 子进程沙盒边界；
+- 说明安装、DPAPI 凭据检查、PowerShell、Scheduled Task、共享 App Server 与 Desktop relay 配置都可能需要访问沙盒外的当前用户资源；
+- 暂停并等待用户明确回复已完成，在此之前不得运行只读预检或任何安装命令；
+- 不得通过修改 Codex 全局配置、关闭 Windows 安全机制或伪造 Doctor/relay 检查来代替这个停点。
 
 1. 先做只读预检，确认：
    - Windows 10 或 11；
@@ -48,7 +55,7 @@
 
    如果缺少 Git 或 Node.js，先说明将安装哪个软件并取得用户批准，再使用 winget 的官方包。如果计算机名为空，先让用户在 Windows 设置中修复，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。然后克隆仓库并检出精确 tag v0.3.2-windows-rc.1。
+2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。然后克隆仓库并检出精确 tag v0.3.2-windows-rc.3。
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
    - 不得使用 git reset、git clean 或 git stash；
@@ -192,6 +199,7 @@
 ## 设计说明
 
 - Prompt 锁定到明确 tag，避免安装过程读到正在变化的分支。
+- 当前 Codex 对话在任何命令前切换为“完全访问”；“替我审批”不能替代该权限，避免 Windows 子进程或 relay 连接被沙盒拦截。
 - `configure-feishu-app.ps1` 把 11 项权限和消息事件合并到飞书官方的一次确认页；默认已有的 Bot、长连接与消息事件不再重复逐页设置。
 - `setup-channel-secret.ps1` 现在可以在生成 Bridge 配置前运行，因此 Secret 输入紧跟应用创建。
 - Lark CLI 认证始终向用户提供当次 verification URL；应用模板脚本提供不含 App ID 的临时本机备用 URL。

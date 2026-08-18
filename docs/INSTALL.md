@@ -14,6 +14,8 @@
 - Node.js 22.13 或更高版本（建议当前 LTS）
 - PowerShell 5.1 或 PowerShell 7
 
+如果由 Codex Desktop 在当前对话中执行安装，在运行任何命令前，先在输入框下方的权限菜单中将当前对话设为“完全访问（Full access）”并等待用户明确确认。按 [OpenAI Codex 沙盒说明](https://developers.openai.com/codex/sandboxing)，“替我审批（Approve for me）”只处理审批请求，不会改变当前沙盒边界；Windows PowerShell、DPAPI 检查、Scheduled Task、共享 App Server 与 Desktop relay 可能需要访问沙盒外的当前用户资源。不要修改 Codex 全局配置或 Windows 安全机制来代替当前对话权限。
+
 缺少 Git 或 Node.js 时，可在管理员或普通 PowerShell 中使用 Windows Package Manager：
 
 ```powershell
@@ -34,7 +36,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
+git clone --branch v0.3.2-windows-rc.3 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
 .\lark-cli.ps1 --version
@@ -175,7 +177,7 @@ Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -Re
 
 ```powershell
 .\configure-codex-desktop-relay.ps1 -Disable
-.\update.ps1 -Version v0.3.2-windows-rc.1 -StartBridge
+.\update.ps1 -Version v0.3.2-windows-rc.3 -StartBridge
 .\launch-codex-desktop-with-relay.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```

@@ -1,9 +1,10 @@
 # Windows Codex 安装代理协议
 
-本文件供 Codex 在用户要求安装、部署或验收本仓库的 Windows Session Relay 时执行。给新电脑的可复制完整指令见 [Windows 全新安装 Prompt](INSTALL_WINDOWS_PROMPT.md)。目标是以可验证结果交付，不得把浏览器认证、应用发布、管理员审批、安全输入或 Desktop 重启伪装成已自动完成。
+本文件供 Codex 在用户要求安装、部署或验收本仓库的 Windows Session Relay 时执行。给新电脑的可复制完整指令见 [Windows 全新安装 Prompt](INSTALL_WINDOWS_PROMPT.md)。目标是以可验证结果交付，不得把当前对话 Full access、浏览器认证、应用发布、管理员审批、安全输入或 Desktop 重启伪装成已自动完成。
 
 ## 安全边界
 
+- 运行任何命令前，要求用户把当前 Codex 对话设为“完全访问（Full access）”并暂停等待确认。“替我审批（Approve for me）”只处理审批请求，不会解除文件系统、网络或 Windows 子进程沙盒边界；不得修改 Codex 全局配置或 Windows 安全机制来替代这个停点。
 - 先确认目标是 Windows，且用户明确授权安装本仓库。创建或修改飞书应用前，必须一次性说明应用名称、模板权限/事件和可能的发布/审批，再取得用户明确批准。
 - 除人工认证停点中 Lark CLI 原样生成的一次性 verification URL，以及应用模板脚本生成的临时本机 loopback URL 外，不输出 App Secret、OAuth token、device code、App ID、open ID、chat ID、Codex task ID、`bridge.config.json` 内容或任务绝对路径。
 - 不让用户把 App Secret 发进聊天。只启动 `setup-channel-secret.ps1` 的本机可见交互窗口。
@@ -14,10 +15,10 @@
 
 ## 0. 固定版本与目标目录
 
-新安装使用已发布的精确 Windows tag。当前默认目标为 `v0.3.2-windows-rc.1`：
+新安装使用已发布的精确 Windows tag。当前默认目标为 `v0.3.2-windows-rc.3`：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.3.2-windows-rc.3 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -26,7 +27,7 @@ git describe --tags --exact-match
 
 ## 1. 依赖预检与锁定安装
 
-只读检查 Windows 10/11、PowerShell 5.1/7、Git、Node.js/npm、ChatGPT/Codex Desktop 和 Codex App Server listener 能力。Node.js 必须不低于 22.13。缺少 Git 或 Node.js 时，先说明将发生的系统软件安装并取得批准，再使用官方 winget 包：
+只在用户明确确认当前对话 Full access 后，才开始只读检查 Windows 10/11、PowerShell 5.1/7、Git、Node.js/npm、ChatGPT/Codex Desktop 和 Codex App Server listener 能力。Node.js 必须不低于 22.13。缺少 Git 或 Node.js 时，先说明将发生的系统软件安装并取得批准，再使用官方 winget 包：
 
 ```powershell
 winget install --id Git.Git -e --source winget

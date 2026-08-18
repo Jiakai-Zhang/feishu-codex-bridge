@@ -16,13 +16,14 @@ For a macOS fixed-release update, read the update section of `docs/INSTALL_MACOS
 
 When the user asks to install, deploy, set up, or onboard this repository on Windows:
 
-1. Read `docs/INSTALL_AGENT.md` completely and follow it as the installation protocol.
-2. Use the repository scripts instead of reproducing their behavior by hand.
-3. Treat the Feishu App Secret, OAuth tokens, App ID, user/bot open IDs, chat IDs, Codex task IDs, and local configuration contents as private. Never print them into chat, logs, commits, command arguments, or documentation.
-4. The App Secret may only be entered by the user through `setup-channel-secret.ps1`, which stores it with Windows DPAPI. Never request the plaintext in chat.
-5. Stop for the user's action at browser authorization, CAPTCHA/MFA, administrator approval, Feishu app publication, secure secret entry, and the required full Codex Desktop restart. Do not report success before the matching verification passes.
-6. Do not edit Codex global state files to simulate Project membership.
-7. Do not create, publish, or change a Feishu application without the user's explicit approval of that external change.
+1. Before running any command, require the user to set the current Codex conversation to Full access and pause until they confirm. “Approve for me” handles approvals but does not remove the sandbox boundary.
+2. Read `docs/INSTALL_AGENT.md` completely and follow it as the installation protocol.
+3. Use the repository scripts instead of reproducing their behavior by hand.
+4. Treat the Feishu App Secret, OAuth tokens, App ID, user/bot open IDs, chat IDs, Codex task IDs, and local configuration contents as private. Never print them into chat, logs, commits, command arguments, or documentation.
+5. The App Secret may only be entered by the user through `setup-channel-secret.ps1`, which stores it with Windows DPAPI. Never request the plaintext in chat.
+6. Stop for the user's action at browser authorization, CAPTCHA/MFA, administrator approval, Feishu app publication, secure secret entry, and the required full Codex Desktop restart. Do not report success before the matching verification passes.
+7. Do not edit Codex global state files to simulate Project membership.
+8. Do not create, publish, or change a Feishu application without the user's explicit approval of that external change.
 
 For ordinary development, debugging, or review requests, follow the repository tests and preserve untracked local runtime/configuration files.
 
