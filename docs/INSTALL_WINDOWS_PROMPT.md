@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Windows 电脑。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”；“替我审批（Approve for me）”只处理审批请求，不会解除沙盒边界。新流程在飞书 CLI 创建专用应用后立即用 Windows DPAPI 安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。Lark CLI 认证始终提供可点击 verification URL，应用模板脚本会在尝试打开浏览器前输出不含 App ID 的临时本机备用 URL。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文为 `v0.3.2-windows-rc.3` 的固定安装协议；只能在该 tag 已公开发布并能解析到精确提交后使用。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文为 `v0.3.2-windows-rc.4` 的固定安装协议；只能在该 tag 已公开发布并能解析到精确提交后使用。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- tag：v0.3.2-windows-rc.3
+- tag：v0.3.2-windows-rc.4
 
 已知条件：
 - 这是一台独立的新 Windows 电脑，不迁移、复用或停止其他机器上的 Bridge。
@@ -55,7 +55,7 @@
 
    如果缺少 Git 或 Node.js，先说明将安装哪个软件并取得用户批准，再使用 winget 的官方包。如果计算机名为空，先让用户在 Windows 设置中修复，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。然后克隆仓库并检出精确 tag v0.3.2-windows-rc.3。
+2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。然后克隆仓库并检出精确 tag v0.3.2-windows-rc.4。
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
    - 不得使用 git reset、git clean 或 git stash；

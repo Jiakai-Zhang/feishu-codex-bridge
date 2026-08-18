@@ -15,10 +15,10 @@
 
 ## 0. 固定版本与目标目录
 
-新安装使用已发布的精确 Windows tag。当前默认目标为 `v0.3.2-windows-rc.3`：
+新安装使用已发布的精确 Windows tag。当前默认目标为 `v0.3.2-windows-rc.4`：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.3 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```

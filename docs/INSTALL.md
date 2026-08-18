@@ -36,7 +36,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.3 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
+git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
 .\lark-cli.ps1 --version
@@ -177,7 +177,7 @@ Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -Re
 
 ```powershell
 .\configure-codex-desktop-relay.ps1 -Disable
-.\update.ps1 -Version v0.3.2-windows-rc.3 -StartBridge
+.\update.ps1 -Version v0.3.2-windows-rc.4 -StartBridge
 .\launch-codex-desktop-with-relay.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
