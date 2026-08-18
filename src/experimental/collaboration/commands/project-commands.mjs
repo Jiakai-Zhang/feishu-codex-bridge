@@ -1,4 +1,5 @@
 import path from "node:path";
+import { sameFsPath } from "../../../runtime/shared/fs-paths.mjs";
 
 function inlineCode(value) {
   return `\`${String(value || "").replaceAll("`", "'")}\``;
@@ -92,7 +93,7 @@ export function buildBranchesMarkdown(config, snapshot) {
 
 export function buildWorktreesMarkdown(config, snapshot, projectThreads, activeThreadId) {
   const lines = snapshot.worktrees.map((worktree, index) => {
-    const threads = projectThreads.filter((thread) => thread.worktree.path.toLowerCase() === worktree.path.toLowerCase());
+    const threads = projectThreads.filter((thread) => sameFsPath(thread.worktree.path, worktree.path));
     const selected = threads.some(({ id }) => id === activeThreadId) ? " · 当前" : "";
     const branch = worktree.branch || (worktree.detached ? "detached" : "unknown");
     const flags = [worktree.locked ? "locked" : "", worktree.prunable ? "prunable" : ""].filter(Boolean);

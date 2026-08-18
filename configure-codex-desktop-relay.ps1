@@ -1,6 +1,8 @@
 param(
     [switch]$Disable,
-    [switch]$Force
+    [switch]$Force,
+    [string]$Proxy,
+    [switch]$NoProxy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +43,34 @@ function Read-RelayState {
         return Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     } catch {
         return $null
+    }
+}
+
+function ConvertTo-SafeLoopbackProxy {
+    param([string]$Value)
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    if ($text -notmatch '^(?i)(https?|socks4|socks5)://(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})/?$') {
+        throw 'The Desktop proxy must be an unauthenticated loopback URL with an explicit port.'
+    }
+    $uri = [Uri]$text
+    if ($uri.Port -lt 1 -or $uri.Port -gt 65535) {
+        throw 'The Desktop proxy port must be between 1 and 65535.'
+    }
+    return $text.TrimEnd('/')
+}
+
+function Test-LoopbackPort {
+    param([string]$HostName, [int]$Port)
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $task = $client.ConnectAsync($HostName, $Port)
+        if (-not $task.Wait(250)) { return $false }
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
     }
 }
 
@@ -90,6 +120,17 @@ function Test-RelayTaskOwnership {
         if ($arguments.IndexOf($stableBootstrapPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             return $true
         }
+    }
+    return $false
+}
+
+function Wait-RelayTaskStopped {
+    param([Parameter(Mandatory)][string]$Name, [int]$TimeoutSeconds = 10)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $task = Get-RelayTask -Name $Name
+        if (-not $task -or [string]$task.State -ne 'Running') { return $true }
+        Start-Sleep -Milliseconds 200
     }
     return $false
 }
@@ -153,6 +194,7 @@ function Write-RelayState {
     param(
         [Parameter(Mandatory)][Uri]$RelayUrl,
         [Parameter(Mandatory)][string]$ActivationId,
+        [AllowNull()][string]$DesktopProxyUrl,
         [AllowNull()]
         [AllowEmptyCollection()]
         [string[]]$ExternalGuardianKinds = @()
@@ -167,6 +209,7 @@ function Write-RelayState {
         bridgeRecoveryAfter = [DateTime]::UtcNow.AddMinutes(2).ToString('o')
         externalGuardianKinds = @($ExternalGuardianKinds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
     }
+    if ($DesktopProxyUrl) { $state['desktopProxyUrl'] = $DesktopProxyUrl }
     $temporaryStatePath = "$statePath.$PID.$ActivationId.tmp"
     try {
         [IO.File]::WriteAllText(
@@ -197,6 +240,9 @@ function Remove-OwnedTask {
 }
 
 if ($Disable) {
+    if ($PSBoundParameters.ContainsKey('Proxy') -or $NoProxy) {
+        throw '-Disable cannot be combined with -Proxy or -NoProxy.'
+    }
     $expectedUrl = Get-RelayUrl -Optional
     $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
     if ($current -and -not $Force) {
@@ -239,6 +285,48 @@ if ($Disable) {
 }
 
 $url = Get-RelayUrl
+$existingRelayState = Read-RelayState
+if ($PSBoundParameters.ContainsKey('Proxy') -and $NoProxy) {
+    throw '-Proxy cannot be combined with -NoProxy.'
+}
+$desktopProxyUrl = $null
+if ($PSBoundParameters.ContainsKey('Proxy')) {
+    $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value $Proxy
+    if (-not $desktopProxyUrl) { throw '-Proxy requires a loopback URL.' }
+} elseif (-not $NoProxy -and $existingRelayState -and
+    -not [string]::IsNullOrWhiteSpace([string]$existingRelayState.desktopProxyUrl)) {
+    $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value ([string]$existingRelayState.desktopProxyUrl)
+}
+if ($desktopProxyUrl) {
+    $proxyUri = [Uri]$desktopProxyUrl
+    $proxyHostName = [string]$proxyUri.Host
+    if ($proxyHostName -eq '[::1]') { $proxyHostName = '::1' }
+    if (-not (Test-LoopbackPort -HostName $proxyHostName -Port $proxyUri.Port)) {
+        throw 'The configured local Desktop proxy is not accepting connections.'
+    }
+}
+$previousProxyUrl = if ($existingRelayState) { [string]$existingRelayState.desktopProxyUrl } else { '' }
+$proxySelectionChanged = $previousProxyUrl -ne [string]$desktopProxyUrl
+$configForNetworkCheck = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+$networkRuntimeDir = Join-Path ([string]$configForNetworkCheck.workspace) 'work\feishu-codex-bridge'
+$networkPidPath = Join-Path $networkRuntimeDir 'codex-app-server.pid'
+$networkStatePath = Join-Path $networkRuntimeDir 'codex-app-server-environment.json'
+$networkRecordMatches = $false
+try {
+    $networkProcessId = [int](Get-Content -Raw -LiteralPath $networkPidPath)
+    $networkRecord = Get-Content -Raw -LiteralPath $networkStatePath | ConvertFrom-Json
+    if ((Get-Process -Id $networkProcessId -ErrorAction SilentlyContinue) -and
+        [int]$networkRecord.processId -eq $networkProcessId) {
+        if ($desktopProxyUrl) {
+            $networkRecordMatches = [string]$networkRecord.mode -eq 'proxy' -and
+                [string]$networkRecord.desktopProxyUrl -eq $desktopProxyUrl
+        } else {
+            $networkRecordMatches = [string]$networkRecord.mode -eq 'direct' -and
+                [string]::IsNullOrWhiteSpace([string]$networkRecord.desktopProxyUrl)
+        }
+    }
+} catch { }
+$networkReconfigurationRequired = $proxySelectionChanged -or -not $networkRecordMatches
 $statusLines = & (Join-Path $PSScriptRoot 'status-bridge.ps1') 2>&1
 $statusText = ($statusLines | ForEach-Object { [string]$_ }) -join ' '
 if ($LASTEXITCODE -ne 0 -or $statusText -notmatch 'connected=True') {
@@ -252,7 +340,23 @@ if ($current -and $current -ne $url.AbsoluteUri -and -not $Force) {
 $activationId = [guid]::NewGuid().ToString('N')
 $activationCompleted = $false
 try {
-    $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
+    if ($networkReconfigurationRequired) {
+        $existingOwnedTask = Get-RelayTask -Name $taskName
+        if ($existingOwnedTask -and (Test-RelayTaskOwnership -Task $existingOwnedTask)) {
+            try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+            if (-not (Wait-RelayTaskStopped -Name $taskName)) {
+                throw 'The previous Desktop relay watchdog did not stop before proxy reconfiguration.'
+            }
+        }
+        if ($current -eq $url.AbsoluteUri) {
+            [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+            Send-EnvironmentChanged
+        }
+    }
+    $appServerParameters = @{ PassThru = $true; AllowProxyRestart = $true }
+    if ($desktopProxyUrl) { $appServerParameters['Proxy'] = $desktopProxyUrl }
+    else { $appServerParameters['NoProxy'] = $true }
+    $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') @appServerParameters
     if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
         throw 'The shared Codex App Server startup returned no verified process.'
     }
@@ -297,7 +401,7 @@ try {
     $externalGuardianKinds = Get-PotentialExternalGuardianKinds -RelayUrl $url `
         -CodexExecutable ([string]$config.codexExecutable)
     Write-RelayState -RelayUrl $url -ActivationId $activationId `
-        -ExternalGuardianKinds $externalGuardianKinds
+        -DesktopProxyUrl $desktopProxyUrl -ExternalGuardianKinds $externalGuardianKinds
 
     $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
@@ -328,28 +432,54 @@ try {
         throw 'The continuous Desktop relay watchdog task could not be verified; the Desktop relay pointer was not enabled.'
     }
 
-    # The shared listener and watchdog definition are both verified before the
-    # persistent Desktop dependency is introduced.
-    & $desktopRelayPointerScript -Url $url.AbsoluteUri | Out-Null
-    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-
-    $watchdogDeadline = [DateTime]::UtcNow.AddSeconds(20)
     $watchdogReady = $false
-    while ([DateTime]::UtcNow -lt $watchdogDeadline) {
-        if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
-            try {
-                $watchdogStatus = Get-Content -Raw -LiteralPath $statusPath | ConvertFrom-Json
-                if ([string]$watchdogStatus.activationId -eq $activationId -and
-                    [string]$watchdogStatus.state -eq 'ready') {
-                    $watchdogReady = $true
-                    break
-                }
-            } catch { }
+    for ($watchdogAttempt = 1; $watchdogAttempt -le 2 -and -not $watchdogReady; $watchdogAttempt++) {
+        if ($watchdogAttempt -gt 1) {
+            $retryPointer = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
+            if ($retryPointer -eq $url.AbsoluteUri) {
+                [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+                Send-EnvironmentChanged
+            }
+            try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+            if (-not (Wait-RelayTaskStopped -Name $taskName)) { continue }
         }
-        Start-Sleep -Milliseconds 250
+        Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
+        # The shared listener and watchdog definition are both verified before
+        # the persistent Desktop dependency is introduced.
+        try {
+            & $desktopRelayPointerScript -Url $url.AbsoluteUri | Out-Null
+            Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        } catch {
+            continue
+        }
+
+        $watchdogDeadline = [DateTime]::UtcNow.AddSeconds(20)
+        while ([DateTime]::UtcNow -lt $watchdogDeadline) {
+            if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+                try {
+                    $watchdogStatus = Get-Content -Raw -LiteralPath $statusPath | ConvertFrom-Json
+                    $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+                    $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
+                    if ([string]$watchdogStatus.activationId -eq $activationId -and
+                        [string]$watchdogStatus.state -eq 'ready' -and
+                        $heartbeatAgeSeconds -ge -5 -and $heartbeatAgeSeconds -le 20) {
+                        $watchdogReady = $true
+                        break
+                    }
+                } catch { }
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($watchdogReady) {
+            Start-Sleep -Milliseconds 500
+            $taskAfterReady = Get-RelayTask -Name $taskName
+            if (-not $taskAfterReady -or [string]$taskAfterReady.State -ne 'Running') {
+                $watchdogReady = $false
+            }
+        }
     }
     if (-not $watchdogReady) {
-        throw 'The continuous Desktop relay watchdog did not publish a ready heartbeat within 20 seconds.'
+        throw 'The continuous Desktop relay watchdog did not remain running with a ready heartbeat after two registration attempts.'
     }
 
     $legacyTask = Get-RelayTask -Name $legacyTaskName
@@ -363,7 +493,8 @@ try {
     }
 
     $activationCompleted = $true
-    Write-Output "Codex Desktop relay is continuously guarded and ready: App Server PID $($appServerInfo.ProcessId), watchdog heartbeat verified."
+    $networkMode = if ($desktopProxyUrl) { 'local proxy' } else { 'direct' }
+    Write-Output "Codex Desktop relay is continuously guarded and ready: App Server PID $($appServerInfo.ProcessId), watchdog heartbeat verified, network mode $networkMode."
     if (@($externalGuardianKinds).Count -gt 0) {
         Write-Warning ("Potential custom guardian detected ({0}). It was left untouched. The official watchdog reuses the verified listener; remove the custom guardian only after strict Doctor passes." -f ($externalGuardianKinds -join ', '))
     }
@@ -385,5 +516,6 @@ try {
         try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
         try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
     }
+    Write-Warning 'If Codex Desktop started this command, set the current conversation to Full access. Approve for me handles approvals but does not remove sandbox boundaries.'
     throw $activationError
 }

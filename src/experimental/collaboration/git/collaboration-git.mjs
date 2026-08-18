@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { canonicalGitHubRepository } from "../protocol/collaboration-request-inbox.mjs";
-import { isPathInside, normalizeFsPath } from "./project-context.mjs";
+import { isPathInside, normalizeFsPath, sameFsPath } from "./project-context.mjs";
 
 const SHA = /^[0-9a-f]{40}$/i;
 const REMOTE = /^[A-Za-z0-9._-]+$/;
@@ -79,7 +79,7 @@ export class CollaborationGitHandoff {
     const topLevel = normalizeFsPath(topLevelText.trim());
     const branch = branchText.trim();
     const commit = headText.trim().toLowerCase();
-    if (topLevel.toLowerCase() !== normalizeFsPath(worktree.path).toLowerCase()) {
+    if (!sameFsPath(topLevel, worktree.path)) {
       throw new Error("Git top-level does not match the registered Project worktree");
     }
     if (!branch || worktree.detached) throw new Error("Detached HEAD cannot participate in collaboration");

@@ -111,6 +111,11 @@ export class CodexAppServerConnection {
     });
   }
 
+  notify(method, params = {}) {
+    if (!method) throw new TypeError("Codex App Server notification method is required");
+    this.#send({ method, params });
+  }
+
   rejectPending(error) {
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);

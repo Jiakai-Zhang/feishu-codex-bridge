@@ -1,11 +1,9 @@
 import { promises as fs } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { stripWindowsExtendedPathPrefix } from "../runtime/shared/fs-paths.mjs";
 
 export function normalizeCodexCwd(value) {
-  const cwd = String(value || "");
-  if (cwd.startsWith("\\\\?\\UNC\\")) return `\\\\${cwd.slice(8)}`;
-  if (cwd.startsWith("\\\\?\\")) return cwd.slice(4);
-  return cwd;
+  return stripWindowsExtendedPathPrefix(value);
 }
 export async function readIndexedThreadName(indexPath, threadId) {
   const text = await fs.readFile(indexPath, "utf8");

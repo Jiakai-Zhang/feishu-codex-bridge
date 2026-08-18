@@ -95,10 +95,16 @@ wrappers.
 | Classification | Current files | Evidence and constraints |
 | --- | --- | --- |
 | Stable startup/process control | `bridge-supervisor.ps1`, `start-app-server.ps1`, `start-at-login.ps1`, `start-bridge.ps1`, `status-bridge.ps1`, `stop-bridge.ps1` | Called by install/update scripts, scheduled startup, or each other; root names are public operations entry points |
-| Stable Desktop relay lifecycle | `configure-codex-desktop-relay.ps1`, `desktop-relay-bootstrap.ps1`, `desktop-relay-pointer.ps1` | Pointer ownership and fail-open behavior are compatibility surfaces verified by `desktop-relay-startup.test.mjs` and doctor checks |
-| Stable install/update/auth | `doctor.ps1`, `install.ps1`, `setup-channel-secret.ps1`, `update.ps1` | Public installation contract; must preserve DPAPI, config, runtime state, rollback, and command-line parameters |
+| Stable Desktop relay lifecycle | `configure-codex-desktop-relay.ps1`, `desktop-relay-bootstrap.ps1`, `desktop-relay-pointer.ps1`, `launch-codex-desktop-with-relay.ps1` | Pointer ownership, explicit direct/proxy selection and fail-open behavior are compatibility surfaces verified by Windows operational integration tests and doctor checks |
+| Stable install/update/auth | `configure-feishu-app.ps1`, `doctor.ps1`, `install.ps1`, `setup-channel-secret.ps1`, `update.ps1`, `verify-feishu-app.ps1` | Public installation contract; must preserve DPAPI, config, runtime state, safe Feishu template/verification output, rollback, and command-line parameters |
 | Stable adapters and validation | `lark-cli.ps1`, `install-smoke.ps1`, `update-smoke.ps1` | `lark-cli.ps1` is selected dynamically through configuration/docs; smoke scripts are direct validation entry points, and update smoke is invoked by `update-script.test.mjs` |
 | Resolved removal candidate | None | `restart-after-current-turn.ps1` was removed after confirming that released tags, current install/update scripts, Windows scheduled tasks, and Windows services never invoked it. Session binding reloads use the Supervisor-owned `restart.request` handshake instead. |
+
+Post-inventory Windows onboarding additions keep the root PowerShell compatibility
+surface and add one narrow platform adapter,
+`src/runtime/platform/windows/feishu-app-entry.mjs`. Shared proxy-environment
+filtering and the private browser redirect live in `src/runtime/shared/`; they
+contain no product policy or persisted schema.
 
 ## Tests, skills, configuration, and documentation
 

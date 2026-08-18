@@ -14,6 +14,8 @@
 - Node.js 22.13 或更高版本（建议当前 LTS）
 - PowerShell 5.1 或 PowerShell 7
 
+如果由 Codex Desktop 在当前对话中执行安装，在运行任何命令前，先在输入框下方的权限菜单中将当前对话设为“完全访问（Full access）”并等待用户明确确认。按 [OpenAI Codex 沙盒说明](https://developers.openai.com/codex/sandboxing)，“替我审批（Approve for me）”只处理审批请求，不会改变当前沙盒边界；Windows PowerShell、DPAPI 检查、Scheduled Task、共享 App Server 与 Desktop relay 可能需要访问沙盒外的当前用户资源。不要修改 Codex 全局配置或 Windows 安全机制来代替当前对话权限。
+
 缺少 Git 或 Node.js 时，可在管理员或普通 PowerShell 中使用 Windows Package Manager：
 
 ```powershell
@@ -34,32 +36,67 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.1-beta.1 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
+git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
 Set-Location .\feishu-codex-bridge
 npm ci
+.\lark-cli.ps1 --version
 ```
 
 仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
 当前 Beta release 暂由贡献者 fork 托管，并通过上游草稿 PR 合并到 `Jiakai-Zhang/feishu-codex-bridge`；固定 tag 的内容与该 PR 的已验证提交一致。
 
-## 3. 创建并发布专用飞书应用
+## 3. 创建应用并立即保存 Secret
 
-按照 [飞书应用配置](FEISHU_APP_SETUP.md) 完成以下事项：
-
-1. 创建一个只用于本机 Codex Bridge 的企业自建应用。
-2. 启用机器人，配置权限与 `im.message.receive_v1` 事件。
-3. 创建并发布一个应用版本，将可用范围包含当前用户。
-4. 完成飞书 CLI 的 Bot 身份配置和当前用户的 Feed 标签 OAuth 授权。
-
-权限或事件变更后必须重新发布版本；仅在开发者后台保存草稿不会让线上机器人获得新能力。
-
-## 4. 生成本机配置
-
-飞书 CLI 的 Bot 与用户身份均已验证后执行：
+先只读取得当前 Windows 计算机名：
 
 ```powershell
-.\install.ps1
+[Environment]::MachineName
+```
+
+创建一个只用于本机 Bridge 的企业自建应用，应用展示名称必须与上述计算机名完全一致。即使同一个飞书账号使用多台电脑，每台电脑也必须有自己的应用和 Bot。在创建应用、添加模板权限/事件和可能的版本发布前，必须先取得用户批准。
+
+```powershell
+.\lark-cli.ps1 config init --new --brand feishu --lang zh_cn
+```
+
+在创建页把应用名称设为系统计算机名。`config init --name` 只会命名 CLI profile，不能设置飞书应用展示名称。浏览器登录、CAPTCHA/MFA 或管理员确认由用户本人完成。
+
+Lark CLI 输出 verification URL 后，无论浏览器是否自动打开，都将该 URL 原样作为可点击备用链接交给用户。不输出 device code、原始 JSON、App ID、Secret 或 Token，不重跑会使已交付 URL 失效的命令。
+
+应用创建后，在生成 `bridge.config.json` 之前就可以运行：
+
+```powershell
+.\setup-channel-secret.ps1
+```
+
+只在本机可见窗口的隐藏提示中粘贴 Channel App Secret。脚本使用当前 Windows 用户 DPAPI 加密，不会把明文写入命令参数、配置、仓库或日志。
+
+## 4. 一次模板配置与 OAuth
+
+```powershell
+.\configure-feishu-app.ps1
+```
+
+该脚本通过私有 loopback 跳转打开飞书官方应用模板，一次确认 7 项应用/Bot 权限、4 项用户权限与 `im.message.receive_v1`，不在终端或浏览器启动进程参数中暴露 App ID。它会先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试打开浏览器；自动打开失败时直接打开该 URL。Lark CLI 创建的新应用通常已默认启用 Bot、长连接和消息事件，不需要再逐页重复设置。完整清单与故障回退见 [飞书应用配置](FEISHU_APP_SETUP.md)。
+
+若飞书要求可用范围、版本发布或管理员审批，可用范围只加入当前安装用户，由用户本人提交，并等待状态明确生效。然后完成 OAuth 与安全校验：
+
+```powershell
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+.\verify-feishu-app.ps1
+```
+
+OAuth 命令同样需要将当次 verification URL 原样交给用户，不输出 device code 或原始 JSON，不重新发起使原 URL 失效的授权。
+
+只有验证器输出 `ok=true` 才继续。Windows 的 Lark CLI、安装器和 Doctor 会移除继承的 Desktop proxy 变量，使飞书身份和事件校验保持直连。
+
+## 5. 生成本机配置
+
+飞书应用安全验证通过后执行：
+
+```powershell
+.\install.ps1 -SkipDependencyInstall
 ```
 
 脚本会：
@@ -72,39 +109,44 @@ npm ci
 
 已有本机配置时脚本默认保留，不会覆盖。只有确认要替换后才使用 `-ForceConfig`。
 
-## 5. 安全保存 App Secret
-
-运行：
-
-```powershell
-.\setup-channel-secret.ps1
-```
-
-在独立窗口中粘贴 App Secret。输入不可见，脚本只写入由当前 Windows 用户 DPAPI 加密的数据，不把明文写入仓库、配置或日志。不要把 App Secret 发给 Codex 或粘贴到聊天中。
-
-## 6. 启动与验证
+## 6. 启动、网络选择与验收
 
 ```powershell
 .\start-bridge.ps1
-.\configure-codex-desktop-relay.ps1
+.\doctor.ps1 -RequireRunning
+```
+
+在重启 Desktop 前必须询问用户是直连，还是需要一个无认证、带明确端口的本机 loopback 代理 URL。不带参数默认直连：
+
+```powershell
+.\launch-codex-desktop-with-relay.ps1
+```
+
+只在用户明确选择时使用：
+
+```powershell
+.\launch-codex-desktop-with-relay.ps1 -Proxy http://127.0.0.1:7897
+```
+
+先让用户完全退出 Desktop，再从仓库目录的独立 PowerShell 运行唯一选定的命令。启动器只将代理应用到 Desktop 和共享 App Server；Bridge、Channel、watchdog 与飞书 CLI 保持直连。它会验证 App Server 拥有权、Scheduled Task watchdog 和同一 activation 的新鲜 heartbeat；失败时撤销 Bridge-owned pointer，不继续打开 Desktop。
+
+隔离的 `-Proxy` 模式需要能找到可直接启动的 Win32 Desktop 可执行文件。如果只安装了 packaged Desktop，启动器会安全停止，不会修改系统或用户全局代理；packaged Desktop 仍可使用默认直连模式。
+
+Desktop 打开后运行：
+
+```powershell
+.\status-bridge.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-`configure-codex-desktop-relay.ps1` 会先确认共享 App Server 的进程与监听器，再安装并立即启动当前用户的连续 watchdog，写入 `CODEX_APP_SERVER_WS_URL`，并等待相同 activation 的 ready heartbeat。任一步骤失败都会撤销 Bridge-owned pointer，使 Desktop 回退到原启动方式。全部检查通过后，**完全退出并重新打开 Codex Desktop**。只关闭一个窗口不一定会结束后台进程；需要确保新进程读取新的环境变量。
-
 然后进行验收：
 
-1. 在飞书中私聊该应用机器人，发送 `/add`。
-2. 按编号选择 Codex Project（或“独立”）和任务；若 Project 暂时为空，可在同一向导中重新扫描、返回 Project 列表，或输入名称在该 Project 的首个有效工作目录中新建任务。
-3. Bridge 自动创建 `{Project名}/{任务名}` 或 `独立/{任务名}` 群，并应用 `{主机名}-Codex` 标签。
-4. 在只有你和 Bot 的新群中直接发普通消息，无需 `@Bot`；确认 Prompt 进入绑定任务且最终回答返回群。
-5. 在 Codex Desktop 中发送一次 Prompt；确认其最终回答也返回同一群。
-6. 让 Codex 最终回答引用一个不超过 30 MB 的本地文件；确认最终回答后出现可点击的群内原生附件。本地图片不超过 10 MB 时应直接内嵌，超过 10 MB 时应降级为附件。
-7. 在绑定群先后上传两个小型普通附件；确认 Bot 分别回复“附件已暂存”，`/status` 显示正确累计数，且 `/model` 等命令不会消费附件。随后发送一条普通文字 Prompt，确认 Codex 在一次输入中收到并能实际读取全部附件，Desktop 按原生文件消息显示安全附件名。再单独发送一张图片，确认没有附件草稿时图片会立即进入 Codex 原生视觉输入。可通过 App Server 诊断确认底层输入使用 Desktop 文件 Prompt 格式；飞书最终 Prompt 回显不得出现 `<feishu_bridge_local_attachments>`、飞书资源 key 或本机绝对路径。
-8. 可再上传一个附件并运行 `/attachments clear`，确认草稿被放弃且没有启动 Codex。
-9. 在绑定群发送 `/settings` 查看并修改当前 Session；使用 `/settings mention on|off` 控制最终回答是否 @你。公开进度始终不 @。在 CLI Bot 私聊发送 `/settings` 可修改后续新绑定的默认值。确认全新安装显示 `queue + 公开进度开启 + 最终回答提醒开启`。新绑定会复制创建当时的默认快照，已有群不会跟随全局默认变化。
-
-也可以在目标 Codex 任务里说“帮我把这个任务绑定到飞书”，让 `$feishu-session-bind` Skill 创建或复用群。
+1. 在目标 Codex 任务中使用 `$feishu-session-bind` 创建或复用只含当前用户与 Bot 的专属绑定群。初次安装不需要 Bot 私聊或 `/add`；`/add` 只是以后的可选入口。
+2. 分别从绑定群和 Desktop 的同一任务发送 Prompt，确认两端都进入同一 Session，且最终回答返回群。
+3. 让 Codex 最终回答引用一个不超过 30 MB 的本地文件，确认飞书收到可点击的原生附件。
+4. 在绑定群连续上传两个小型普通附件，确认它们被暂存，`/status` 显示正确累计数，其他命令不会消费。再发送普通文字 Prompt，确认 Codex 在一次输入中能读取全部附件。
+5. 没有附件草稿时单独发送一张图片，确认图片立即进入 Codex 原生视觉输入。再测试 `/attachments clear`，确认放弃草稿不会启动 Turn。
+6. 最后再运行 `status-bridge.ps1` 与严格 Doctor。
 
 ## 日常命令
 
@@ -135,12 +177,12 @@ Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -Re
 
 ```powershell
 .\configure-codex-desktop-relay.ps1 -Disable
-.\update.ps1 -Version v0.3.1-beta.1 -StartBridge
-.\configure-codex-desktop-relay.ps1
+.\update.ps1 -Version v0.3.2-windows-rc.4 -StartBridge
+.\launch-codex-desktop-with-relay.ps1
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-第一条命令先恢复 Desktop 的可启动性；升级、Bridge 与 watchdog 全部验证成功后，再完全退出并重新打开 Codex Desktop。若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
+第一条命令先恢复 Desktop 的可启动性。升级后仍要先询问用户直连或本机代理；上例是直连，用户明确选择代理时将第三条改为 `launch-codex-desktop-with-relay.ps1 -Proxy <loopback URL>`。运行启动器前完全退出 Desktop；若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
 
 ### 已有自建守护的升级
 

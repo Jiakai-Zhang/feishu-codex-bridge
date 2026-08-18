@@ -8,7 +8,15 @@ description: Create or reuse a dedicated Feishu group binding for the current Co
 使用随 Skill 安装的确定性脚本。脚本只把当前 `CODEX_THREAD_ID` 交给本机 Bridge；Bridge 负责验证任务、创建仅含当前用户与 Bot 的群、按 `{Project名}/{任务名}` 或 `独立/{任务名}` 命名、应用本机 Agent 标签并持久化绑定。
 
 1. 告诉用户：本 Skill 正在请求本机 Bridge 创建或复用当前任务的飞书绑定。
-2. 运行：
+2. 按当前系统运行确定性脚本：
+
+   macOS：
+
+   ```bash
+   "$HOME/.agents/skills/feishu-session-bind/scripts/request-binding.sh"
+   ```
+
+   Windows：
 
    ```powershell
    & "$HOME\.agents\skills\feishu-session-bind\scripts\request-binding.ps1"

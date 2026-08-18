@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { basenameFsPath } from "../runtime/shared/fs-paths.mjs";
 
 const MARKDOWN_IMAGE_LINE = /^\s*!\[([^\]\r\n]*)\]\((.+)\)\s*$/;
 const MARKDOWN_LINK = /\[([^\]\r\n]*)\]\(([^)\r\n]+)\)/g;
@@ -38,7 +39,7 @@ export function normalizeCodexLocalAttachmentPath(value) {
   if (/^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(target)) {
     return path.win32.normalize(target.replaceAll("/", "\\"));
   }
-  if (path.isAbsolute(target)) return path.normalize(target);
+  if (target.startsWith("/")) return path.posix.normalize(target);
   return undefined;
 }
 
@@ -48,7 +49,7 @@ export function normalizeCodexLocalImagePath(value) {
 
 function safeAttachmentName(value, localPath) {
   const requested = String(value || "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
-  const fallback = path.win32.basename(String(localPath || "")) || path.basename(String(localPath || ""));
+  const fallback = basenameFsPath(localPath);
   return (requested || fallback || "Codex 附件").slice(0, 200);
 }
 

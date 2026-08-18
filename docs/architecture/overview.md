@@ -17,7 +17,12 @@ src/
   codex/                       Codex Desktop/App Server adapter
   feishu/                      Feishu transport, cards, media, docs, OAuth
   persistence/                 queue, bindings, settings, ledgers, outboxes
-  runtime/                     process and platform integration
+  runtime/
+    shared/                    cross-platform paths, probes, private state
+    platform/
+      detect.mjs               explicit platform selection
+      macos/                   Keychain, launchd, Desktop, install, Doctor
+    thread-work-queue.mjs
   experimental/
     collaboration/             Project Agent, team, knowledge, delegation
 
@@ -85,6 +90,24 @@ The retained experimental collaboration Bridge follows the same boundary. Its
 These modules receive narrow runtime dependencies from the composition root;
 they do not load configuration or create process-wide stores themselves.
 
+### Runtime platform boundary
+
+Stable product domains do not call `launchctl`, Keychain, PowerShell, DPAPI, or
+operating-system process inspection directly. Shared filesystem semantics,
+network probes, private atomic state, and polling live under
+`src/runtime/shared/`. macOS capabilities live under
+`src/runtime/platform/macos/` as narrow modules for credentials, service
+management, Desktop discovery and proxy inheritance, installation, health
+checks, and update rollback.
+
+Root `.sh` and `.ps1` files remain compatibility entrypoints. The macOS shell
+wrappers dispatch to `admin-cli.mjs`; the current Windows operational
+implementation remains in the established PowerShell entrypoints, with the
+narrow `runtime/platform/windows/feishu-app-entry.mjs` adapter used only for
+the shared Feishu template and safe verification flow. Product domains may
+depend on shared runtime modules, but must not import a concrete platform
+adapter.
+
 ## Dependency direction
 
 The intended direction is:
@@ -115,6 +138,6 @@ Refactoring must preserve, or explicitly migrate, all of the following:
 - Feishu commands, cards, messages, files, and mention behavior;
 - Codex App Server request and notification handling;
 - Desktop relay pointer and fail-open behavior;
-- DPAPI-protected credentials and update rollback guarantees.
+- DPAPI- or Keychain-protected credentials and update rollback guarantees.
 
 Architecture improvements are successful only when these contracts remain testable and understandable.

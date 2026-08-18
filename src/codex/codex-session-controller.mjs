@@ -331,6 +331,7 @@ export class CodexSessionController {
           requestAttestation: false,
         },
       });
+      connection.notify("initialized");
       const catchUpAfterMs = this.hasConnected ? this.disconnectedAtMs : undefined;
       for (const state of this.states.values()) {
         try {
