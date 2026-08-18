@@ -39,7 +39,16 @@ owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 
 
 `/queue <Prompt>` 总是显式创建独立新 Turn，不受当前普通消息模式影响。多条队列不会合并；Bridge 或共享 App Server 重启后仍会恢复，并通过原飞书消息 ID 对账，避免重复启动。
 
-Session Relay 不提供 `/new`、`/use` 或全局“当前任务”切换。除了精确识别的 Session 与绑定管理命令，其他文本（包括未知的 `/xxx`）都按当前 `queue|steer` 设置交给 Codex。
+Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群的长期绑定保持不变，但 `/chat [首条 Prompt]` 可以在当前群或 Bot 私聊中创建独立临时 Session；`/endchat` 结束后，群内返回原绑定 Session。除了精确识别的 Session、临时 Chat 与绑定管理命令，其他文本（包括未知的 `/xxx`）都按当前 `queue|steer` 设置交给 Codex。
+
+## 临时 Chat 与 Bot 私聊
+
+- `/chat`：创建一个临时 Codex Session；创建完成后，普通消息持续进入该 Session。
+- `/chat <Prompt>`：创建临时 Session，并把后面的正文直接作为第一条 Prompt，不把它当作任务标题。
+- `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。
+- 绑定群中的临时 Chat 继承原 Session 的 cwd；Bot 私聊使用 Bridge 启动时的 Codex 工作目录。
+- 临时 Chat 状态持久化。Bridge 重启后仍能继续；`/endchat` 不取消已经提交的 Turn，其最终结果仍投递到原飞书会话。
+- Bot 私聊只接受配置中的 owner；私聊最终回答不发送多余的 `@owner`。
 
 ## 跨客户端同步
 
@@ -66,8 +75,8 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 1. commentary 到达时，在原卡片追加公开进度并刷新“已处理”时长；
 2. Turn 完成后，最终答案原位替换进度；
 3. 卡片底部显示回答完成时间、整轮用时和本轮真实 Token；
-4. 需要提醒时，再发送一次简短 `@owner` 完成通知；
-5. 卡片更新失败时，才回退为普通进度消息或持久最终投递。
+4. 完整最终答案再作为最新消息持久投递，避免原地更新的卡片停留在聊天上方；需要提醒时，该最终消息包含 `@owner`；
+5. 卡片更新失败时，仍使用同一套持久最终投递。
 
 本轮 Token 使用 App Server 会话累计 usage 的差值计算，覆盖同一 Turn 中的多次模型调用。断线补发缺少 usage 快照时会显示“暂不可用”，不会按文本长度估算。
 
@@ -214,7 +223,7 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 ## 持久状态与投递
 
-- 每个 Session 的设置、待提交附件草稿、Prompt FIFO、输入账本和最终投递状态保存在本机运行目录。
+- 每个 Session 的设置、待提交附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
 - 所有最终答案先写入持久发件箱，再调用飞书发送。
 - 最终答案使用按 Turn 派生的确定性投递 ID；网络重试不会重复运行 Codex。
 - 主动发送最终结果前仍会重新校验群成员。

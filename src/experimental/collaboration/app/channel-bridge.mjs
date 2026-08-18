@@ -13,6 +13,7 @@ import {
   readLatestRolloutSnapshot,
 } from "../codex/codex-status.mjs";
 import { DeliveryOutbox } from "../../../persistence/delivery-outbox.mjs";
+import { createSerializedFileWriter } from "../../../persistence/serialized-json-file.mjs";
 import { createExecutor } from "../codex/executor-registry.mjs";
 import { KnowledgeHub } from "../persistence/knowledge-hub.mjs";
 import { runProcess } from "../runtime/process-runner.mjs";
@@ -119,7 +120,7 @@ const activeWorks = new Map();
 let lastWork;
 const workQueue = new ThreadWorkQueue();
 const enqueueWork = (callback) => workQueue.enqueue("collaboration", callback);
-let completedWriteTail = Promise.resolve();
+const writeCompleted = createSerializedFileWriter(statePath);
 let connectedBotOpenId = config.agent.botOpenId;
 let temporaryChatReady;
 
@@ -187,11 +188,7 @@ async function persistCompleted(messageId) {
   completed.add(messageId);
   const recent = [...completed].slice(-1000);
   completed = new Set(recent);
-  completedWriteTail = completedWriteTail.then(
-    () => fs.writeFile(statePath, JSON.stringify(recent, null, 2), "utf8"),
-    () => fs.writeFile(statePath, JSON.stringify(recent, null, 2), "utf8"),
-  );
-  await completedWriteTail;
+  await writeCompleted(JSON.stringify(recent, null, 2));
 }
 
 async function selectThread(thread, snapshot) {

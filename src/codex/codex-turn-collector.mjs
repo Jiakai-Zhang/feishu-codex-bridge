@@ -220,7 +220,7 @@ export function formatPromptTime(timestampMs, timeZone = "Asia/Shanghai") {
   }).format(new Date(normalizeTimestampMs(timestampMs)));
 }
 
-export function formatAnswerDuration(durationMs) {
+function formatAnswerDuration(durationMs) {
   const milliseconds = Number(durationMs);
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "暂不可用";
   if (milliseconds > 0 && milliseconds < 1_000) return "<1秒";
@@ -498,6 +498,24 @@ export class CodexTurnCollector {
     this.threadUsageTotals = new Map();
     this.emitted = new Set();
     this.emittedProgress = new Set();
+  }
+
+  addTarget(target) {
+    const threadId = String(target?.threadId || "");
+    if (!threadId) throw new TypeError("Turn collector target requires threadId");
+    if (this.targets.has(threadId)) return false;
+    this.targets.set(threadId, Object.freeze({ ...target, threadId }));
+    return true;
+  }
+
+  removeTarget(threadId) {
+    const key = String(threadId || "");
+    if (!this.targets.delete(key)) return false;
+    for (const [turnId, state] of this.turns) {
+      if (state.threadId === key) this.turns.delete(turnId);
+    }
+    this.threadUsageTotals.delete(key);
+    return true;
   }
 
   #state(threadId, turnId, { create = true } = {}) {

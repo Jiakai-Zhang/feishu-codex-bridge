@@ -36,7 +36,7 @@ export function displaySessionTitle(value, { maxChars = 80 } = {}) {
   return title.length <= maxChars ? title : `${title.slice(0, maxChars - 1)}…`;
 }
 
-export async function readIndexedThreadNames(indexPath, { readFile = fs.readFile } = {}) {
+async function readIndexedThreadNames(indexPath, { readFile = fs.readFile } = {}) {
   let text;
   try { text = await readFile(indexPath, "utf8"); }
   catch (error) {

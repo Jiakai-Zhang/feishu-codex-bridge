@@ -88,8 +88,8 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 应用/Bot 权限：
 
 - `im:message`：发送消息，并以 Bot 身份下载 owner 消息中的图片与附件；
-- `im:message.p2p_msg:readonly`：接收与机器人的单聊消息，支持可选的 `/add`；
-- `im:message.group_msg`：接收绑定群普通消息，无需 `@Bot`；
+- `im:message.p2p_msg:readonly`：接收与机器人的单聊消息，用于 `/chat`、`/add` 与后续私聊；
+- `im:message.group_msg`：接收群内普通消息，使仅含用户与 Bot 的绑定群无需 `@Bot`；
 - `im:chat:readonly`：读取群基本信息；
 - `im:chat.members:read`：验证群内只有绑定用户与 Bot；
 - `im:chat:create`：创建专属绑定群；

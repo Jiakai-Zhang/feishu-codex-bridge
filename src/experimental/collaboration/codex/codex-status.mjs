@@ -119,7 +119,7 @@ export function formatTimestamp(value, { timeZone = "Asia/Taipei" } = {}) {
   });
 }
 
-export function formatWindow(minutes) {
+function formatWindow(minutes) {
   if (!Number.isFinite(minutes)) return "不可用";
   if (minutes % 10080 === 0) return `${minutes / 10080} 周`;
   if (minutes % 1440 === 0) return `${minutes / 1440} 天`;

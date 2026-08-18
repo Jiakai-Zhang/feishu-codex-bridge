@@ -43,12 +43,12 @@ function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailu
     status: activeTurn ? { type: "active", activeFlags: [] } : { type: "idle" },
   };
 
-  function threadSnapshot(includeTurns = true) {
+  function threadSnapshot(includeTurns = true, requestedThreadId = threadId) {
     return {
-      id: threadId,
+      id: requestedThreadId,
       cwd: repoCwd,
-      status: structuredClone(server.status),
-      turns: includeTurns ? structuredClone(server.turns) : [],
+      status: requestedThreadId === threadId ? structuredClone(server.status) : { type: "idle" },
+      turns: includeTurns && requestedThreadId === threadId ? structuredClone(server.turns) : [],
     };
   }
 
@@ -79,14 +79,16 @@ function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailu
         return;
       }
       respond(socket, request.id, {
-        thread: threadSnapshot(false),
+        thread: threadSnapshot(false, request.params.threadId),
         model: server.settings.model,
         modelProvider: "openai",
         serviceTier: server.settings.serviceTier,
         reasoningEffort: server.settings.effort,
       });
     } else if (request.method === "thread/read") {
-      respond(socket, request.id, { thread: threadSnapshot(request.params.includeTurns) });
+      respond(socket, request.id, {
+        thread: threadSnapshot(request.params.includeTurns, request.params.threadId),
+      });
     } else if (request.method === "thread/goal/get") {
       respond(socket, request.id, { goal: structuredClone(server.goal) });
     } else if (request.method === "turn/start") {
@@ -277,6 +279,30 @@ function controller(server, options = {}) {
     ...options,
   });
 }
+
+test("adds a newly created temporary Chat without reconnecting existing Sessions", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  const socketsBefore = server.sockets.length;
+  const temporaryThreadId = "029ff5b8-decb-7ca3-802c-f115f2f196de";
+
+  const status = await client.addTarget({
+    threadId: temporaryThreadId,
+    chatId: "private-conversation",
+    cwd: "C:/repo",
+  });
+
+  assert.equal(status.status.type, "idle");
+  assert.equal(client.hasTarget(temporaryThreadId), true);
+  assert.equal(server.sockets.length, socketsBefore);
+  assert.equal(server.requests.some(({ method, params }) => (
+    method === "thread/resume" && params.threadId === temporaryThreadId
+  )), true);
+  assert.equal(client.removeTarget(temporaryThreadId), true);
+  assert.equal(client.hasTarget(temporaryThreadId), false);
+  await client.stop();
+});
 
 test("starts an idle Feishu prompt, steers the next prompt into the same active turn, and emits one final", async () => {
   const server = fakeControllerServer();

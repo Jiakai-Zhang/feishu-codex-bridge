@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createSerializedFileWriter, readJsonArrayFile } from "../../../persistence/serialized-json-file.mjs";
 
 function key(projectId, branch) {
   return `${projectId}:${branch}`;
@@ -7,13 +8,7 @@ function key(projectId, branch) {
 
 export class TaskLeaseStore {
   static async open(filePath, { now = Date.now } = {}) {
-    let records = [];
-    try {
-      records = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(records)) throw new TypeError("Task lease store must contain an array");
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Task lease store");
     return new TaskLeaseStore(filePath, records, { now });
   }
 
@@ -21,7 +16,7 @@ export class TaskLeaseStore {
     this.filePath = filePath;
     this.now = now;
     this.leases = new Map(records.map((lease) => [key(lease.projectId, lease.branch), { ...lease }]));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
     this.prune();
   }
 
@@ -76,20 +71,11 @@ export class TaskLeaseStore {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 
   async reload() {
-    let records = [];
-    try { records = JSON.parse(await fs.readFile(this.filePath, "utf8")); }
-    catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-    if (!Array.isArray(records)) throw new TypeError("Task lease store must contain an array");
+    const records = await readJsonArrayFile(this.filePath, "Task lease store");
     this.leases = new Map(records.map((lease) => [key(lease.projectId, lease.branch), { ...lease }]));
   }
 

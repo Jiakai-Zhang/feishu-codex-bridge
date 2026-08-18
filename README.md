@@ -103,7 +103,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1
 | 应用权限 | 用途 |
 | --- | --- |
 | `im:message` | 发送回复、富文本和互动卡片；下载 owner 消息中的图片与附件 |
-| `im:message.p2p_msg:readonly` | 接收 Bot 私聊中的 `/add` 与全局设置命令 |
+| `im:message.p2p_msg:readonly` | 接收 Bot 私聊中的 `/chat`、`/add` 与全局设置命令 |
 | `im:message.group_msg` | 接收绑定群中未 `@Bot` 的普通消息 |
 | `im:chat:readonly` | 读取绑定群基本信息 |
 | `im:chat.members:read` | 校验群内严格只有 owner 与当前 Bot |
@@ -125,7 +125,17 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1
 
 ## 开始使用
 
-### 1. 创建绑定
+### 1. 私聊临时 Chat
+
+私聊 Bot 发送 `/chat` 可创建一个持久化的临时 Codex Session，并直接在私聊中继续对话：
+
+```text
+/chat 帮我分析这个问题
+```
+
+`/chat` 后面的正文是第一条 Prompt，不是标题。私聊默认使用 Bridge 启动时的 Codex 工作目录；在已有绑定群中使用时继承原 Session 的工作目录。发送 `/endchat` 结束临时上下文：群内随后返回固定绑定的原 Session，私聊中则可再次发送 `/chat` 新建上下文。已经提交的临时消息不会被取消，完成后仍会回复原飞书会话。临时 Chat、队列和返回位置会跨 Bridge 重启保留。
+
+### 2. 创建绑定
 
 启动并完成 Desktop relay 验证后，在目标 Codex 任务中使用 `$feishu-session-bind`，为当前任务创建或复用专属绑定群。初次安装不需要先建 Bot 私聊。
 
@@ -139,14 +149,16 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.1
 
 Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。Project 暂时为空时，向导会提供“重新扫描”“返回 Project 列表”和“新建任务”。
 
-绑定完成后，在新群直接发送文本、图片或附件即可，无需 `@Bot`。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。飞书无法在同一消息里附带说明的普通文件可以连续上传多条，Bridge 会先暂存，直到第一条普通文字 Prompt 到达，再把全部附件合并为该 Turn 的一次用户输入。Session Relay 不提供 `/new`、`/use` 或全局“当前任务”切换；每个群始终指向自己的 Session。
+绑定完成后，在新群直接发送文本、图片或附件即可，无需 `@Bot`。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。飞书无法在同一消息里附带说明的普通文件可以连续上传多条，Bridge 会先暂存，直到第一条普通文字 Prompt 到达，再把全部附件合并为该 Turn 的一次用户输入。Session Relay 不提供 `/new`、`/use` 或全局长期任务切换；每个群的长期绑定始终指向自己的 Session，临时 `/chat` 不会修改该绑定。
 
-### 2. 群内命令
+### 3. 会话命令
 
 这些命令由 Bridge 直接执行，不会作为 prompt 发送给模型：
 
 | 命令 | 作用 |
 | --- | --- |
+| `/chat [首条 Prompt]` | 在当前飞书私聊或绑定群创建/继续独立的临时 Codex Chat |
+| `/endchat` | 结束临时 Chat；群内返回原绑定任务，私聊等待下一次 `/chat` |
 | `/status` | 查看连接、Turn、模型、Plan、Token、Goal、队列和待提交附件摘要 |
 | `/stop` | 暂停活动 Goal（如有）并中止当前 Turn；不清空队列 |
 | `/queue <Prompt>` | 把 Prompt 作为独立新 Turn 持久排队 |
@@ -164,7 +176,7 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 
 未知斜杠文本不会被 Bridge 吞掉。例如 `/review this change` 仍按当前 `queue|steer` 设置交给 Codex。完整参数和行为见 [Session Relay 参考](docs/SESSION_RELAY.md)。
 
-### 3. 默认设置
+### 4. 默认设置
 
 新安装默认：
 
@@ -179,8 +191,8 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 - 飞书入站默认单文件不超过 30 MiB；单条消息或同一 Session 的整份暂存草稿最多 10 个资源、总计 60 MiB。暂存附件和已排队附件都会持久化，Bridge 重启后仍能继续。缓存默认保留 7 天，并受 1 GiB 总容量限制。
 - 只有第一条普通文字 Prompt 或 `/queue <Prompt>` 会消费暂存附件；`/status`、`/model` 等 Bridge 命令不会。已有附件草稿时，后续纯图片消息也会加入草稿；没有草稿时，单独图片仍立即作为 Prompt 发送。
 - 入站图片在 Codex 与最终 Prompt 回显中按图片展示；普通附件只回显安全文件名，不显示飞书 `file_key` 或本机绝对路径。
-- 当前 `main` 的一个 Turn 只使用一张可更新卡片；公开进度在原卡片刷新，完成后由最终答案原位替换，并显示完成时间、总用时和本轮真实 Token。
-- 公开进度始终不 `@`；最终回答可按 Session 设置发送一次完成提醒。
+- 当前 `main` 的一个 Turn 使用一张可更新卡片；公开进度在原卡片刷新，完成后由最终答案原位替换，并显示完成时间、总用时和本轮真实 Token。随后完整最终答案会作为最新消息再次发送，避免原地更新的旧卡片留在聊天上方。
+- 公开进度始终不 `@`；最终回答可按 Session 设置 `@owner`，私聊临时 Chat 不额外 `@`。
 - 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送，且不暴露本机绝对路径。
 - 当前 `main` 中，最终文本超过 `maxReplyChars` 时会写入当前用户的飞书云文档；创建失败则回退到普通文本投递。
 - Bridge 启动时不会补发历史答案；若启动时绑定 Session 正在运行，会接管活动 Turn，并补齐断线期间刚完成的结果。

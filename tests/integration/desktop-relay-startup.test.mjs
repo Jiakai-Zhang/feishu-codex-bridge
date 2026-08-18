@@ -139,6 +139,15 @@ test("Bridge delegates shared App Server ownership to the standalone starter", a
   assert.ok(pointerEnableIndex > appServerIndex);
 });
 
+test("Session binding reloads use the Supervisor handshake", async () => {
+  const relaySource = await readFile(path.join(repositoryRoot, "src/app/session-relay.mjs"), "utf8");
+  const supervisorSource = await readScript("bridge-supervisor.ps1");
+  assert.match(relaySource, /restartRequestPath[\s\S]*restart\.request/);
+  assert.match(relaySource, /fs\.writeFile\(restartRequestPath/);
+  assert.match(supervisorSource, /\$restartPath = Join-Path \$runtimeDir 'restart\.request'/);
+  assert.match(supervisorSource, /explicit reload requested; starting replacement Bridge/);
+});
+
 test("Bridge stop pauses the watchdog and removes the owned Desktop pointer", async () => {
   const stopSource = await readScript("stop-bridge.ps1");
   const supervisorSource = await readScript("bridge-supervisor.ps1");

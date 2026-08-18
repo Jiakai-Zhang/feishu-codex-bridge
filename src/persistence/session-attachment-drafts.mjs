@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { normalizeCodexPromptAttachments } from "../feishu/feishu-inbound-attachment.mjs";
+import { createSerializedFileWriter, readJsonArrayFile } from "./serialized-json-file.mjs";
 
 export class SessionAttachmentDraftError extends Error {
   constructor(code, message) {
@@ -61,25 +61,17 @@ export function shouldStageAttachmentPrompt(prompt, { hasPendingDraft = false } 
 
 export class SessionAttachmentDraftStore {
   constructor(filePath, records = [], { maxItems = 10, maxTotalBytes = 60 * 1024 * 1024 } = {}) {
-    this.filePath = filePath;
     this.maxItems = Math.max(1, Number(maxItems) || 10);
     this.maxTotalBytes = Math.max(1, Number(maxTotalBytes) || 60 * 1024 * 1024);
     this.records = new Map(records.map((record) => {
       const value = normalizeRecord(record);
       return [value.messageId, value];
     }));
-    this.writeTail = Promise.resolve();
+    this.writeSnapshot = createSerializedFileWriter(filePath);
   }
 
   static async open(filePath, options) {
-    let records = [];
-    try {
-      const value = JSON.parse(await fs.readFile(filePath, "utf8"));
-      if (!Array.isArray(value)) throw new TypeError("Attachment draft store must contain an array");
-      records = value;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    const records = await readJsonArrayFile(filePath, "Attachment draft store");
     return new SessionAttachmentDraftStore(filePath, records, options);
   }
 
@@ -246,10 +238,6 @@ export class SessionAttachmentDraftStore {
 
   async persist() {
     const snapshot = JSON.stringify(this.list(undefined, { includeClaimed: true }), null, 2);
-    this.writeTail = this.writeTail.then(
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-      () => fs.writeFile(this.filePath, snapshot, "utf8"),
-    );
-    await this.writeTail;
+    await this.writeSnapshot(snapshot);
   }
 }
