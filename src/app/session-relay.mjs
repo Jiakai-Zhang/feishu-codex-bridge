@@ -135,6 +135,7 @@ const longAnswerDocumentManager = config.larkCliEntry
     })
   : undefined;
 const streamCards = await SessionStreamCardStore.open(streamCardsPath);
+const queuedWriterConflictNotices = new Set();
 const inboundAttachmentStore = new FeishuInboundAttachmentStore(
   inboundAttachmentsPath,
   config.sessionRelay.inboundAttachments,
@@ -146,6 +147,7 @@ const attachmentDrafts = await SessionAttachmentDraftStore.open(attachmentDrafts
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => {
+    queuedWriterConflictNotices.delete(queued.messageId);
     await inputLedger.put({
       messageId: queued.messageId,
       chatId: queued.chatId,
@@ -159,9 +161,10 @@ const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
       chatId: queued.chatId,
     });
   },
-  onError: (error, queued) => log(
-    `queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`,
-  ),
+  onError: (error, queued) => {
+    log(`queued prompt dispatch deferred for ${queued?.messageId || "unknown"}: ${safeError(error)}`);
+    if (error?.code === "session_writer_conflict") void showQueuedWriterConflict(error, queued);
+  },
 });
 await attachmentDrafts.reconcile({
   isPromptAccepted: (messageId) => inputLedger.has(messageId) || promptQueue.has(messageId),
@@ -687,6 +690,7 @@ async function syncConfiguredFeedGroups() {
 }
 
 function publicFailure(error) {
+  if (error?.publicMessage) return String(error.publicMessage);
   switch (error?.code) {
     case "session_system_error":
       return "绑定的 Codex 任务当前处于系统错误状态。请先在 Codex Desktop 中查看并恢复该任务。";
@@ -815,6 +819,30 @@ async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
   return created;
 }
 
+async function showQueuedWriterConflict(error, queued) {
+  if (!queued?.messageId || !channelConnected) return;
+  if (queuedWriterConflictNotices.has(queued.messageId)) return;
+  queuedWriterConflictNotices.add(queued.messageId);
+  try {
+    const response = await channel.rawClient.im.message.reply({
+      data: {
+        content: JSON.stringify({
+          text: `${publicFailure(error)}\n\n这条 Prompt 仍保留在队列中；写入权限释放后，Bridge 会自动重试。`,
+        }),
+        msg_type: "text",
+        reply_in_thread: Boolean(queued.feishuThreadId),
+        uuid: deliveryIdempotencyKey(`codex-queue-writer-conflict:${queued.messageId}`),
+      },
+      path: { message_id: queued.messageId },
+    });
+    if (response?.code !== undefined && response.code !== 0) {
+      throw new Error(`Feishu queue writer-conflict reply failed with code ${response.code}`);
+    }
+  } catch (replyError) {
+    queuedWriterConflictNotices.delete(queued.messageId);
+    log(`queue writer-conflict notice could not be delivered: ${safeError(replyError)}`);
+  }
+}
 async function tryEnsureTurnStreamCard(record) {
   try {
     return await ensureTurnStreamCard(record);

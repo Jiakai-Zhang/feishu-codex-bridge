@@ -17,7 +17,7 @@ function userInputItem(clientId, input, id = `user-${clientId}`) {
   return { id, type: "userMessage", clientId, content: structuredClone(input) };
 }
 
-function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailures = 0 } = {}) {
+function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds = [] } = {}) {
   const server = {
     requests: [],
     sockets: [],
@@ -26,7 +26,6 @@ function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailu
     acceptThenDisconnectNextSteer: false,
     acceptThenDisconnectNextStart: false,
     raceNextStartWithDesktop: false,
-    activeWriterResumeFailures,
     settings: {
       cwd: repoCwd,
       model: "model-one",
@@ -39,6 +38,7 @@ function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailu
       },
     },
     goal: goal ? structuredClone(goal) : null,
+    resumeConflictThreadIds: new Set(resumeConflictThreadIds),
     turns: activeTurn ? [structuredClone(activeTurn)] : [],
     status: activeTurn ? { type: "active", activeFlags: [] } : { type: "idle" },
   };
@@ -73,9 +73,11 @@ function fakeControllerServer({ activeTurn, goal = null, activeWriterResumeFailu
     if (request.method === "initialize") {
       respond(socket, request.id, { userAgent: "test" });
     } else if (request.method === "thread/resume") {
-      if (server.activeWriterResumeFailures > 0) {
-        server.activeWriterResumeFailures -= 1;
-        respond(socket, request.id, undefined, { code: -32603, message: `thread ${threadId} already has an active writer` });
+      if (server.resumeConflictThreadIds.has(request.params.threadId)) {
+        respond(socket, request.id, undefined, {
+          code: -32603,
+          message: "thread already has an active writer",
+        });
         return;
       }
       respond(socket, request.id, {
@@ -290,7 +292,7 @@ test("adds a newly created temporary Chat without reconnecting existing Sessions
   const status = await client.addTarget({
     threadId: temporaryThreadId,
     chatId: "private-conversation",
-    cwd: "C:/repo",
+    cwd: repoCwd,
   });
 
   assert.equal(status.status.type, "idle");
@@ -301,6 +303,45 @@ test("adds a newly created temporary Chat without reconnecting existing Sessions
   )), true);
   assert.equal(client.removeTarget(temporaryThreadId), true);
   assert.equal(client.hasTarget(temporaryThreadId), false);
+  await client.stop();
+});
+
+test("isolates an active-writer resume conflict to one Session and retries it after release", async () => {
+  const healthyThreadId = "039ff5b8-decb-7ca3-802c-f115f2f196de";
+  const server = fakeControllerServer({ resumeConflictThreadIds: [threadId] });
+  const logs = [];
+  const client = controller(server, {
+    targets: [target, { threadId: healthyThreadId, chatId: "oc_healthy", cwd: repoCwd }],
+    log: (message) => logs.push(message),
+  });
+
+  await client.start();
+
+  assert.equal(client.connected, true);
+  assert.equal((await client.getStatus(healthyThreadId)).status.type, "idle");
+  await assert.rejects(
+    () => client.submitPrompt({ threadId, text: "blocked prompt", clientUserMessageId: "om_blocked" }),
+    (error) => {
+      assert.equal(error.code, "session_writer_conflict");
+      assert.match(error.publicMessage, /Codex Desktop|CLI/);
+      return true;
+    },
+  );
+  assert.equal(client.connected, true);
+  assert.equal(logs.some((message) => /active writer conflict/i.test(message)), true);
+
+  server.resumeConflictThreadIds.delete(threadId);
+  const result = await client.submitPrompt({
+    threadId,
+    text: "retry after release",
+    clientUserMessageId: "om_retry",
+  });
+
+  assert.equal(result.kind, "started");
+  assert.equal(
+    server.requests.filter(({ method, params }) => method === "thread/resume" && params.threadId === threadId).length,
+    3,
+  );
   await client.stop();
 });
 
@@ -334,17 +375,6 @@ test("starts an idle Feishu prompt, steers the next prompt into the same active 
     { text: "adjust it", clientId: "om_adjust" },
   ]);
   assert.equal(completed[0].answer, "final answer");
-  await client.stop();
-});
-
-test("waits for a separate Desktop App Server to release the active writer without crashing", async () => {
-  const server = fakeControllerServer({ activeWriterResumeFailures: 2 });
-  const logs = [];
-  const client = controller(server, { log: (message) => logs.push(message) });
-  await client.start();
-  assert.equal(client.connected, true);
-  assert.equal(server.requests.filter(({ method }) => method === "thread/resume").length, 3);
-  assert.equal(logs.filter((message) => message.includes("waiting for Desktop relay handoff")).length, 1);
   await client.stop();
 });
 

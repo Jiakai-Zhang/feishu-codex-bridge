@@ -2,6 +2,10 @@ import { CodexTurnCollector } from "./codex-turn-collector.mjs";
 import { CodexAppServerConnection } from "./codex-app-server-connection.mjs";
 import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
 
+const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
+const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
+  "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -50,10 +54,18 @@ function isRecoverableTransportError(error) {
   return ["codex_app_server_unavailable", "codex_app_server_timeout"].includes(error?.code);
 }
 
-const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
+function isActiveWriterResumeError(error) {
+  return error?.method === "thread/resume" && ACTIVE_WRITER_PATTERN.test(String(error?.message || ""));
+}
 
-function isActiveWriterError(error) {
-  return error instanceof Error && ACTIVE_WRITER_PATTERN.test(error.message);
+function sessionWriterConflict(error) {
+  const conflict = controllerError(
+    "session_writer_conflict",
+    "The bound Codex Session is currently owned by another writer",
+    { cause: error },
+  );
+  conflict.publicMessage = SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE;
+  return conflict;
 }
 
 function clone(value) {
@@ -103,6 +115,8 @@ function controllerState(target) {
     goal: undefined,
     lastTurn: undefined,
     collaborationModeKnown: false,
+    hydrationError: undefined,
+    hydrationPromise: undefined,
   };
 }
 
@@ -243,11 +257,13 @@ export class CodexSessionController {
     return running;
   }
 
-  #request(method, params) {
+  async #request(method, params) {
     const connection = this.connection;
     if (!connection?.ready || this.stopped) {
       throw controllerError("codex_app_server_unavailable", "The shared Codex App Server is not connected");
     }
+    const state = this.states.get(String(params?.threadId || ""));
+    if (state?.hydrationError) await this.#hydrateState(connection, state);
     return connection.request(method, params);
   }
 
@@ -318,7 +334,12 @@ export class CodexSessionController {
       connection.notify("initialized");
       const catchUpAfterMs = this.hasConnected ? this.disconnectedAtMs : undefined;
       for (const state of this.states.values()) {
-        await this.#hydrateState(connection, state, { catchUpAfterMs });
+        try {
+          await this.#hydrateState(connection, state, { catchUpAfterMs });
+        } catch (error) {
+          if (error?.code !== "session_writer_conflict") throw error;
+          this.log("Codex Session unavailable: active writer conflict; other bindings remain connected");
+        }
       }
       connection.activate();
       this.hasConnected = true;
@@ -331,29 +352,37 @@ export class CodexSessionController {
   }
 
   async #hydrateState(connection, state, { catchUpAfterMs } = {}) {
-    let result;
-    let waitingWasLogged = false;
-    for (;;) {
+    if (state.hydrationPromise) return state.hydrationPromise;
+    const running = (async () => {
       try {
-        result = await connection.request("thread/resume", {
-          threadId: state.target.threadId,
-          cwd: state.target.cwd,
-          approvalPolicy: "never",
-          sandbox: this.sandboxMode,
-        });
-        break;
+        await this.#hydrateStateOnce(connection, state, { catchUpAfterMs });
+        state.hydrationError = undefined;
       } catch (error) {
-        if (!isActiveWriterError(error)) throw error;
-        if (!waitingWasLogged) {
-          waitingWasLogged = true;
-          this.log("Codex task is owned by another App Server; waiting for Desktop relay handoff");
+        const normalized = isActiveWriterResumeError(error) ? sessionWriterConflict(error) : error;
+        if (normalized?.code === "session_writer_conflict") {
+          state.hydrationError = normalized;
+          state.status = { type: "notLoaded" };
+          state.activeTurnId = undefined;
+          state.activeTurnStartedAt = undefined;
         }
-        if (this.stopped || this.connection !== connection) {
-          throw controllerError("codex_app_server_unavailable", "Codex session controller stopped while waiting for Desktop relay handoff");
-        }
-        await this.sleepImpl(this.reconnectDelayMs);
+        throw normalized;
       }
+    })();
+    state.hydrationPromise = running;
+    try {
+      return await running;
+    } finally {
+      if (state.hydrationPromise === running) state.hydrationPromise = undefined;
     }
+  }
+
+  async #hydrateStateOnce(connection, state, { catchUpAfterMs } = {}) {
+    const result = await connection.request("thread/resume", {
+      threadId: state.target.threadId,
+      cwd: state.target.cwd,
+      approvalPolicy: "never",
+      sandbox: this.sandboxMode,
+    });
     if (result?.thread?.id !== state.target.threadId) {
       throw new Error("Codex session controller resumed a different task than its binding");
     }
