@@ -328,8 +328,9 @@ try {
 } catch { }
 $networkReconfigurationRequired = $proxySelectionChanged -or -not $networkRecordMatches
 $statusLines = & (Join-Path $PSScriptRoot 'status-bridge.ps1') 2>&1
+$statusCommandSucceeded = $?
 $statusText = ($statusLines | ForEach-Object { [string]$_ }) -join ' '
-if ($LASTEXITCODE -ne 0 -or $statusText -notmatch 'connected=True') {
+if (-not $statusCommandSucceeded -or $statusText -notmatch 'connected=True') {
     throw 'Start the Bridge and wait for its authenticated Channel connection before enabling Desktop relay.'
 }
 $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
@@ -473,7 +474,7 @@ try {
         if ($watchdogReady) {
             Start-Sleep -Milliseconds 500
             $taskAfterReady = Get-RelayTask -Name $taskName
-            if (-not $taskAfterReady -or [string]$taskAfterReady.State -ne 'Running') {
+            if (-not $taskAfterReady -or [string]$taskAfterReady.State -eq 'Disabled') {
                 $watchdogReady = $false
             }
         }

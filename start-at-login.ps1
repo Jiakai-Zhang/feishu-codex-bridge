@@ -64,7 +64,9 @@ function Write-WatchdogStatus {
         activationId = [string]$RelayState.activationId
         state = $State
         detail = $Detail
-        heartbeatAt = [DateTime]::UtcNow.ToString('o')
+        heartbeatAt = [DateTime]::UtcNow.ToString(
+            "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
+            [Globalization.CultureInfo]::InvariantCulture)
         watchdogProcessId = $PID
         appServerProcessId = $AppServerProcessId
     }

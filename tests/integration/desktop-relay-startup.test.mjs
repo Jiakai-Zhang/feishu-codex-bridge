@@ -41,6 +41,10 @@ test("Desktop relay activation verifies listener and watchdog before completion"
   assert.match(source, /did not remain running with a ready heartbeat after two registration attempts/);
   assert.match(source, /\$watchdogAttempt -le 2/);
   assert.match(source, /Start the Bridge and wait for its authenticated Channel connection/);
+  assert.match(source, /\$statusCommandSucceeded = \$\?/);
+  assert.match(source, /if \(-not \$statusCommandSucceeded -or/);
+  assert.match(source, /\$taskAfterReady\.State -eq 'Disabled'/);
+  assert.doesNotMatch(source, /\$taskAfterReady\.State -ne 'Running'/);
 });
 
 test("Desktop relay disable path removes dependency before official tasks", async () => {
@@ -81,7 +85,10 @@ test("continuous watchdog clears pointer before restart and restores it only aft
 test("continuous watchdog publishes heartbeat and keeps Bridge recovery asynchronous", async () => {
   const source = await readScript("start-at-login.ps1");
   assert.match(source, /desktop-relay-watchdog-status\.json/);
-  assert.match(source, /heartbeatAt = \[DateTime\]::UtcNow\.ToString\('o'\)/);
+  assert.match(
+    source,
+    /heartbeatAt = \[DateTime\]::UtcNow\.ToString\([\s\S]*yyyy-MM-dd'T'HH:mm:ss\.fffffff'Z'/,
+  );
   assert.match(source, /for \(\$attempt = 1; \$attempt -le 3; \$attempt\+\+\)/);
   assert.match(source, /Start-BridgeRecoveryIfNeeded/);
   assert.match(source, /Start-Process -FilePath \$windowsPowerShell[\s\S]*start-bridge\.ps1/);
