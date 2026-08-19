@@ -87,11 +87,11 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 
 应用/Bot 权限：
 
-- `im:message`：发送消息，并以 Bot 身份下载 owner 消息中的图片与附件；
-- `im:message.p2p_msg:readonly`：接收与机器人的单聊消息，用于 `/chat`、`/add` 与后续私聊；
-- `im:message.group_msg`：接收群内普通消息，使仅含用户与 Bot 的绑定群无需 `@Bot`；
+- `im:message`：发送消息，并以 Bot 身份下载已授权成员消息中的图片与附件；
+- `im:message.p2p_msg:readonly`：接收已启用用户与机器人的单聊消息，用于 `/chat`、`/add`、成员设置与后续私聊；
+- `im:message.group_msg`：接收群内普通消息，使单人绑定群无需 `@Bot`；多人群由 Bridge 再要求 `@Bot`/回复 Bot/斜杠命令；
 - `im:chat:readonly`：读取群基本信息；
-- `im:chat.members:read`：验证群内只有绑定用户与 Bot；
+- `im:chat.members:read`：验证 Session owner、所有已启用共享成员和唯一当前 Bot；
 - `im:chat:create`：创建专属绑定群；
 - `im:resource`：把 Codex 输出中的图片与文件上传回飞书。
 
@@ -102,6 +102,8 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 - `docx:document:create`：以当前用户身份创建长回答云文档；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 
+上述 OAuth 是 Bridge 主机当前授权用户（通常为 Bridge Owner）的个人身份。Feed 标签也是个人视图：由普通成员作为 owner 的私有群可能不在 Owner OAuth 的可见范围，因此标签只能尽力应用，不能作为该成员 Session 绑定的授权依据；授权始终由本机成员登记、固定 `chat_id` 和实时群成员校验决定。长回答文档同样由该 OAuth 用户创建后把链接发到绑定群。
+
 长连接事件：
 
 - `im.message.receive_v1`（接收消息）。
@@ -110,7 +112,7 @@ Lark CLI 当前创建的新应用通常已默认启用 Bot、长连接和该消�
 
 如果飞书确认页或组织策略要求设置可用范围、创建/发布版本或管理员审批：
 
-1. 可用范围只加入实际使用本机 Bridge 的当前用户；
+1. 可用范围只加入实际使用本机 Bridge 的 Owner 与显式登记成员；新成员未进入可用范围时，其消息不会到达 Bot；
 2. 由用户本人核对模板变更并提交；
 3. 显示待审核时暂停，等待管理员批准和版本状态明确生效。
 

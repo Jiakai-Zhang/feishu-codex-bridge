@@ -24,6 +24,7 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
     ["setup-channel-secret.sh", "setup-secret"],
     ["configure-feishu-app.sh", "configure-feishu-app"],
     ["verify-feishu-app.sh", "verify-feishu-app"],
+    ["setup-project-root.sh", "setup-project-root"],
     ["start-bridge.sh", "start"],
     ["stop-bridge.sh", "stop"],
     ["status-bridge.sh", "status"],
@@ -38,6 +39,48 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
     assert.match(content, new RegExp(`macos-node\\.sh\" ${command.replace("-", "\\-")} `));
     assert.doesNotMatch(content, /LARK_APP_SECRET|security\s+add-generic-password/);
   }
+});
+
+test("macOS multi-user Project root setup is local, interactive, and argument-free", async () => {
+  const [wrapper, admin, configurator] = await Promise.all([
+    fs.readFile(path.join(repositoryRoot, "setup-project-root.sh"), "utf8"),
+    fs.readFile(path.join(
+      repositoryRoot,
+      "src",
+      "runtime",
+      "platform",
+      "macos",
+      "admin-cli.mjs",
+    ), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "src", "app", "configure-session-access.mjs"), "utf8"),
+  ]);
+  assert.match(wrapper, /macos-node\.sh" setup-project-root/);
+  assert.doesNotMatch(wrapper, /--project-root|--owner-directory/);
+  const setupStart = admin.indexOf("async function setupProjectRootCommand");
+  const setupEnd = admin.indexOf("async function resumeRelayIfEnabled", setupStart);
+  const setupSource = admin.slice(setupStart, setupEnd);
+  assert.match(setupSource, /args\.length > 0/);
+  assert.match(setupSource, /process\.stdin\.isTTY/);
+  assert.match(setupSource, /createInterface\(\{ input: process\.stdin/);
+  assert.match(setupSource, /configureSessionAccess\(\{ repositoryDirectory: repositoryRoot, projectRoot, ownerDirectoryName \}\)/);
+  assert.doesNotMatch(setupSource, /process\.argv.*projectRoot|--project-root/);
+  assert.match(configurator, /export async function configureSessionAccess/);
+  assert.match(configurator, /no path was printed/);
+});
+
+test("macOS updater selects only maintained public or private remotes", async () => {
+  const source = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "update.mjs",
+  ), "utf8");
+  assert.match(source, /\["origin", "private"\]\.includes\(remote\)/);
+  assert.match(source, /\["remote", "get-url", remote\]/);
+  assert.match(source, /\["fetch", "--quiet", remote/);
+  assert.match(source, /session-relay-access\.json/);
 });
 
 test("macOS Desktop relay activation reloads the launchd registration", async () => {
@@ -185,7 +228,9 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
-  assert.match(prompt, /tag：v0\.3\.2-macos-rc\.12/);
+  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.1/);
+  assert.match(prompt, /setup-project-root\.sh/);
+  assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {

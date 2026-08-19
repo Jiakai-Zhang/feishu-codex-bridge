@@ -134,3 +134,36 @@ test("enforces item and aggregate byte limits across separate messages", async (
     }), (error) => error?.code === "attachment_draft_full");
   });
 });
+
+test("keeps staged attachments isolated between collaborators in one Session", async () => {
+  await fixture(async (filePath, directory) => {
+    const store = await SessionAttachmentDraftStore.open(filePath, {
+      maxItems: 4,
+      maxTotalBytes: 100,
+      legacySenderOpenId: "ou_owner",
+    });
+    await store.stage({
+      messageId: "om_owner_file",
+      sessionThreadId: "thread-a",
+      chatId: "oc_a",
+      senderOpenId: "ou_owner",
+      attachments: [attachment(directory, "owner.xlsx")],
+    });
+    await store.stage({
+      messageId: "om_member_file",
+      sessionThreadId: "thread-a",
+      chatId: "oc_a",
+      senderOpenId: "ou_member",
+      attachments: [attachment(directory, "member.pdf")],
+    });
+
+    assert.equal(store.count("thread-a", { senderOpenId: "ou_owner" }), 1);
+    assert.equal(store.count("thread-a", { senderOpenId: "ou_member" }), 1);
+    const ownerClaim = await store.claim("thread-a", "om_owner_prompt", { senderOpenId: "ou_owner" });
+    assert.deepEqual(ownerClaim.attachments.map(({ name }) => name), ["owner.xlsx"]);
+    assert.equal(store.count("thread-a", { senderOpenId: "ou_member" }), 1);
+    await store.completeClaim("om_owner_prompt");
+    const cleared = await store.clear("thread-a", { senderOpenId: "ou_member" });
+    assert.deepEqual(cleared.flatMap(({ attachments }) => attachments.map(({ name }) => name)), ["member.pdf"]);
+  });
+});

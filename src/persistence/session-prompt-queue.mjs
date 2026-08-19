@@ -25,6 +25,7 @@ function normalizeRecord(record) {
     sessionThreadId,
     chatId,
     feishuThreadId: record.feishuThreadId ? String(record.feishuThreadId) : undefined,
+    senderOpenId: record.senderOpenId ? String(record.senderOpenId) : undefined,
     text,
     attachments,
     createdAt: Number(record.createdAt) || Date.now(),

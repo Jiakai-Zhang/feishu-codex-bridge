@@ -80,6 +80,40 @@ function localProjects(state) {
   });
 }
 
+function mergeBridgeProjects(desktopProjects, bridgeProjects = []) {
+  const projects = desktopProjects.map((project) => ({ ...project }));
+  for (const raw of Array.isArray(bridgeProjects) ? bridgeProjects : []) {
+    if (!raw || typeof raw !== "object" || typeof raw.id !== "string") continue;
+    const rootPaths = Array.isArray(raw.rootPaths)
+      ? raw.rootPaths.filter((root) => typeof root === "string" && root.trim()).map(normalizeCodexCwd)
+      : typeof raw.rootPath === "string" && raw.rootPath.trim() ? [normalizeCodexCwd(raw.rootPath)] : [];
+    if (rootPaths.length === 0) continue;
+    const rootKeys = new Set(rootPaths.map(canonicalFsPath));
+    const matchingIndexes = projects
+      .map((project, index) => project.rootPaths.some((root) => rootKeys.has(canonicalFsPath(root))) ? index : -1)
+      .filter((index) => index >= 0);
+    if (matchingIndexes.length === 1) {
+      const index = matchingIndexes[0];
+      projects[index] = Object.freeze({
+        ...projects[index],
+        ownerOpenId: raw.ownerOpenId,
+        bridgeProjectId: raw.id,
+        source: "desktop+bridge",
+      });
+      continue;
+    }
+    if (projects.some(({ id }) => id === raw.id)) continue;
+    projects.push(Object.freeze({
+      id: raw.id,
+      name: cleanLabel(raw.name, "未命名 Project"),
+      rootPaths: Object.freeze(rootPaths),
+      ownerOpenId: raw.ownerOpenId,
+      source: "bridge",
+    }));
+  }
+  return projects;
+}
+
 function canonicalFsPath(value) {
   const normalized = normalizeCodexCwd(value).trim();
   if (!normalized) return "";
@@ -192,13 +226,13 @@ export class CodexDesktopCatalog {
     this.listProjectWorktrees = listProjectWorktrees;
   }
 
-  async load({ bindings = [] } = {}) {
+  async load({ bindings = [], bridgeProjects = [] } = {}) {
     const [stateText, indexedNames] = await Promise.all([
       this.readFile(this.globalStatePath, "utf8"),
       readIndexedThreadNames(this.sessionIndexPath, { readFile: this.readFile }),
     ]);
     const state = JSON.parse(stateText);
-    const projects = localProjects(state);
+    const projects = mergeBridgeProjects(localProjects(state), bridgeProjects);
     const projectsById = new Map(projects.map((project) => [project.id, project]));
     const projectScopes = await buildProjectScopes(projects, this.listProjectWorktrees);
     const assignments = state?.["thread-project-assignments"] || {};
@@ -224,6 +258,7 @@ export class CodexDesktopCatalog {
       else if (!assignment) {
         project = inferProjectFromCwd(thread.cwd, projectScopes);
         if (project) kind = "project";
+        else if (bindingsByThread.has(thread.id)) kind = "independent";
         else continue;
       }
       else continue;

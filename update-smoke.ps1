@@ -8,6 +8,7 @@ $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $temporaryBase ('feishu-bridge-update-' + [guid]::NewGuid().ToString('N'))
 $seedRoot = Join-Path $testRoot 'seed'
 $originRoot = Join-Path $testRoot 'origin.git'
+$privateRoot = Join-Path $testRoot 'private.git'
 $installRoot = Join-Path $testRoot 'installed'
 $runtimeWorkspace = Join-Path $testRoot 'runtime'
 New-Item -ItemType Directory -Force -Path $seedRoot | Out-Null
@@ -43,11 +44,11 @@ try {
 {"name":"feishu-bridge-update-smoke","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"feishu-bridge-update-smoke","version":"1.0.0"}}}
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'install.ps1') -Content @'
-param([switch]$SkipDependencyInstall)
+param([switch]$SkipDependencyInstall, [switch]$SkipDesktopRelayMigration)
 $config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
 $runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-Add-Content -LiteralPath (Join-Path $runtime 'install-ran.log') -Value 'ok'
+Add-Content -LiteralPath (Join-Path $runtime 'install-ran.log') -Value "skipRelay=$SkipDesktopRelayMigration"
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'doctor.ps1') -Content @'
 param([switch]$RequireRunning, [switch]$RequireDesktopRelay)
@@ -71,9 +72,11 @@ $runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
 Add-Content -LiteralPath (Join-Path $runtime 'app-server-start-ran.log') -Value 'ok'
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'configure-codex-desktop-relay.ps1') -Content @'
+param([string]$Proxy, [switch]$NoProxy)
 $config = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bridge.config.json') | ConvertFrom-Json
 $runtime = Join-Path ([string]$config.workspace) 'work\feishu-codex-bridge'
-Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value 'ok'
+$mode = if ($Proxy) { "proxy:$Proxy" } elseif ($NoProxy) { 'direct' } else { 'unspecified' }
+Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $mode
 '@
     Write-Utf8File -Path (Join-Path $seedRoot 'release-marker.txt') -Content "one`n"
 
@@ -90,17 +93,27 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('commit', '--quiet', '-m', 'release two') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('tag', 'v9.0.0-test.2') | Out-Null
 
-    Write-Utf8File -Path (Join-Path $seedRoot 'install.ps1') -Content "param([switch]`$SkipDependencyInstall)`nthrow 'intentional smoke-test failure'`n"
+    Write-Utf8File -Path (Join-Path $seedRoot 'install.ps1') -Content "param([switch]`$SkipDependencyInstall, [switch]`$SkipDesktopRelayMigration)`nthrow 'intentional smoke-test failure'`n"
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('add', 'install.ps1') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('commit', '--quiet', '-m', 'broken release') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('tag', 'v9.0.0-test.3') | Out-Null
 
+    Write-Utf8File -Path (Join-Path $seedRoot 'install.ps1') -Content "param([switch]`$SkipDependencyInstall)`n# intentionally lacks relay-preserving update support`n"
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('add', 'install.ps1') | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('commit', '--quiet', '-m', 'incompatible relay release') | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('tag', 'v9.0.0-test.4') | Out-Null
+
     & git init --bare --quiet $originRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the test origin.' }
+    & git init --bare --quiet $privateRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the test private remote.' }
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('remote', 'add', 'origin', $originRoot) | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'origin', 'HEAD', '--tags') | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'private', 'HEAD', '--tags') | Out-Null
     & git clone --quiet --branch v9.0.0-test.1 $originRoot $installRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not clone the test installation.' }
+    Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
 
     $relayUrl = 'ws://127.0.0.1:47991/rpc'
     $config = [ordered]@{
@@ -115,11 +128,34 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-settings.json') -Content '{"schemaVersion":2}'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-prompt-queue.json') -Content '[]'
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-attachment-drafts.json') -Content '[]'
+    Write-Utf8File -Path (Join-Path $runtimeDirectory 'session-relay-access.json') -Content '{"schemaVersion":1}'
+    $desktopProxyUrl = 'http://127.0.0.1:47888'
+    Write-Utf8File -Path (Join-Path $runtimeDirectory 'codex-app-server.pid') -Content ([string]$PID)
+    Write-Utf8File -Path (Join-Path $runtimeDirectory 'codex-app-server-environment.json') -Content (([ordered]@{
+        schemaVersion = 1
+        processId = $PID
+        mode = 'proxy'
+        desktopProxyUrl = $desktopProxyUrl
+    } | ConvertTo-Json) + "`n")
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'custom-guardian.marker') -Content 'preserve external guardian'
+
+    $relayBootstrapDirectory = Join-Path $testRoot 'bootstrap'
+    New-Item -ItemType Directory -Force -Path $relayBootstrapDirectory | Out-Null
+    $relayStatePath = Join-Path $relayBootstrapDirectory 'desktop-relay-state.json'
+    $relayBootstrapPath = Join-Path $relayBootstrapDirectory 'desktop-relay-bootstrap.ps1'
+    Write-Utf8File -Path $relayStatePath -Content (([ordered]@{
+        schemaVersion = 1
+        enabled = $true
+        expectedUrl = $relayUrl
+        desktopProxyUrl = $desktopProxyUrl
+    } | ConvertTo-Json) + "`n")
+    Write-Utf8File -Path $relayBootstrapPath -Content "# preserved bootstrap`n"
 
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST = '1'
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $relayUrl
-    & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -StartBridge -TestMode
+    $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH = $relayStatePath
+    $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH = $relayBootstrapPath
+    & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -Remote private -StartBridge -TestMode
     $tagAfterUpgrade = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
     if ($tagAfterUpgrade -ne 'v9.0.0-test.2') { throw 'The updater did not switch to the requested tag.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $installRoot 'release-marker.txt')).Trim() -ne 'two') {
@@ -129,7 +165,9 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
         'channel-secret.dpapi',
         'session-relay-settings.json',
         'session-relay-prompt-queue.json',
-        'session-relay-attachment-drafts.json'
+        'session-relay-attachment-drafts.json',
+        'session-relay-access.json',
+        'codex-app-server-environment.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $runtimeDirectory $stateName) -PathType Leaf)) {
             throw "The updater did not preserve $stateName."
@@ -141,6 +179,12 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
     $doctorLog = Get-Content -Raw -LiteralPath (Join-Path $runtimeDirectory 'doctor-ran.log')
     if ($doctorLog -notmatch 'running=True;relay=True') {
         throw 'The updater did not require strict Desktop relay verification for an enabled v0.2-style relay.'
+    }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $runtimeDirectory 'install-ran.log')) -notmatch 'skipRelay=True') {
+        throw 'The updater allowed the target installer to mutate Desktop relay state.'
+    }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $runtimeDirectory 'relay-configure-ran.log')) -notmatch [regex]::Escape("proxy:$desktopProxyUrl")) {
+        throw 'The updater did not carry the preserved proxy selection into target relay verification.'
     }
     $backupManifests = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDirectory 'upgrade-backups') -Filter manifest.json -Recurse -File)
     if ($backupManifests.Count -lt 1) { throw 'The updater did not create a recovery manifest.' }
@@ -179,10 +223,28 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value '
         throw 'The failed update did not restore the encrypted credential.'
     }
 
+    $incompatibleTargetRejected = $false
+    try {
+        & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.4 -StartBridge -TestMode
+    } catch {
+        if ($_.Exception.Message -match 'cannot preserve an active Desktop relay transactionally') {
+            $incompatibleTargetRejected = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $incompatibleTargetRejected) { throw 'The updater accepted a target that could mutate active relay networking.' }
+    $tagAfterPreflightRejection = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
+    if ($tagAfterPreflightRejection -ne 'v9.0.0-test.2') {
+        throw 'Relay capability preflight changed the installed checkout.'
+    }
+
     Write-Output 'Updater smoke test passed, including automatic rollback.'
 } finally {
     Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST -ErrorAction SilentlyContinue
     Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:\FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH -ErrorAction SilentlyContinue
     if ($KeepTemp) {
         Write-Output "Kept smoke-test directory: $testRoot"
     } else {

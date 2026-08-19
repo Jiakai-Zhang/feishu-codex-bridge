@@ -2,7 +2,7 @@ import { createReadStream, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { basenameFsPath } from "../runtime/shared/fs-paths.mjs";
+import { basenameFsPath, isPathInside } from "../runtime/shared/fs-paths.mjs";
 import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
@@ -49,6 +49,7 @@ import { SessionBindingInbox } from "../persistence/session-binding-inbox.mjs";
 import { SessionBindingProvisioner } from "../relay/session-binding-provisioner.mjs";
 import { SessionBindingRemover } from "../relay/session-binding-remover.mjs";
 import { SessionBindingRegistry } from "../persistence/session-binding-registry.mjs";
+import { SessionAccessStore } from "../persistence/session-access-store.mjs";
 import { SessionDeleteFlow } from "../relay/session-delete-flow.mjs";
 import { SessionInputLedger } from "../persistence/session-input-ledger.mjs";
 import {
@@ -60,7 +61,8 @@ import {
 } from "../relay/session-relay-commands.mjs";
 import {
   assertRelayMessage,
-  assertSoloGroup,
+  assertSessionGroup,
+  isSessionPromptAddressed,
   planSessionNameSync,
   resolveCompletedTurnRoute,
   SessionRelayError,
@@ -70,6 +72,12 @@ import { TemporaryChatStore } from "../persistence/temporary-chat-store.mjs";
 import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
 import { parseTemporaryChatCommand } from "../relay/temporary-chat-command.mjs";
+import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
+import {
+  executeMembersCommand,
+  parseMembersCommand,
+  publicMembersFailure,
+} from "../relay/session-access-commands.mjs";
 import {
   buildSessionStreamCard,
   buildSessionStreamCardFollowups,
@@ -98,6 +106,7 @@ const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json")
 const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
 const attachmentDraftsPath = path.join(runtimeDir, "session-relay-attachment-drafts.json");
 const temporaryChatsPath = path.join(runtimeDir, "session-relay-temporary-chats.json");
+const sessionAccessPath = path.join(runtimeDir, "session-relay-access.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
@@ -122,6 +131,9 @@ await fs.writeFile(pidPath, String(process.pid), { encoding: "utf8", mode: 0o600
 let sessionController;
 const deliveryOutbox = await DeliveryOutbox.open(deliveryOutboxPath);
 const inputLedger = await SessionInputLedger.open(inputLedgerPath);
+const sessionAccess = await SessionAccessStore.open(sessionAccessPath, {
+  ownerOpenId: config.agent.ownerOpenId,
+});
 const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
   legacyInstall: config.sessionRelay.bindings.length > 0,
 });
@@ -143,15 +155,27 @@ const inboundAttachmentStore = new FeishuInboundAttachmentStore(
 const attachmentDrafts = await SessionAttachmentDraftStore.open(attachmentDraftsPath, {
   maxItems: config.sessionRelay.inboundAttachments.maxItems,
   maxTotalBytes: config.sessionRelay.inboundAttachments.maxTotalBytes,
+  legacySenderOpenId: config.agent.ownerOpenId,
 });
+const activeTurnActors = new Map();
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => {
     queuedWriterConflictNotices.delete(queued.messageId);
+    if (result?.kind === "started" && result.turnId && queued.senderOpenId) {
+      activeTurnActors.set(queued.sessionThreadId, {
+        turnId: result.turnId,
+        openId: queued.senderOpenId,
+      });
+    }
     await inputLedger.put({
       messageId: queued.messageId,
       chatId: queued.chatId,
       threadId: queued.feishuThreadId,
+      senderOpenId: queued.senderOpenId,
+      sessionThreadId: queued.sessionThreadId,
+      turnId: result?.turnId,
+      turnInitiator: result?.kind === "started",
       kind: `queued:${result?.kind || "accepted"}`,
       createdAt: queued.createdAt,
     });
@@ -185,6 +209,7 @@ for (const queued of promptQueue.list()) {
     messageId: queued.messageId,
     chatId: queued.chatId,
     threadId: queued.feishuThreadId,
+    senderOpenId: queued.senderOpenId,
     kind: "queued:recovered",
     createdAt: queued.createdAt,
   });
@@ -227,6 +252,22 @@ const inboundWorkQueue = new ThreadWorkQueue();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
+}
+
+function activeBridgeOpenIds() {
+  return sessionAccess.listActiveUsers().map(({ openId }) => openId);
+}
+
+async function loadScopedCatalog(actorOpenId) {
+  const bindings = await bindingRegistry.list();
+  const catalog = await desktopCatalog.load({
+    bindings,
+    bridgeProjects: sessionAccess.listProjects(),
+  });
+  return scopeSessionCatalog(catalog, sessionAccess.snapshot(), {
+    actorOpenId,
+    ownerOpenId: config.agent.ownerOpenId,
+  });
 }
 
 function safeError(error) {
@@ -293,9 +334,12 @@ function createSessionController(targets) {
     targets,
     sandboxMode: config.sandboxMode,
     onTurnCompleted: async (record) => {
+      const actor = activeTurnActors.get(record.threadId);
+      const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;
+      if (initiatorOpenId) activeTurnActors.delete(record.threadId);
       dispatchQueuedPrompts(record.threadId);
       await enqueueTurnOutput(record.threadId, async () => {
-        await processCompletedTurn(record);
+        await processCompletedTurn(Object.freeze({ ...record, initiatorOpenId }));
         await retireEndedTemporaryChat(record.threadId);
       });
     },
@@ -512,7 +556,14 @@ async function inspectBinding(binding, { syncName = true } = {}) {
       { cause: error },
     );
   }
-  assertSoloGroup({ chatInfo, members, bots, binding, connectedBotOpenId });
+  const roster = assertSessionGroup({
+    chatInfo,
+    members,
+    bots,
+    binding,
+    connectedBotOpenId,
+    activeOpenIds: activeBridgeOpenIds(),
+  });
 
   const groupName = String(chatInfo.name || "").trim();
   const nameSync = planSessionNameSync(config.sessionRelay.nameSync, groupName, session.title);
@@ -532,13 +583,14 @@ async function inspectBinding(binding, { syncName = true } = {}) {
     } catch (error) {
       throw new SessionRelayError("name_sync_failed", "The Codex session name could not be synchronized", { cause: error });
     }
-    return { session: Object.freeze({ ...session, title: nameSync.renameSessionTo }), chatInfo };
+    return { session: Object.freeze({ ...session, title: nameSync.renameSessionTo }), chatInfo, ...roster };
   }
-  return { session, chatInfo };
+  return { session, chatInfo, ...roster };
 }
 
-async function createIndependentSession({ name, cwd }) {
-  const requested = String(cwd || "").trim();
+async function createIndependentSession({ name, cwd, actorOpenId = config.agent.ownerOpenId }) {
+  const actorRoot = sessionAccess.getUserRoot(actorOpenId);
+  const requested = String(cwd || actorRoot || "").trim();
   if (!path.isAbsolute(requested)) {
     throw new SessionRelayError("independent_cwd_invalid", "Independent task cwd must be an absolute path");
   }
@@ -553,6 +605,9 @@ async function createIndependentSession({ name, cwd }) {
       "Independent task cwd does not exist or is not a directory",
       { cause: error },
     );
+  }
+  if (sessionAccess.isConfigured() && (!actorRoot || !isPathInside(actorRoot, realCwd))) {
+    throw new SessionRelayError("member_cwd_outside_root", "The new task cwd is outside the user's Project directory");
   }
   const thread = await startCodexProjectThread({
     codexExecutable: config.codexExecutable,
@@ -569,7 +624,15 @@ async function createIndependentSession({ name, cwd }) {
   });
 }
 
-async function createProjectSession({ name, project }) {
+async function createProjectSession({ name, project, actorOpenId = config.agent.ownerOpenId }) {
+  if (sessionAccess.isConfigured()) {
+    const allowed = project?.ownerOpenId === actorOpenId || (
+      actorOpenId === config.agent.ownerOpenId && project?.accessKind === "unassigned"
+    );
+    if (!allowed) {
+      throw new SessionRelayError("project_access_denied", "The selected Project is outside the user's access scope");
+    }
+  }
   let realCwd;
   for (const root of Array.isArray(project?.rootPaths) ? project.rootPaths : []) {
     const requested = String(root || "").trim();
@@ -607,13 +670,29 @@ async function createProjectSession({ name, project }) {
   });
 }
 
+async function createWorkspaceProject({ name, actorOpenId }) {
+  try {
+    return await sessionAccess.createProject({ ownerOpenId: actorOpenId, name });
+  } catch (error) {
+    if (error?.code) throw new SessionRelayError(error.code, error.message, { cause: error });
+    throw error;
+  }
+}
+
 async function verifyCreatedGroup({ binding, groupName }) {
   const [chatInfo, members, bots] = await Promise.all([
     channel.getChatInfo(binding.groupChatId),
     channel.getChatMembers(binding.groupChatId, { force: true, idType: "open_id", pageSize: 100, maxPages: 2 }),
     channel.getChatBots(binding.groupChatId, { force: true }),
   ]);
-  assertSoloGroup({ chatInfo, members, bots, binding, connectedBotOpenId });
+  assertSessionGroup({
+    chatInfo,
+    members,
+    bots,
+    binding,
+    connectedBotOpenId,
+    activeOpenIds: activeBridgeOpenIds(),
+  });
   if (String(chatInfo?.name || "").trim() !== groupName) {
     throw new SessionRelayError("created_group_name_mismatch", "Feishu returned a different group name");
   }
@@ -626,13 +705,13 @@ async function sendBindingWelcome({ chatId, groupName, feedGroupName, settings }
       "### Codex Session 已绑定",
       "",
       `- 群名：${groupName}`,
-      `- 标签：${feedGroupName}`,
+      ...(feedGroupName ? [`- 标签：${feedGroupName}`] : ["- 标签：当前 OAuth 用户无法给该成员的会话应用个人 Feed 标签"]),
       "- 本群固定对应一个 Codex 任务",
       `- 普通消息默认：${inputMode}`,
       `- 公开进度：${settings?.publicProgress ? "开启" : "关闭"}`,
-      `- 最终回答提醒：${settings?.finalMention === false ? "关闭" : "开启（@你）"}`,
+      `- 最终回答提醒：${settings?.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
       "",
-      "Bridge 重载后，可直接发送 Prompt，无需 @Bot。使用 `/settings` 调整普通消息方式、公开进度和最终回答 @提醒。",
+      "Bridge 重载后，群内只有一名用户时可直接发送 Prompt；邀请其他已启用成员进群后即共享，多人聊天需 @Bot。使用 `/settings` 调整普通消息方式、公开进度和最终回答 @提醒。",
     ].join("\n"),
   });
 }
@@ -662,14 +741,29 @@ function publicBindingFailure(error) {
       return "飞书群已创建，但未能自动应用 Agent 标签，因此没有写入 Session 绑定。请检查 `im:feed_group_v1:read/write` 用户授权后重新开始。";
     case "session_not_bindable":
       return "该任务不存在、已归档，或不在 Codex Desktop 的 Project/独立清单中，因此没有建群。";
+    case "session_owned_by_another":
+    case "project_access_denied":
+      return "该任务或 Project 属于其他 Bridge 用户，不能由当前用户绑定。";
+    case "member_inactive":
+      return "当前飞书用户尚未启用，或已被 Owner 停用。";
     case "session_already_bound":
       return "该 Codex 任务已经绑定飞书群，没有重复创建。";
     case "independent_cwd_invalid":
       return "独立任务的工作目录必须是本机已存在的绝对目录，请重新发送 `/add`。";
+    case "member_cwd_outside_root":
+      return "普通用户只能在 Owner 分配的个人 Project 目录中创建任务。";
+    case "member_root_unavailable":
+    case "project_root_missing":
+      return "当前用户尚未分配个人 Project 目录，请联系 Bridge Owner。";
+    case "project_directory_exists":
+    case "project_directory_conflict":
+      return "同名 Project 目录已经存在或已登记；没有覆盖其中内容。";
+    case "project_directory_escape":
+      return "Project 名称未通过个人目录边界检查，没有创建。";
     case "project_cwd_unavailable":
       return "所选 Project 没有可用的已登记工作目录，因此没有创建任务或群。请先在 Codex Desktop 修复 Project 目录，再重新发送 `/add`。";
     case "created_group_verification_failed":
-      return "新群没有通过“仅你 + 当前 Bot”的成员校验，因此没有写入绑定。";
+      return "新群没有通过“Session Owner + 当前 Bot”的成员校验，因此没有写入绑定。";
     case "binding_persist_failed":
       return "新群和标签已创建，但本机绑定配置写入失败。Bridge 没有把该群当作可用 Session 群，请在本机检查配置。";
     case "settings_persist_failed":
@@ -683,7 +777,9 @@ async function syncConfiguredFeedGroups() {
   if (!feedGroupManager || !channelConnected) return;
   try {
     const bindings = await bindingRegistry.list();
-    await feedGroupManager.ensureChats(bindings.map(({ groupChatId }) => groupChatId));
+    await feedGroupManager.ensureChats(bindings
+      .filter(({ ownerOpenId }) => ownerOpenId === config.agent.ownerOpenId)
+      .map(({ groupChatId }) => groupChatId));
   } catch (error) {
     log(`Feed group retry unavailable: ${safeError(error)}`);
   }
@@ -699,9 +795,13 @@ function publicFailure(error) {
       return "本机 Codex 服务没有接受这次操作；消息未被改投到其他任务。请发送 `/status` 确认状态后重试。";
     case "roster_unavailable":
       return "群绑定尚未就绪：Bridge 无法用 Bot 身份核验群成员。请为该飞书应用开通 `im:chat:readonly` 与 `im:chat.members:read` 并发布新版本。为安全起见，本消息没有进入 Codex。";
-    case "not_solo":
-    case "wrong_bot":
-      return "已停止转发：这个群不再严格只有你和当前 Bridge Bot。为安全起见，本消息没有进入 Codex。";
+    case "owner_missing":
+    case "owner_inactive":
+      return "已停止转发：Session 所有者不在群内或已停用。为安全起见，本消息没有进入 Codex。";
+    case "unregistered_member":
+      return "已停止转发：群内存在尚未启用的成员。请由 Bridge Owner 登记该成员，或将其移出群后重试。";
+    case "unexpected_bot":
+      return "已停止转发：群内 Bot 身份与绑定不一致。为安全起见，本消息没有进入 Codex。";
     case "session_unavailable":
       return "群绑定的 Codex 任务不存在或已归档。本消息没有进入其他任务。";
     case "name_mismatch":
@@ -892,6 +992,7 @@ async function enqueuePromptMessage(msg, binding, text, attachments = []) {
     sessionThreadId: binding.threadId,
     chatId: msg.chatId,
     feishuThreadId: msg.threadId,
+    senderOpenId: msg.senderId,
     text,
     attachments,
     createdAt: Date.now(),
@@ -900,13 +1001,14 @@ async function enqueuePromptMessage(msg, binding, text, attachments = []) {
       messageId: queued.messageId,
       chatId: queued.chatId,
       threadId: queued.feishuThreadId,
+      senderOpenId: queued.senderOpenId,
       kind: "queued",
       createdAt: queued.createdAt,
     }),
   });
 }
 
-async function processPromptMessage(msg, binding, prompt) {
+async function processPromptMessage(msg, binding, prompt, { forceQueue = false } = {}) {
   const startedAt = Date.now();
   let accepted = false;
   log(`accepted relay message ${msg.messageId}`);
@@ -914,7 +1016,7 @@ async function processPromptMessage(msg, binding, prompt) {
     const content = String(prompt?.text || "");
     const attachments = Array.isArray(prompt?.attachments) ? prompt.attachments : [];
     const settings = relaySettings.get(binding.threadId);
-    if (settings.inputMode === "queue") {
+    if (forceQueue || settings.inputMode === "queue") {
       await inspectBinding(binding);
       const queued = await enqueuePromptMessage(msg, binding, content, attachments);
       accepted = true;
@@ -929,7 +1031,9 @@ async function processPromptMessage(msg, binding, prompt) {
           "",
           `- 当前排位：${queued.position}`,
           "- 执行方式：任务空闲后作为独立的新 Turn 开始",
-          "- 如需改为调整方向：使用 `/settings input steer` 后再发送",
+          forceQueue
+            ? "- 多人群如需调整活动回答：使用 `/steer <调整方向>`"
+            : "- 如需改为调整方向：使用 `/settings input steer` 后再发送",
         ].join("\n"),
         publicStatus: true,
         createdAt: Date.now(),
@@ -949,6 +1053,10 @@ async function processPromptMessage(msg, binding, prompt) {
       messageId: msg.messageId,
       chatId: msg.chatId,
       threadId: msg.threadId,
+      senderOpenId: msg.senderId,
+      sessionThreadId: binding.threadId,
+      turnId: result.turnId,
+      turnInitiator: result.kind === "started",
       kind: result.kind,
       createdAt: Date.now(),
     });
@@ -957,6 +1065,9 @@ async function processPromptMessage(msg, binding, prompt) {
       turnId: result.turnId,
       chatId: msg.chatId,
     });
+    if (result.kind === "started" && result.turnId) {
+      activeTurnActors.set(binding.threadId, { turnId: result.turnId, openId: msg.senderId });
+    }
     if (result.kind === "steered") {
       await queueDelivery({
         kind: "reply",
@@ -997,6 +1108,7 @@ async function stageAttachmentMessage(msg, binding, prompt) {
     sessionThreadId: binding.threadId,
     chatId: msg.chatId,
     feishuThreadId: msg.threadId,
+    senderOpenId: msg.senderId,
     attachments: prompt.attachments,
     createdAt: Date.now(),
   });
@@ -1004,6 +1116,7 @@ async function stageAttachmentMessage(msg, binding, prompt) {
     messageId: msg.messageId,
     chatId: msg.chatId,
     threadId: msg.threadId,
+    senderOpenId: msg.senderId,
     kind: "attachment:staged",
     createdAt: Date.now(),
   });
@@ -1032,24 +1145,26 @@ async function stageAttachmentMessage(msg, binding, prompt) {
   }, `staged ${staged.record.attachments.length} inbound attachment(s) from ${msg.messageId}`);
 }
 
-async function processPreparedPrompt(msg, binding, prompt) {
-  const hasPendingDraft = attachmentDrafts.hasPending(binding.threadId);
+async function processPreparedPrompt(msg, binding, prompt, { forceQueue = false } = {}) {
+  const draftOptions = { senderOpenId: msg.senderId };
+  const hasPendingDraft = attachmentDrafts.hasPending(binding.threadId, draftOptions);
   if (shouldStageAttachmentPrompt(prompt, { hasPendingDraft })) {
     await stageAttachmentMessage(msg, binding, prompt);
     return;
   }
   if (!String(prompt?.text || "").trim() || !hasPendingDraft) {
-    await processPromptMessage(msg, binding, prompt);
+    await processPromptMessage(msg, binding, prompt, { forceQueue });
     return;
   }
 
   const claim = await attachmentDrafts.claim(binding.threadId, msg.messageId, {
     additionalAttachments: prompt.attachments,
+    senderOpenId: msg.senderId,
   });
   const accepted = await processPromptMessage(msg, binding, {
     ...prompt,
     attachments: claim.attachments,
-  });
+  }, { forceQueue });
   try {
     if (accepted) await attachmentDrafts.completeClaim(msg.messageId);
     else await attachmentDrafts.releaseClaim(msg.messageId);
@@ -1058,18 +1173,75 @@ async function processPreparedPrompt(msg, binding, prompt) {
   }
 }
 
+async function commandAllowedForParticipant(msg, binding, command) {
+  if (msg.senderId === binding.ownerOpenId) return true;
+  if (["status", "attachments"].includes(command.name)) return true;
+  if (command.name === "queue") {
+    try {
+      const action = parseQueueAction(command.args).action;
+      return action === "status" || action === "enqueue";
+    } catch {
+      return true;
+    }
+  }
+  if (!["stop", "steer"].includes(command.name)) return false;
+  const status = await sessionController.getStatus(binding.threadId);
+  if (!status?.activeTurnId) return command.name === "steer";
+  const actor = activeTurnActors.get(binding.threadId);
+  if (actor?.turnId === status.activeTurnId) return actor.openId === msg.senderId;
+  return inputLedger.findTurnInitiator(binding.threadId, status.activeTurnId)?.senderOpenId === msg.senderId;
+}
+
+async function submitExplicitSteer(msg, binding, text, attachments) {
+  const result = await sessionController.submitPrompt({
+    threadId: binding.threadId,
+    text,
+    attachments,
+    clientUserMessageId: msg.messageId,
+  });
+  await inputLedger.put({
+    messageId: msg.messageId,
+    chatId: msg.chatId,
+    threadId: msg.threadId,
+    senderOpenId: msg.senderId,
+    sessionThreadId: binding.threadId,
+    turnId: result.turnId,
+    turnInitiator: result.kind === "started",
+    kind: `command:steer:${result.kind}`,
+    createdAt: Date.now(),
+  });
+  if (result.kind === "started" && result.turnId) {
+    activeTurnActors.set(binding.threadId, { turnId: result.turnId, openId: msg.senderId });
+  }
+  await tryEnsureTurnStreamCard({
+    threadId: binding.threadId,
+    turnId: result.turnId,
+    chatId: msg.chatId,
+  });
+  return result;
+}
+
 async function processCommandMessage(msg, binding, command) {
   log(`accepted session command /${command.name} from ${msg.messageId}`);
   try {
     await inspectBinding(binding);
+    if (!await commandAllowedForParticipant(msg, binding, command)) {
+      await channel.reply(msg, {
+        markdown: "该命令会改变共享 Session 的全局状态，只有 Session 所有者或当前 Turn 发起者可以执行。",
+      });
+      await persistCompleted(msg.messageId);
+      return;
+    }
     let markdown;
     let queueAction;
     let draftClaim;
-    let queuedAccepted = false;
+    let draftAccepted = false;
     try {
       queueAction = command.name === "queue" ? parseQueueAction(command.args) : undefined;
-      if (queueAction?.action === "enqueue") {
-        draftClaim = await attachmentDrafts.claim(binding.threadId, msg.messageId);
+      if (queueAction?.action === "enqueue" || command.name === "steer") {
+        draftClaim = await attachmentDrafts.claim(binding.threadId, msg.messageId, {
+          senderOpenId: msg.senderId,
+        });
       }
       markdown = await executeSessionCommand(command, {
         controller: sessionController,
@@ -1077,10 +1249,16 @@ async function processCommandMessage(msg, binding, command) {
         promptQueue,
         attachmentDraftStore: attachmentDrafts,
         settingsStore: relaySettings,
+        senderOpenId: msg.senderId,
         enqueuePrompt: async (text) => {
           const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
-          queuedAccepted = true;
+          draftAccepted = true;
           return queued;
+        },
+        steerPrompt: async (text) => {
+          const result = await submitExplicitSteer(msg, binding, text, draftClaim?.attachments || []);
+          draftAccepted = true;
+          return result;
         },
       });
     } catch (error) {
@@ -1089,7 +1267,7 @@ async function processCommandMessage(msg, binding, command) {
     }
     if (draftClaim) {
       try {
-        if (queuedAccepted) await attachmentDrafts.completeClaim(msg.messageId);
+        if (draftAccepted) await attachmentDrafts.completeClaim(msg.messageId);
         else await attachmentDrafts.releaseClaim(msg.messageId);
       } catch (error) {
         log(`attachment draft settlement deferred for queue command ${msg.messageId}: ${safeError(error)}`);
@@ -1132,6 +1310,49 @@ async function processGlobalSettingsMessage(msg, command) {
   }
   await channel.reply(msg, { markdown });
   await persistCompleted(msg.messageId);
+}
+
+async function processMembersMessage(msg, command) {
+  if (msg.senderId !== config.agent.ownerOpenId) {
+    await channel.reply(msg, { markdown: "只有 Bridge Owner 可以管理成员。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (msg.chatType !== "p2p" && command.action === "status") {
+    await channel.reply(msg, { markdown: "成员清单只在与 Bot 的私聊中显示；请在那里发送 `/members`。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  let restart = false;
+  try {
+    const result = await executeMembersCommand(command, {
+      accessStore: sessionAccess,
+      mentions: msg.mentions,
+      botOpenId: connectedBotOpenId,
+      listBindings: () => bindingRegistry.list(),
+      includeRoster: msg.chatType === "p2p",
+    });
+    restart = result.restart;
+    await channel.reply(msg, { markdown: result.markdown });
+    await persistCompleted(msg.messageId);
+  } catch (error) {
+    log(`members command failed: ${safeError(error)}`);
+    await channel.reply(msg, { markdown: publicMembersFailure(error) });
+    await persistCompleted(msg.messageId);
+  } finally {
+    if (restart) await scheduleSelfRestart();
+  }
+}
+
+async function repliesToBridgeBot(msg) {
+  if (!msg.replyToMessageId) return false;
+  try {
+    const parent = await channel.fetchMessage(msg.replyToMessageId);
+    return parent?.senderIsBot === true || parent?.senderId === connectedBotOpenId;
+  } catch (error) {
+    log(`quoted message inspection unavailable: ${safeError(error)}`);
+    return false;
+  }
 }
 
 async function temporaryChatCwd(baseBinding) {
@@ -1486,6 +1707,18 @@ async function queueTurnDelivery(record, attachments, successLog) {
   await queueDeliveryBundle([record, ...attachmentRecords], successLog);
 }
 
+function finalMentionOpenId(record) {
+  const temporaryChat = temporaryChats.getByThread(record.threadId);
+  if (temporaryChat?.chatType === "p2p" || !relaySettings.get(record.threadId).finalMention) return undefined;
+  if (record.initiatorOpenId) return record.initiatorOpenId;
+  const promptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
+  for (let index = promptEntries.length - 1; index >= 0; index -= 1) {
+    const senderOpenId = inputLedger.get(promptEntries[index]?.clientId)?.senderOpenId;
+    if (senderOpenId) return senderOpenId;
+  }
+  return bindingsByChat.get(record.chatId)?.ownerOpenId || config.agent.ownerOpenId;
+}
+
 async function processCompletedTurn(record) {
   const deliveryId = externalTurnDeliveryId(record.threadId, record.turnId);
   if (completed.has(deliveryId)) return;
@@ -1493,10 +1726,7 @@ async function processCompletedTurn(record) {
     void retryPendingDeliveries();
     return;
   }
-  const temporaryChat = temporaryChats.getByThread(record.threadId);
-  const mentionOpenId = temporaryChat?.chatType !== "p2p" && relaySettings.get(record.threadId).finalMention
-    ? config.agent.ownerOpenId
-    : undefined;
+  const mentionOpenId = finalMentionOpenId(record);
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
     const media = await prepareFinalAnswerDelivery(record);
@@ -1615,7 +1845,7 @@ const channel = createLarkChannel({
   handshakeTimeoutMs: config.handshakeTimeoutMs,
   policy: {
     dmMode: "allowlist",
-    dmAllowlist: [config.agent.ownerOpenId],
+    dmAllowlist: activeBridgeOpenIds(),
     groupAllowlist: config.sessionRelay.bindings.length > 0
       ? config.sessionRelay.bindings.map(({ groupChatId }) => groupChatId)
       : ["oc_no_configured_session_groups"],
@@ -1670,19 +1900,34 @@ async function provisionSession(threadId, options) {
       "Automatic group creation requires the Feishu CLI and Feed group integration",
     );
   }
-  return bindingProvisioner.provision(threadId, options);
+  const ownerOpenId = String(options?.ownerOpenId || config.agent.ownerOpenId);
+  if (!sessionAccess.isActive(ownerOpenId)) {
+    throw new SessionRelayError("member_inactive", "The Session owner is not an active Bridge user");
+  }
+  let session = options?.session;
+  if (!session) {
+    session = (await loadScopedCatalog(ownerOpenId)).sessionsById.get(threadId);
+  }
+  if (!session) {
+    throw new SessionRelayError("session_not_bindable", "The Codex task is outside the user's Session scope");
+  }
+  return bindingProvisioner.provision(threadId, { ...options, ownerOpenId, session });
 }
 
 const sessionAddFlow = new SessionAddFlow({
-  loadCatalog: async () => desktopCatalog.load({ bindings: await bindingRegistry.list() }),
+  loadCatalog: loadScopedCatalog,
   provision: provisionSession,
   createIndependent: createIndependentSession,
   createProject: createProjectSession,
+  createWorkspaceProject,
 });
 
 const bindingRemover = new SessionBindingRemover({
   registry: bindingRegistry,
   feedGroupManager,
+  shouldManageFeedGroup: (binding) => binding.ownerOpenId === config.agent.ownerOpenId
+    ? "required"
+    : "best-effort",
   getStatus: async (threadId) => sessionController?.getStatus(threadId),
   getPendingQueueCount: async (threadId) => promptQueue.count(threadId),
   onWarning: (error) => log(`binding removal consistency warning: ${safeError(error)}`),
@@ -1719,26 +1964,33 @@ async function scheduleSelfRestart() {
 
 async function processBindingSetupMessage(msg, content, binding) {
   let restart = false;
+  const conversationId = `${msg.chatId}:${msg.senderId}`;
   try {
+    if (/^\/delete(?:@[^\s]+)?(?:\s|$)/i.test(content) && binding?.ownerOpenId !== msg.senderId) {
+      await channel.reply(msg, { markdown: "只有该 Session 的所有者可以删除群绑定。" });
+      await persistCompleted(msg.messageId);
+      return true;
+    }
     let sessionTitle;
     if (binding) {
       try { sessionTitle = (await sessionStore.get(binding.threadId))?.title; }
       catch (error) { log(`could not describe binding before management command: ${safeError(error)}`); }
     }
     let result = await sessionDeleteFlow.handle({
-      conversationId: msg.chatId,
+      conversationId,
       text: content,
       binding,
       sessionTitle,
     });
     if (result.handled) {
-      sessionAddFlow.cancel(msg.chatId);
+      sessionAddFlow.cancel(conversationId);
     } else {
       result = await sessionAddFlow.handle({
-        conversationId: msg.chatId,
+        conversationId,
         text: content,
+        actorOpenId: msg.senderId,
       });
-      if (result.handled) sessionDeleteFlow.cancel(msg.chatId);
+      if (result.handled) sessionDeleteFlow.cancel(conversationId);
     }
     if (!result.handled) return false;
     restart = Boolean(result.restart);
@@ -1747,7 +1999,7 @@ async function processBindingSetupMessage(msg, content, binding) {
     log(`Session binding setup message handled in ${msg.chatType}`);
     return true;
   } catch (error) {
-    sessionAddFlow.cancel(msg.chatId);
+    sessionAddFlow.cancel(conversationId);
     log(`Session binding setup failed: ${safeError(error)}`);
     try {
       await channel.reply(msg, { markdown: publicBindingFailure(error) });
@@ -1778,8 +2030,18 @@ async function processInboundMessage(msg, baseBinding) {
     let binding = resolveRelayBinding(msg.chatId);
     if (msg.rawContentType === "text") {
       const rawContent = String(msg.content || "");
+      const membersCommand = parseMembersCommand(rawContent);
+      if (membersCommand) {
+        await processMembersMessage(msg, membersCommand);
+        return;
+      }
       const temporaryChatCommand = parseTemporaryChatCommand(rawContent);
       if (temporaryChatCommand) {
+        if (msg.senderId !== config.agent.ownerOpenId) {
+          await channel.reply(msg, { markdown: "普通成员请使用 `/add` 在自己的目录中创建或绑定任务；临时 Chat 目前仅限 Owner。" });
+          await persistCompleted(msg.messageId);
+          return;
+        }
         await processTemporaryChatCommand(msg, baseBinding, temporaryChatCommand);
         return;
       }
@@ -1787,13 +2049,24 @@ async function processInboundMessage(msg, baseBinding) {
         ? parseSessionCommand(rawContent)
         : undefined;
       if (directCommand?.name === "settings") {
+        if (msg.senderId !== config.agent.ownerOpenId) {
+          await channel.reply(msg, { markdown: "只有 Bridge Owner 可以修改新绑定的全局默认设置。" });
+          await persistCompleted(msg.messageId);
+          return;
+        }
         await processGlobalSettingsMessage(msg, directCommand);
         return;
       }
-      if (!binding || !binding.temporary) {
+      const deleteCommand = /^\/delete(?:@[^\s]+)?(?:\s|$)/i.test(rawContent);
+      if ((!binding && msg.chatType === "p2p") || (binding && !binding.temporary && deleteCommand)) {
         const setupHandled = await processBindingSetupMessage(msg, rawContent, baseBinding);
         if (setupHandled) return;
         binding = resolveRelayBinding(msg.chatId);
+      }
+      if (binding && msg.chatType === "group" && /^\/(?:add|cancel)(?:@[^\s]+)?(?:\s|$)/i.test(rawContent)) {
+        await channel.reply(msg, { markdown: "请在与 Bot 的私聊中使用 `/add` 管理自己的 Session 群。" });
+        await persistCompleted(msg.messageId);
+        return;
       }
     }
     if (!binding) {
@@ -1801,7 +2074,9 @@ async function processInboundMessage(msg, baseBinding) {
       await persistCompleted(msg.messageId);
       return;
     }
-    const content = assertRelayMessage(msg, binding);
+    const inspection = binding.temporary ? undefined : await inspectBinding(binding);
+    const participantOpenIds = inspection?.participantOpenIds || [binding.ownerOpenId];
+    const content = assertRelayMessage(msg, binding, { authorizedOpenIds: participantOpenIds });
     const hasResources = Array.isArray(msg.resources) && msg.resources.length > 0;
     if (!hasResources && content.length > config.maxInputChars) {
       throw new SessionRelayError("input_too_long", "Message exceeds the configured input limit");
@@ -1811,6 +2086,15 @@ async function processInboundMessage(msg, baseBinding) {
       : undefined;
     if (command) await processCommandMessage(msg, binding, command);
     else {
+      const humanMemberCount = inspection?.humanMemberCount || 1;
+      const addressed = isSessionPromptAddressed(msg, {
+        humanMemberCount,
+        replyToBot: await repliesToBridgeBot(msg),
+      });
+      if (!addressed) {
+        log(`ignored normal group conversation message ${msg.messageId}`);
+        return;
+      }
       if (hasResources) {
         await pruneInboundAttachmentCache([msg.messageId])
           .catch((error) => log(`inbound attachment cache cleanup deferred: ${safeError(error)}`));
@@ -1821,7 +2105,7 @@ async function processInboundMessage(msg, baseBinding) {
       if (prompt.text.length > config.maxInputChars) {
         throw new SessionRelayError("input_too_long", "Message exceeds the configured input limit");
       }
-      await processPreparedPrompt(msg, binding, prompt);
+      await processPreparedPrompt(msg, binding, prompt, { forceQueue: humanMemberCount > 1 });
     }
   } catch (error) {
     await replyFailure(msg, error);
@@ -1830,7 +2114,7 @@ async function processInboundMessage(msg, baseBinding) {
 
 channel.on("message", async (msg) => {
   const binding = bindingsByChat.get(msg.chatId);
-  if (msg.senderIsBot !== false || msg.senderId !== config.agent.ownerOpenId) return;
+  if (msg.senderIsBot !== false || !sessionAccess.isActive(msg.senderId)) return;
   if (
     completed.has(msg.messageId) ||
     inputLedger.has(msg.messageId) ||
