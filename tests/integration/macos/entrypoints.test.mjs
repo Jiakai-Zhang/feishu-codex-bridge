@@ -228,9 +228,10 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
-  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.1/);
+  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.2/);
   assert.match(prompt, /setup-project-root\.sh/);
   assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
+  assert.match(prompt, /成功后 Bot 主动私聊成员并提示发送 `\/add`/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {

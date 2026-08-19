@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”，确保安装和 Doctor 能访问当前用户的 macOS Keychain。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文锁定到 `v0.4.0-macos-rc.1`。它保留 rc.12 的 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试、飞书直连校验隔离与完整升级回滚，并同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限、多人群 queue/steer 和按发送者隔离的附件草稿。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文锁定到 `v0.4.0-macos-rc.2`。它保留 rc.12 的 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试、飞书直连校验隔离与完整升级回滚，同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限、多人群 queue/steer 和按发送者隔离的附件草稿，并在登记成员后主动发送 Bot 私聊欢迎消息和 `/add` 指引。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge-private.git
-- tag：v0.4.0-macos-rc.1
+- tag：v0.4.0-macos-rc.2
 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
@@ -54,7 +54,7 @@
 
    如果缺少系统依赖，先说明缺少什么并请求用户批准；不要擅自选择 Homebrew 或其他系统安装方式。如果系统电脑名称为空，先让用户在 macOS“系统设置 > 通用 > 共享”中设置，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.4.0-macos-rc.1。
+2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.4.0-macos-rc.2。
    - 使用 GitHub CLI 的已登录凭据克隆私有仓库；不得把 GitHub Token 放入 URL、命令参数、聊天或日志；
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
@@ -157,7 +157,7 @@
       ./setup-project-root.sh
     - 脚本会交互询问绝对 Project 根目录和 Owner 的一级目录名；不得在聊天、命令参数、日志或文档中代输、捕获或回显该路径；
     - 绝对路径只通过脚本 stdin 进入本机私有状态，不得放入 bridge.config.json 或 Git；
-    - 新成员以后由 Owner 在 Bot 私聊或已绑定群用 `/members add <一级目录名> @成员` 登记；不替用户推断成员、目录或自动邀请任何人。
+    - 新成员以后由 Owner 在 Bot 私聊或已绑定群用 `/members add <一级目录名> @成员` 登记；成功后 Bot 主动私聊成员并提示发送 `/add`，发送失败时保留登记并向 Owner 提供手动搜索 Bot 的兜底；不替用户推断成员、目录或自动邀请任何人加入群。
 
 12. 启动并验证 Bridge：
     - ./start-bridge.sh
@@ -194,7 +194,7 @@
 16. 使用安装后的 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书绑定群。
     - 初次绑定以该 skill 成功返回的群为准；
     - 不要再要求用户先搜索 Bot、创建 Bot 私聊或发送 /add；
-    - /add 仅是用户以后在已经存在的 Bot 私聊或已绑定群中的可选手工入口，不是本安装的前置条件；
+    - `/add` 仅是用户以后在 Bot 私聊中的可选手工入口，不是本安装的前置条件；绑定群中的 `/add` 只引导用户回到 Bot 私聊；
     - 不得在聊天中输出 user/bot open ID、chat ID、Codex task ID 或任务路径。
 
 17. 在绑定群完成真实验收：
@@ -204,7 +204,7 @@
     - 让 Codex 的最终回答引用一个本地文件，确认飞书收到原生附件；
     - 再运行 ./status-bridge.sh 和严格 Doctor。
 
-    如果第 11 步启用了多用户，还必须先由用户把一名测试成员加入应用可用范围并完成必要的发布/审批，再由 Owner 使用 `/members add` 登记。实测 Owner 与成员的 `/add` 列表隔离、成员目录内新建 Project/任务、把成员加入绑定群后的 Session 共享、多人群 `@Bot`/queue/`/steer` 权限、按发送者隔离的附件草稿，以及未登记成员加群时的 fail-closed。成员身份和本机目录不得输出到聊天或日志。
+    如果第 11 步启用了多用户，还必须先由用户把一名测试成员加入应用可用范围并完成必要的发布/审批，再由 Owner 使用 `/members add` 登记。确认 Bot 主动私聊测试成员并显示 `/add` 指引，再实测 Owner 与成员的 `/add` 列表隔离、成员目录内新建 Project/任务、把成员加入绑定群后的 Session 共享、多人群 `@Bot`/queue/`/steer` 权限、按发送者隔离的附件草稿，以及未登记成员加群时的 fail-closed。成员身份和本机目录不得输出到聊天或日志。
 
 18. 安全与完成标准：
     - 除人工认证停点中 Lark CLI 原样生成的一次性 verification URL，以及应用模板脚本生成的临时本机 loopback URL 外，不得在聊天、日志、命令参数、文档或 Git 中输出 App Secret、OAuth token、App ID、device code、user/bot open ID、chat ID、Codex task ID、本机配置或任务路径；

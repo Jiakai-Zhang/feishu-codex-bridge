@@ -15,6 +15,7 @@ test("parses the owner member-management command surface", () => {
 
 test("adds exactly one mentioned member with one safe directory name", async () => {
   const calls = [];
+  const onboardingCalls = [];
   const accessStore = {
     addMember: async (record) => calls.push(record),
     snapshot: () => ({ projectRoot: "private", users: [
@@ -27,10 +28,38 @@ test("adds exactly one mentioned member with one safe directory name", async () 
     accessStore,
     botOpenId: "ou_bot",
     mentions: [{ openId: "ou_member", name: "Alice", isBot: false }],
+    sendMemberOnboarding: async (record) => onboardingCalls.push(record),
   });
   assert.equal(result.restart, true);
+  assert.equal(result.onboarding, "sent");
   assert.deepEqual(calls, [{ openId: "ou_member", directoryName: "alice", displayName: "Alice" }]);
+  assert.deepEqual(onboardingCalls, [{ memberOpenId: "ou_member" }]);
+  assert.match(result.markdown, /私聊.*`\/add`/);
   assert.doesNotMatch(result.markdown, /private/);
+});
+
+test("keeps the member active and gives the owner a fallback when onboarding delivery fails", async () => {
+  let added = false;
+  const accessStore = {
+    addMember: async () => { added = true; },
+    snapshot: () => ({ projectRoot: "private", users: [
+      { role: "owner" },
+      { role: "member", status: "active", displayName: "Alice", directoryName: "alice" },
+    ] }),
+    isConfigured: () => true,
+  };
+  const result = await executeMembersCommand(parseMembersCommand("/members add alice @user"), {
+    accessStore,
+    botOpenId: "ou_bot",
+    mentions: [{ openId: "ou_member", name: "Alice", isBot: false }],
+    sendMemberOnboarding: async () => { throw new Error("private SDK failure"); },
+  });
+  assert.equal(added, true);
+  assert.equal(result.restart, true);
+  assert.equal(result.onboarding, "failed");
+  assert.match(result.markdown, /成员已登记/);
+  assert.match(result.markdown, /可用范围/);
+  assert.doesNotMatch(result.markdown, /private SDK failure/);
 });
 
 test("refuses to deactivate a member that still owns a Session binding", async () => {
@@ -67,6 +96,7 @@ test("does not expose the global member roster in a shared group acknowledgement
     botOpenId: "ou_bot",
     mentions: [{ openId: "ou_member", name: "Alice", isBot: false }],
     includeRoster: false,
+    sendMemberOnboarding: async () => {},
   });
   assert.doesNotMatch(result.markdown, /Alice|Bob|2/);
   assert.match(result.markdown, /完整成员清单只在与 Bot 的私聊中显示/);

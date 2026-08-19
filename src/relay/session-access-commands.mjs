@@ -57,12 +57,20 @@ function formatMembers(accessStore, { changed, includeRoster = true } = {}) {
   return lines.join("\n");
 }
 
+function appendOnboardingNotice(markdown, status) {
+  const notice = status === "sent"
+    ? "已主动向新成员发送 Bot 私聊欢迎消息；Bridge 重载后，成员可在该私聊发送 `/add`。"
+    : "成员已登记，但 Bot 主动私聊发送失败。请确认飞书应用可用范围包含该成员，并让其搜索 Bot 后发送 `/add`。";
+  return `${markdown}\n\n> ${notice}`;
+}
+
 export async function executeMembersCommand(command, {
   accessStore,
   mentions,
   botOpenId,
   listBindings = async () => [],
   includeRoster = true,
+  sendMemberOnboarding,
 } = {}) {
   if (!command || !accessStore) throw new TypeError("Members command requires an access store");
   if (command.action === "status") return { markdown: formatMembers(accessStore), restart: false };
@@ -75,6 +83,9 @@ export async function executeMembersCommand(command, {
   }
   const target = targets[0];
   if (command.action === "add") {
+    if (typeof sendMemberOnboarding !== "function") {
+      throw new TypeError("Members add requires a member onboarding sender");
+    }
     const directoryTokens = command.args.split(/\s+/).filter((token) => token && !token.startsWith("@"));
     if (directoryTokens.length !== 1) {
       return { markdown: "用法：`/members add <目录名> @成员`。目录名不能包含空格或路径分隔符。", restart: false };
@@ -89,7 +100,20 @@ export async function executeMembersCommand(command, {
       directoryName,
       displayName: target.name,
     });
-    return { markdown: formatMembers(accessStore, { changed: true, includeRoster }), restart: true };
+    let onboarding = "sent";
+    try {
+      await sendMemberOnboarding({ memberOpenId: target.openId });
+    } catch {
+      onboarding = "failed";
+    }
+    return {
+      markdown: appendOnboardingNotice(
+        formatMembers(accessStore, { changed: true, includeRoster }),
+        onboarding,
+      ),
+      restart: true,
+      onboarding,
+    };
   }
 
   const ownedBindings = (await listBindings()).filter(({ ownerOpenId }) => ownerOpenId === target.openId);

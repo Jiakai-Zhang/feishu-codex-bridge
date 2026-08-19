@@ -40,6 +40,7 @@ import {
   shouldCreateLongAnswerDocument,
 } from "../feishu/feishu-long-answer-document.mjs";
 import { FeishuSessionChatManager } from "../feishu/feishu-session-chat.mjs";
+import { sendFeishuMemberOnboarding } from "../feishu/feishu-member-onboarding.mjs";
 import { SessionAddFlow } from "../relay/session-add-flow.mjs";
 import {
   SessionAttachmentDraftStore,
@@ -1331,8 +1332,15 @@ async function processMembersMessage(msg, command) {
       botOpenId: connectedBotOpenId,
       listBindings: () => bindingRegistry.list(),
       includeRoster: msg.chatType === "p2p",
+      sendMemberOnboarding: ({ memberOpenId }) => sendFeishuMemberOnboarding(
+        channel.rawClient,
+        { memberOpenId },
+      ),
     });
     restart = result.restart;
+    if (result.onboarding === "failed") {
+      log("member onboarding could not be delivered after registration");
+    }
     await channel.reply(msg, { markdown: result.markdown });
     await persistCompleted(msg.messageId);
   } catch (error) {
