@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.2`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。v0.4 候选版共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
+> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.3`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。v0.4 候选版共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
 
 ## 版本边界
 
@@ -17,6 +17,7 @@
 | `v0.4.0-windows-rc.1` | 私有 Windows 测试版：成员个人 Project 目录、Session 共享权限、多人群 queue/steer 规则，以及保留 Desktop 代理/守护状态的事务升级 |
 | `v0.4.0-macos-rc.1` | 私有 macOS 测试版：同步 Windows v0.4 的多用户 Session 权限，新增不暴露绝对路径的 `setup-project-root.sh`，并保留 Keychain、launchd relay 和升级回滚边界 |
 | `v0.4.0-macos-rc.2` | macOS 多用户候选版：登记成员后由 Bot 主动发送私聊欢迎消息和 `/add` 指引；投递失败不回滚成员状态，并向 Owner 提供安全兜底 |
+| `v0.4.0-macos-rc.3` | macOS 多用户候选版：在 `/add` 的任意非空 Project 任务列表中提供“新建任务”，创建 Session 后立即建立专属绑定群 |
 
 当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
@@ -24,6 +25,7 @@
 - [v0.3.2-macos-rc.12 Release Note](docs/releases/v0.3.2-macos-rc.12.md)
 - [v0.4.0-macos-rc.1 Release Note](docs/releases/v0.4.0-macos-rc.1.md)
 - [v0.4.0-macos-rc.2 Release Note](docs/releases/v0.4.0-macos-rc.2.md)
+- [v0.4.0-macos-rc.3 Release Note](docs/releases/v0.4.0-macos-rc.3.md)
 - [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
@@ -68,12 +70,12 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.2`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
+macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.3`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
 
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.2
+tag：v0.4.0-macos-rc.3
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
 如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
@@ -287,7 +289,7 @@ Windows：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md)
 
 ## 开发与验证
 
