@@ -15,9 +15,18 @@ concurrency:
 
 jobs:
   test:
-    name: Node checks (Windows)
-    runs-on: windows-latest
+    name: Node checks (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
 
     steps:
       - name: Checkout

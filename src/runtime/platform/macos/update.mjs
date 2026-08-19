@@ -47,6 +47,7 @@ const PERSISTENT_FILES = Object.freeze([
   "session-relay-long-answer-documents.json",
   "session-relay-stream-cards.json",
   "session-relay-attachment-drafts.json",
+  "session-relay-temporary-chats.json",
 ]);
 const PERSISTENT_DIRECTORIES = Object.freeze([
   "session-relay-inbound-attachments",
@@ -71,8 +72,8 @@ function optionMap(args) {
   return options;
 }
 
-function approvedOrigin(value) {
-  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)(?:ninmon|Jiakai-Zhang)\/feishu-codex-bridge(?:\.git)?\/?$/i.test(String(value || ""));
+export function approvedMacOSUpdateOrigin(value) {
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)(?:(?:ninmon|Jiakai-Zhang)\/feishu-codex-bridge|ninmon\/feishu-codex-bridge-private)(?:\.git)?\/?$/i.test(String(value || ""));
 }
 
 export async function assertSafeUpdateContext({
@@ -310,7 +311,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   const gitDirectory = path.join(repositoryRoot, ".git");
   if (!(await exists(gitDirectory))) throw new Error("This updater must run from a Git checkout of Feishu Codex Bridge.");
   const origin = await gitText(["remote", "get-url", "origin"]);
-  if (!testMode && !approvedOrigin(origin)) throw new Error("The origin remote is not an approved Feishu Codex Bridge repository.");
+  if (!testMode && !approvedMacOSUpdateOrigin(origin)) throw new Error("The origin remote is not an approved Feishu Codex Bridge repository.");
   const dirty = await gitText(["status", "--porcelain", "--untracked-files=normal"]);
   if (dirty) throw new Error("The installation has tracked or untracked changes; preserve them separately before updating.");
 

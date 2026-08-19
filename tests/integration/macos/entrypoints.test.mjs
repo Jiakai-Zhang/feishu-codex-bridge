@@ -184,6 +184,8 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.ok(prompt.indexOf("完全访问（Full access）") < prompt.indexOf("1. 先做只读预检"));
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
+  assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
+  assert.match(prompt, /tag：v0\.3\.2-macos-rc\.12/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {
