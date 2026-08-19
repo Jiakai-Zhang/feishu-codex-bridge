@@ -13,11 +13,15 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.4
 
 ## macOS 全新安装
 
-把下面两行复制到新 Mac 上的一个新 Codex 任务：
+把下面内容复制到新 Mac 上的一个新 Codex 任务。私有仓库必须由本机已登录且有访问权的 GitHub CLI 读取：
 
 ```text
-请按照以下 GitHub 安装协议，在这台 Mac 上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.11/docs/INSTALL_MACOS_PROMPT.md
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
+仓库：ninmon/feishu-codex-bridge-private
+tag：v0.3.2-macos-rc.12
+文件：docs/INSTALL_MACOS_PROMPT.md
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
+如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
 ```
 
 详见 [macOS 完整安装 Prompt](INSTALL_MACOS_PROMPT.md)。
