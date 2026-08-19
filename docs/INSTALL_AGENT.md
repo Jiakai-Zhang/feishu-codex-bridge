@@ -1,6 +1,6 @@
 # Windows Codex 安装代理协议
 
-本文件供 Codex 在用户要求安装、部署或验收本仓库的 Windows Session Relay 时执行。给新电脑的可复制完整指令见 [Windows 全新安装 Prompt](INSTALL_WINDOWS_PROMPT.md)。目标是以可验证结果交付，不得把当前对话 Full access、浏览器认证、应用发布、管理员审批、安全输入或 Desktop 重启伪装成已自动完成。
+本文件供 Codex 在用户要求安装、部署或验收本仓库的 Windows Session Relay 时执行。给新电脑的固定版本指令见 [Windows 全新安装 Prompt](INSTALL_WINDOWS_PROMPT.md)，已有安装使用 [Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)。目标是以可验证结果交付，不得把当前对话 Full access、浏览器认证、应用发布、管理员审批、安全输入或 Desktop 重启伪装成已自动完成。
 
 ## 安全边界
 
@@ -15,22 +15,23 @@
 
 ## 0. 固定版本与目标目录
 
-新安装使用已发布的精确 Windows tag。当前默认目标为 `v0.3.2-windows-rc.4`：
+新安装使用私有仓库已发布的精确 Windows tag。当前默认目标为 `v0.4.0-windows-rc.3`：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git "$env:LOCALAPPDATA\FeishuCodexBridge\app"
+gh repo clone ninmon/feishu-codex-bridge-private "$env:LOCALAPPDATA\FeishuCodexBridge\app" -- --branch v0.4.0-windows-rc.3 --depth 1
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
 
-克隆前必须先确认远程 tag 存在并解析到精确提交。tag 不存在时停止，不得改用 `main`、其他 tag 或本地散文件。若目录已存在，先只读检查 `git remote -v`、`git status --short`、精确 tag 和本机配置；不得 reset、clean、stash 或覆盖用户改动。
+克隆前必须先确认 GitHub CLI 已登录、当前账号可读取 `ninmon/feishu-codex-bridge-private`，且远程 tag 存在并解析到精确提交。不得索取 Token 或把它放入 URL、命令参数、聊天或日志。tag 不存在时停止，不得改用 `main`、其他 tag 或本地散文件。若目录已存在，先只读检查 `git remote -v`、`git status --short`、精确 tag 和本机配置；不得 reset、clean、stash 或覆盖用户改动。
 
 ## 1. 依赖预检与锁定安装
 
-只在用户明确确认当前对话 Full access 后，才开始只读检查 Windows 10/11、PowerShell 5.1/7、Git、Node.js/npm、ChatGPT/Codex Desktop 和 Codex App Server listener 能力。Node.js 必须不低于 22.13。缺少 Git 或 Node.js 时，先说明将发生的系统软件安装并取得批准，再使用官方 winget 包：
+只在用户明确确认当前对话 Full access 后，才开始只读检查 Windows 10/11、PowerShell 5.1/7、Git、GitHub CLI 登录与私库访问、Node.js/npm、ChatGPT/Codex Desktop 和 Codex App Server listener 能力。Node.js 必须不低于 22.13。缺少 Git、GitHub CLI 或 Node.js 时，先说明将发生的系统软件安装并取得批准，再使用官方 winget 包：
 
 ```powershell
 winget install --id Git.Git -e --source winget
+winget install --id GitHub.cli -e --source winget
 winget install --id OpenJS.NodeJS.LTS -e --source winget
 ```
 
@@ -161,6 +162,8 @@ Desktop 重新打开后执行：
 用户明确要求启用同机多用户时，安装成功后再由 Bridge Owner 在主机交互运行 `setup-project-root.ps1`；不得把根目录放进聊天或命令参数。重启 Bridge 后，Owner 在 Bot 私聊或已绑定群发送一张飞书用户名片并按提示回复目录名，也可使用 `/members add <目录名> @成员` 逐人登记。新成员目录必须为空，飞书应用可用范围必须包含该成员。发送名片不会自动邀请成员入群；不要替用户推断成员、目录或自动邀请群成员。
 
 ## 8. 升级已有安装
+
+交给 Codex 执行时优先使用[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)：健康路径由 Codex 自行启动独立 PowerShell、运行 updater 和 Doctor，用户只在验证完成后完整重启 Desktop。以下安全边界仍全部适用。
 
 用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或未跟踪改动时停止；不得 reset、clean、stash 或覆盖。默认更新源为 `origin`；用户指定私有测试 release 时，只能选择名称为 `private`、URL 精确匹配 `ninmon/feishu-codex-bridge-private` 的已有远端，不得替用户重写 `origin`，也不得把 GitHub Token 放进 remote URL。
 

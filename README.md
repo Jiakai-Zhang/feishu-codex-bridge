@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.5`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.2`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。v0.4 候选版共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
+> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.6`；Windows 公开基线仍为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.3`。两个私有候选版提供固定链接的极简安装与升级入口；它们仍依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。
 
 ## 版本边界
 
@@ -16,11 +16,13 @@
 | `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
 | `v0.4.0-windows-rc.1` | 私有 Windows 测试版：成员个人 Project 目录、Session 共享权限、多人群 queue/steer 规则，以及保留 Desktop 代理/守护状态的事务升级 |
 | `v0.4.0-windows-rc.2` | 私有 Windows 测试版：同步主动私聊、非空 Project 新建 Session、用户名片登记和 owner 可远程调整的 Session 权限 |
+| `v0.4.0-windows-rc.3` | Windows 多用户候选版：全新安装切换到私有 v0.4 基线，并提供用户只需重启 Desktop 的固定版本极简升级入口 |
 | `v0.4.0-macos-rc.1` | 私有 macOS 测试版：同步 Windows v0.4 的多用户 Session 权限，新增不暴露绝对路径的 `setup-project-root.sh`，并保留 Keychain、launchd relay 和升级回滚边界 |
 | `v0.4.0-macos-rc.2` | macOS 多用户候选版：登记成员后由 Bot 主动发送私聊欢迎消息和 `/add` 指引；投递失败不回滚成员状态，并向 Owner 提供安全兜底 |
 | `v0.4.0-macos-rc.3` | macOS 多用户候选版：在 `/add` 的任意非空 Project 任务列表中提供“新建任务”，创建 Session 后立即建立专属绑定群 |
 | `v0.4.0-macos-rc.4` | macOS 多用户候选版：Owner 可发送飞书用户名片并按提示回复目录名登记成员，原有 mention 命令继续兼容 |
 | `v0.4.0-macos-rc.5` | macOS 多用户候选版：Session owner 可从飞书安全查看和调整自己 Session 的持久权限边界，完全访问需二次确认 |
+| `v0.4.0-macos-rc.6` | macOS 多用户候选版：提供固定版本极简安装与升级入口；健康升级由 Codex 准备独立 Terminal，用户只需退出并重开 Desktop |
 
 当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
@@ -31,8 +33,10 @@
 - [v0.4.0-macos-rc.3 Release Note](docs/releases/v0.4.0-macos-rc.3.md)
 - [v0.4.0-macos-rc.4 Release Note](docs/releases/v0.4.0-macos-rc.4.md)
 - [v0.4.0-macos-rc.5 Release Note](docs/releases/v0.4.0-macos-rc.5.md)
+- [v0.4.0-macos-rc.6 Release Note](docs/releases/v0.4.0-macos-rc.6.md)
 - [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
 - [v0.4.0-windows-rc.2 Release Note](docs/releases/v0.4.0-windows-rc.2.md)
+- [v0.4.0-windows-rc.3 Release Note](docs/releases/v0.4.0-windows-rc.3.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
@@ -74,34 +78,64 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ## 安装
 
-### 交给 Codex 安装（推荐）
+### 交给 Codex 全新安装（推荐）
 
-macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.5`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
+macOS：
 
 ```text
-请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.5
+tag：v0.4.0-macos-rc.6
 文件：docs/INSTALL_MACOS_PROMPT.md
-将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
-如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
+GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
 ```
 
-完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。
-
-Windows 固定候选版 `v0.3.2-windows-rc.4` 同样只需复制两行。安装代理会先暂停，要求把当前 Codex 对话设为“完全访问（Full access）”；“替我审批”不能代替该权限：
+Windows：
 
 ```text
-请按照以下 GitHub 安装协议，在这台 Windows 电脑上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.4/docs/INSTALL_WINDOWS_PROMPT.md
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
+仓库：ninmon/feishu-codex-bridge-private
+tag：v0.4.0-windows-rc.3
+文件：docs/INSTALL_WINDOWS_PROMPT.md
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
+GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
 ```
 
-固定 tag 可以避免安装期间读到正在变化的分支。完整协议和人工步骤：
+### 交给 Codex 极简升级
+
+健康安装的正常升级路径不会再让用户执行 Terminal/PowerShell 命令。macOS 用户只需按提示完全退出、等待独立 Terminal 成功并重新打开 Desktop；Windows 用户只需在 updater 和 Doctor 通过后完整重启 Desktop。异常安全停点仍会明确暂停。
+
+macOS：
+
+```text
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
+仓库：ninmon/feishu-codex-bridge-private
+tag：v0.4.0-macos-rc.6
+文件：docs/UPGRADE_MACOS_PROMPT.md
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
+GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
+```
+
+Windows：
+
+```text
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
+仓库：ninmon/feishu-codex-bridge-private
+tag：v0.4.0-windows-rc.3
+文件：docs/UPGRADE_WINDOWS_PROMPT.md
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
+GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
+```
+
+固定 tag 可以避免执行期间读到变化中的分支。完整协议和人工步骤：
 
 - [Windows 安装指南](docs/INSTALL.md)
 - [macOS 安装指南](docs/INSTALL_MACOS.md)
 - [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
 - [给 Codex 的 Windows 全新安装 Prompt](docs/INSTALL_WINDOWS_PROMPT.md)
+- [给 Codex 的 macOS 极简升级协议](docs/UPGRADE_MACOS_PROMPT.md)
+- [给 Codex 的 Windows 极简升级协议](docs/UPGRADE_WINDOWS_PROMPT.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [可复制的安装与升级 Prompt](docs/INSTALL_AGENT_PROMPT.md)
 - [飞书自建应用配置](docs/FEISHU_APP_SETUP.md)
@@ -113,7 +147,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.4
 | 操作系统 | macOS 13+ 或 Windows 10/11 |
 | Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用；macOS 或 Windows 由 Codex 执行安装时，当前对话均已设为“完全访问（Full access）”；“替我审批”不解除沙盒边界 |
 | Node.js | `>=22.13.0`，并带 npm |
-| 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git |
+| 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git；已登录且可读取私有仓库的 GitHub CLI |
 | 飞书 | 可创建企业自建应用的组织账号；macOS 和 Windows 安装脚本都会打开官方模板配置权限和事件 |
 
 仓库依赖通过 `npm ci` 安装，锁定 `@larksuite/channel` 和 `@larksuite/cli`；日常使用仓库内的 `lark-cli.sh` 或 `lark-cli.ps1`，无需全局安装飞书 CLI。
@@ -276,15 +310,19 @@ Windows：
 
 严格 Doctor 通过后，完全退出并重新打开 ChatGPT/Codex Desktop，让新进程读取 relay pointer。正常停止请使用对应平台的 `stop-bridge.sh` 或 `stop-bridge.ps1`，不要单独结束 Bridge、supervisor 或 App Server 进程。
 
-升级固定 release：
+交给 Codex 升级时优先复制上面的极简升级入口。下面的命令是协议内部使用的底层入口，不需要用户在正常自动升级路径中手工执行。
+
+macOS 底层升级入口：
+
+```bash
+./update.sh --version <目标 release tag>
+./update.sh --version <目标 private release tag> --remote private
+```
+
+Windows 底层升级入口：
 
 ```powershell
 .\update.ps1 -Version <目标 release tag>
-```
-
-保留公开 `origin`、从精确私有镜像获取测试 tag：
-
-```powershell
 .\update.ps1 -Version <目标 private release tag> -Remote private
 ```
 
@@ -296,11 +334,13 @@ Windows：
 - [macOS 安装与运维](docs/INSTALL_MACOS.md)
 - [给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)
 - [给 Codex 的 Windows 全新安装 Prompt](docs/INSTALL_WINDOWS_PROMPT.md)
+- [给 Codex 的 macOS 极简升级协议](docs/UPGRADE_MACOS_PROMPT.md)
+- [给 Codex 的 Windows 极简升级协议](docs/UPGRADE_WINDOWS_PROMPT.md)
 - [Windows 安装与升级](docs/INSTALL.md)
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md) · [Windows v0.4 rc.2](docs/releases/v0.4.0-windows-rc.2.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [macOS v0.4 rc.6](docs/releases/v0.4.0-macos-rc.6.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md) · [Windows v0.4 rc.2](docs/releases/v0.4.0-windows-rc.2.md) · [Windows v0.4 rc.3](docs/releases/v0.4.0-windows-rc.3.md)
 
 ## 开发与验证
 

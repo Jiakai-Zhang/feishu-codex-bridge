@@ -214,11 +214,12 @@ test("macOS Feishu app template handoff never prints or passes the App ID to ope
 });
 
 test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI profile", async () => {
-  const prompt = await fs.readFile(path.join(
-    repositoryRoot,
-    "docs",
-    "INSTALL_MACOS_PROMPT.md",
-  ), "utf8");
+  const [prompt, index, upgrade, readme] = await Promise.all([
+    fs.readFile(path.join(repositoryRoot, "docs", "INSTALL_MACOS_PROMPT.md"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "docs", "INSTALL_AGENT_PROMPT.md"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "docs", "UPGRADE_MACOS_PROMPT.md"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "README.md"), "utf8"),
+  ]);
   assert.match(prompt, /scutil --get ComputerName/);
   assert.match(prompt, /应用展示名称必须与运行 Codex Desktop.*系统.*电脑名称.*完全一致/);
   assert.match(prompt, /--name 参数表示 Lark CLI 本地 profile 名称，不是飞书应用展示名称/);
@@ -228,13 +229,19 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
-  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.5/);
+  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.6/);
   assert.match(prompt, /setup-project-root\.sh/);
   assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
   assert.match(prompt, /成功后 Bot 主动私聊成员并提示发送 `\/add`/);
   assert.match(prompt, /发送一张飞书用户名片，并按 Bot 提示回复一级目录名/);
   assert.match(prompt, /已有非空 Project 中继续新建并绑定 Session/);
   assert.match(prompt, /Session owner 从飞书安全调整自己 Session 的权限/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.6[\s\S]*文件：docs\/INSTALL_MACOS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.6[\s\S]*文件：docs\/UPGRADE_MACOS_PROMPT\.md/);
+  assert.match(upgrade, /\.\/update\.sh --version v0\.4\.0-macos-rc\.6 --remote private/);
+  assert.match(upgrade, /不得要求用户输入、复制、粘贴或运行该命令/);
+  assert.match(upgrade, /原有代理模式/);
+  assert.match(readme, /docs\/UPGRADE_MACOS_PROMPT\.md/);
 });
 
 test("macOS binding helper returns only a safe JSON error when no installation exists", async (t) => {

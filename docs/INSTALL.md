@@ -4,6 +4,8 @@
 
 > 当前仅支持 Windows + Codex Desktop。Bridge 依赖 Codex App Server 的实验性 WebSocket 接口，因此本版本按 Beta 发布，不建议作为无人值守的生产服务。
 
+> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.3`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
+
 ## 1. 安装依赖
 
 需要：
@@ -11,6 +13,7 @@
 - Windows 10/11
 - 已安装并登录的 Codex Desktop
 - Git
+- GitHub CLI，已登录且账号可访问私有仓库
 - Node.js 22.13 或更高版本（建议当前 LTS）
 - PowerShell 5.1 或 PowerShell 7
 
@@ -20,6 +23,7 @@
 
 ```powershell
 winget install --id Git.Git -e --source winget
+winget install --id GitHub.cli -e --source winget
 winget install --id OpenJS.NodeJS.LTS -e --source winget
 ```
 
@@ -27,6 +31,7 @@ winget install --id OpenJS.NodeJS.LTS -e --source winget
 
 ```powershell
 git --version
+gh auth status
 node --version
 npm --version
 ```
@@ -36,15 +41,15 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
-Set-Location .\feishu-codex-bridge
+gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.3 --depth 1
+Set-Location .\feishu-codex-bridge-private
 npm ci
 .\lark-cli.ps1 --version
 ```
 
-仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
+克隆前先确认 GitHub CLI 已登录、账号能读取私有仓库、目标 tag 存在并解析到精确提交。不得把 GitHub Token 放入 URL、命令参数、聊天或日志。仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
-当前 Beta release 暂由贡献者 fork 托管，并通过上游草稿 PR 合并到 `Jiakai-Zhang/feishu-codex-bridge`；固定 tag 的内容与该 PR 的已验证提交一致。
+当前 v0.4 多用户 Beta 由维护者私有镜像的固定 tag 托管；公开 fork 的 `v0.3.2-windows-rc.4` 不会自动跟随私有候选版变化。
 
 ## 3. 创建应用并立即保存 Secret
 
@@ -170,6 +175,8 @@ Desktop 打开后运行：
 Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop relay 后，当前用户登录时启动 `FeishuCodexBridge-DesktopRelay-Watchdog`，随后每 3 秒检查共享 App Server。监听器消失时它先移除 Bridge 自己写入的 pointer，再尝试恢复；只有进程与监听器重新验证后才恢复 pointer。需要彻底撤销该集成时运行 `configure-codex-desktop-relay.ps1 -Disable`，再完整重启 Desktop；官方脚本不会删除用户自建守护。
 
 ## 更新
+
+交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 自行完成独立 PowerShell 更新和 Doctor，用户只需在提示后完整重启 Desktop；以下安全检查与回滚边界不会被省略。
 
 升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，并在切换 checkout 前证明活动 Desktop relay 的直连/代理选择与 App Server 进程记录一致。随后才优雅停止 Bridge，并备份 `bridge.config.json`、DPAPI 密文、成员/Project 状态、Session 设置、待提交附件与缓存、队列、输入账本、投递状态、Desktop relay 状态和稳定 bootstrap。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交并恢复备份；不会执行 `git reset`、`git clean`、`stash` 或覆盖用户代码，也不会在回滚中重启 App Server 或改换代理。
 

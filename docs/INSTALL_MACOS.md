@@ -2,9 +2,10 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.5`。它保留 rc.4 的用户名片成员登记及此前的多用户能力，并允许 Session owner 从飞书为自己的 Session 查看和调整持久权限边界；完全访问需要二次确认。原有 mention 命令、主动私聊 onboarding、Keychain、附件、私聊临时 Chat、单 Session writer 隔离、launchd Desktop relay、代理状态与事务升级保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.6`。它保留 rc.5 的完整多用户与 Session 权限能力，并增加固定版本极简安装/升级入口；健康升级路径由 Codex 准备独立 Terminal，用户只需完整退出、等待成功并重新打开 Desktop。原有 Keychain、附件、launchd Desktop relay、代理状态与事务升级保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
+已有安装可复制[给 Codex 的 macOS 极简升级协议](UPGRADE_MACOS_PROMPT.md)入口；异常安全停点仍按本页更新规则执行。
 
 ## 1. 系统要求
 
