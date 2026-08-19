@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.11`；Windows 当前固定候选版为 `v0.3.2-windows-rc.4`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.12`；Windows 当前固定候选版为 `v0.3.2-windows-rc.4`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
 
 ## 版本边界
 
@@ -12,11 +12,13 @@
 | 上游 `be75d65` | 在附件与领域架构基线上继续合并原生媒体、串行 JSON 持久化、私聊临时 Chat 和单 Session writer 冲突隔离 |
 | `v0.3.2-macos-rc.10` | 保留 rc.9 的代理与 watchdog 修复，并把完整安装要求收拢到固定版本协议链接 |
 | `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
+| `v0.3.2-macos-rc.12` | 合入原生媒体、临时 Chat、串行持久化和单 Session writer 隔离，并补齐私有发行源、升级回滚与 macOS CI |
 | `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
 
-当前 `package.json` 仍为 `0.3.1-beta.1`，但 `main` 已包含固定 tag 之后的改动。安装代理仍应使用明确 release tag；在下一个固定 tag 发布前，不要把 `main` 新能力当作 `v0.3.1-beta.1` 的发布保证。
+当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
+- [v0.3.2-macos-rc.12 Release Note](docs/releases/v0.3.2-macos-rc.12.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
@@ -60,11 +62,15 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用固定候选 tag `v0.3.2-macos-rc.11`。把下面两行复制到这台 Mac 上一个新的 Codex 任务；完整执行要求都在固定版本协议内：
+macOS 请使用私有仓库固定候选 tag `v0.3.2-macos-rc.12`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
 
 ```text
-请按照以下 GitHub 安装协议，在这台 Mac 上部署并完整验收 Feishu Codex Bridge：
-https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.11/docs/INSTALL_MACOS_PROMPT.md
+请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
+仓库：ninmon/feishu-codex-bridge-private
+tag：v0.3.2-macos-rc.12
+文件：docs/INSTALL_MACOS_PROMPT.md
+将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
+如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
 ```
 
 完整协议也可直接查看[给 Codex 的 macOS 全新安装 Prompt](docs/INSTALL_MACOS_PROMPT.md)。
@@ -269,7 +275,7 @@ Windows：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [Windows rc.4](docs/releases/v0.3.2-windows-rc.4.md) · [Windows rc.3](docs/releases/v0.3.2-windows-rc.3.md) · [Windows rc.1](docs/releases/v0.3.2-windows-rc.1.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS rc.12](docs/releases/v0.3.2-macos-rc.12.md) · [Windows rc.4](docs/releases/v0.3.2-windows-rc.4.md)
 
 ## 开发与验证
 
