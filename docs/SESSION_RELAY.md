@@ -185,7 +185,7 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 修改时 Session 必须空闲且没有运行中的 Goal。它不改正在运行的 Turn、其他 Session、Bridge 全局配置或 Desktop 代理。
 - 下一次由 Bridge 调用 `turn/start` 时会显式发送该 Session 的 `sandboxPolicy`；启动或恢复 Goal 前也会先用保存的权限重新恢复 thread。App Server 随后把它作为同一 thread 后续 Turn 的默认值。`turn/steer` 不能修改活动 Turn 的权限。
 - `danger-full-access` 或继承到完全访问时，必须在 5 分钟内另发 `/permissions confirm`。确认请求同时绑定 Session、发送者和飞书会话，不能跨群复用。
-- 完全访问配合 Bridge 的无审批执行策略，可让 Codex 使用当前系统账户可访问的文件与命令，并可能访问钥匙串。共享群中其他已授权成员之后提交的 Prompt 也会获得相同执行边界，只能用于完全可信的环境。
+- 完全访问配合 Bridge 的无审批执行策略，可让 Codex 使用当前系统账户可访问的文件与命令，并可能访问 Keychain、DPAPI 等系统凭据存储。共享群中其他已授权成员之后提交的 Prompt 也会获得相同执行边界，只能用于完全可信的环境。
 - `/permissions cancel` 取消当前会话尚未确认的完全访问请求。
 
 ### `/model`

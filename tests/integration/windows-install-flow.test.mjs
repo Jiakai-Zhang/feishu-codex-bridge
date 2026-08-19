@@ -137,6 +137,8 @@ test("Windows install prompt matches the macOS onboarding contract", async () =>
   assert.match(prompt, /CLI \u539f\u6837\u8f93\u51fa\u7684\u8be5 URL \u4f5c\u4e3a\u53ef\u70b9\u51fb\u7684\u5907\u7528\u94fe\u63a5/);
   assert.match(prompt, /\u4e34\u65f6\u672c\u673a loopback \u5907\u7528 URL/);
   assert.match(index, /raw\.githubusercontent\.com\/ninmon\/feishu-codex-bridge\/v0\.3\.2-windows-rc\.4\/docs\/INSTALL_WINDOWS_PROMPT\.md/);
+  assert.match(index, /v0\.4\.0-windows-rc\.2/);
+  assert.match(index, /update\.ps1 -Version v0\.4\.0-windows-rc\.2 -Remote private/);
   assert.match(readme, /INSTALL_WINDOWS_PROMPT\.md/);
   assert.match(doctor, /current conversation to Full access/);
   assert.match(doctor, /Approve for me[^\r\n]*does not remove sandbox boundaries/);

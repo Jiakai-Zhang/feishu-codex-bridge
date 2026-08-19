@@ -202,7 +202,7 @@ export class SessionPermissionFlow {
     return [
       "### ⚠️ 确认完全访问",
       "",
-      "完全访问会让当前 Session 之后由 Bridge 启动的 Codex Turn 在无需审批的情况下执行命令，并可能访问当前系统账户可访问的文件与钥匙串。",
+      "完全访问会让当前 Session 之后由 Bridge 启动的 Codex Turn 在无需审批的情况下执行命令，并可能访问当前系统账户可访问的文件、系统凭据存储与其他敏感数据。",
       humanMemberCount > 1
         ? `当前群有 ${humanMemberCount} 名人类成员；其他已授权成员之后提交的 Prompt 也会使用完全访问。`
         : "当前设置只作用于这个 Session，不改动其他 Session 或 Bridge 全局默认。",

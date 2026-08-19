@@ -75,6 +75,8 @@ test("requires a conversation-bound second confirmation before full access", asy
   );
   assert.match(warning, /确认完全访问/);
   assert.match(warning, /3 名人类成员/);
+  assert.match(warning, /系统凭据存储/);
+  assert.doesNotMatch(warning, /钥匙串/);
   assert.equal(testHarness.settings.sandboxMode, "inherit");
 
   await assert.rejects(
