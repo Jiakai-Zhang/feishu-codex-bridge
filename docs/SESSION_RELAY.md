@@ -221,10 +221,11 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 1. 选择 Codex Desktop Project，或选择“独立”；
 2. 选择未归档且符合原生 Project 归属的 Session；
-3. 已配置个人目录后还可选择“新建 Project”，Bridge 只在当前用户目录下创建新目录和首个任务；
-4. “独立”下也可创建 projectless Session；普通成员固定使用自己的目录，不能从飞书提交任意绝对 cwd。未启用多用户目录的旧 Owner 流程仍会本地校验输入的绝对 cwd；
-5. Bridge 创建私有群、校验群成员、应用 Feed 标签、复制默认设置、持久化绑定并发送欢迎消息；
-6. supervisor 在成功后自动重载 Bridge。
+3. 选择任意已有 Project 后都可“新建任务”；即使其中已经有其他 Session，也会在该 Project 登记的工作目录中创建并立即绑定新 Session；
+4. 已配置个人目录后还可选择“新建 Project”，Bridge 只在当前用户目录下创建新目录和首个任务；
+5. “独立”下也可创建 projectless Session；普通成员固定使用自己的目录，不能从飞书提交任意绝对 cwd。未启用多用户目录的旧 Owner 流程仍会本地校验输入的绝对 cwd；
+6. Bridge 创建私有群、校验群成员、应用 Feed 标签、复制默认设置、持久化绑定并发送欢迎消息；
+7. supervisor 在成功后自动重载 Bridge。
 
 可随时发送 `/cancel`。已绑定 Session 不会重复建群。新群名称为 `{Project名}/{Session名}` 或 `独立/{Session名}`，名称按飞书限制清理和截断。
 

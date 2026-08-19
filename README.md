@@ -161,7 +161,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.4
 
 该可选向导会按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会创建私有群、校验成员、尽可能应用个人 Agent 标签并写入固定绑定。绑定群中的 `/add` 会引导回 Bot 私聊，避免把个人任务列表展示给群成员。
 
-Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。Project 暂时为空时，向导会提供“重新扫描”“返回 Project 列表”和“新建任务”。
+Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。选择任意已有 Project 后都可直接“新建任务”；Project 暂时为空时，向导还会提供“重新扫描”和“返回 Project 列表”。
 
 绑定群只有一名人类用户时可直接发送文本、图片或附件，无需 `@Bot`；多人群只有 `@Bot`、回复 Bot 或斜杠命令会进入 Codex，其他消息保留为普通群聊。多人普通 Prompt 固定排入新 Turn，显式 `/steer <调整方向>` 才调整当前回答。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。普通文件可以连续上传，草稿按“Session + 发送者”隔离，直到同一发送者的第一条普通文字 Prompt 到达。Session Relay 不提供 `/new`、`/use` 或全局长期任务切换；每个群的长期绑定始终指向自己的 Session，临时 `/chat` 不会修改该绑定。
 

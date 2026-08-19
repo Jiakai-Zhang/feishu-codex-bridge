@@ -78,6 +78,9 @@ function sessionMenu(state, nowMs, notice) {
   if (pageCount > 1) {
     lines.push("", `第 ${page + 1}/${pageCount} 页；回复“下一页”或“上一页”翻页。`);
   }
+  if (!independent) {
+    lines.push("", choiceLine(sessions.length + 1, "**新建任务**"));
+  }
   lines.push("", "回复任务编号，或发送 `/cancel` 取消。");
   return withNotice(lines.join("\n"), notice);
 }
@@ -243,6 +246,13 @@ export class SessionAddFlow {
         return { handled: true, reply: sessionMenu(state, this.now()) };
       }
       const number = selectionNumber(content);
+      if (!independent && number === state.sessions.length + 1) {
+        state.step = "new-project-name";
+        return {
+          handled: true,
+          reply: `请输入要在 Project **${state.selection.name}** 中新建的任务名称。`,
+        };
+      }
       if (independent && number === 1) {
         state.step = "new-name";
         return {
