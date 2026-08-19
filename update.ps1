@@ -3,6 +3,8 @@ param(
     [ValidatePattern('^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$')]
     [string]$Version,
     [string]$InstallRoot = $PSScriptRoot,
+    [ValidateSet('origin', 'private')]
+    [string]$Remote = 'origin',
     [switch]$StartBridge,
     [string]$Proxy,
     [switch]$NoProxy,
@@ -80,9 +82,9 @@ function Invoke-Git {
     }
 }
 
-function Test-ApprovedOrigin {
+function Test-ApprovedUpdateRemote {
     param([Parameter(Mandatory)][string]$Url)
-    return $Url -match '(?i)^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?:ninmon|Jiakai-Zhang)/feishu-codex-bridge(?:\.git)?/?$'
+    return $Url -match '(?i)^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?:(?:ninmon|Jiakai-Zhang)/feishu-codex-bridge|ninmon/feishu-codex-bridge-private)(?:\.git)?/?$'
 }
 
 function Test-BridgeRunning {
@@ -237,9 +239,9 @@ $npmPath = Get-CommandPath -Name 'npm.cmd'
 if (-not $npmPath) { $npmPath = Get-CommandPath -Name 'npm.exe' }
 if (-not $npmPath) { throw 'npm was not found.' }
 
-$originUrl = Invoke-Git -Arguments @('remote', 'get-url', 'origin') -Capture
-if (-not $TestMode -and -not (Test-ApprovedOrigin -Url $originUrl)) {
-    throw 'The origin remote is not an approved Feishu Codex Bridge repository; refusing to update it.'
+$updateRemoteUrl = Invoke-Git -Arguments @('remote', 'get-url', $Remote) -Capture
+if (-not $TestMode -and -not (Test-ApprovedUpdateRemote -Url $updateRemoteUrl)) {
+    throw "The selected '$Remote' remote is not an approved Feishu Codex Bridge repository; refusing to update it."
 }
 
 $dirtyState = Invoke-Git -Arguments @('status', '--porcelain', '--untracked-files=normal') -Capture
@@ -345,7 +347,7 @@ if ($desktopRelayWasEnabled) {
 }
 
 $previousCommit = Invoke-Git -Arguments @('rev-parse', '--verify', 'HEAD') -Capture
-Invoke-Git -Arguments @('fetch', '--quiet', 'origin', "refs/tags/${Version}:refs/tags/${Version}")
+Invoke-Git -Arguments @('fetch', '--quiet', $Remote, "refs/tags/${Version}:refs/tags/${Version}")
 $targetCommit = Invoke-Git -Arguments @('rev-parse', '--verify', "refs/tags/$Version^{commit}") -Capture
 $targetInstallerSource = Invoke-Git -Arguments @('show', "${targetCommit}:install.ps1") -Capture
 if ($desktopRelayWasEnabled -and $previousCommit -ne $targetCommit -and

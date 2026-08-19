@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.12`；Windows 当前固定候选版为 `v0.3.2-windows-rc.4`。两者都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。仓库保留的 Project Agent/多人协作实现仍是实验代码。
+> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.12`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户测试版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。macOS rc.12 不包含 v0.4 的成员目录与多人 Session 权限功能。
 
 ## 版本边界
 
@@ -14,11 +14,13 @@
 | `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
 | `v0.3.2-macos-rc.12` | 合入原生媒体、临时 Chat、串行持久化和单 Session writer 隔离，并补齐私有发行源、升级回滚与 macOS CI |
 | `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
+| `v0.4.0-windows-rc.1` | 私有 Windows 测试版：成员个人 Project 目录、Session 共享权限、多人群 queue/steer 规则，以及保留 Desktop 代理/守护状态的事务升级 |
 
 当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
 - [v0.3.2-macos-rc.12 Release Note](docs/releases/v0.3.2-macos-rc.12.md)
+- [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
@@ -263,7 +265,13 @@ Windows：
 .\update.ps1 -Version <目标 release tag>
 ```
 
-两个平台的升级器都会拒绝脏工作树，保留本机配置、凭据、绑定、成员/个人 Project 目录状态、Session 设置、待提交附件与缓存、队列、输入账本和投递状态；失败时自动回滚。Windows 升级器还会在切换 tag 前锁定并备份当前 Desktop 直连/本地代理选择与 bootstrap，目标安装器不得重做中继迁移；无法证明活动 App Server 使用同一网络模式时会在修改 checkout 前停止，不会猜成直连。macOS 使用 `./update.sh --version <tag>`，且必须先完全退出 Desktop，再从独立 Terminal 执行；updater 会拒绝从活跃 Codex 任务中自更新。Windows 使用 `.\update.ps1 -Version <tag>`；不得跨平台混用。详见 [macOS 更新](docs/INSTALL_MACOS.md#更新固定版本) 与 [Windows 更新](docs/INSTALL.md#更新)。
+保留公开 `origin`、从精确私有镜像获取测试 tag：
+
+```powershell
+.\update.ps1 -Version <目标 private release tag> -Remote private
+```
+
+两个平台的升级器都会拒绝脏工作树，保留本机配置、凭据、绑定、成员/个人 Project 目录状态、Session 设置、待提交附件与缓存、队列、输入账本和投递状态；失败时自动回滚。Windows 升级器还会在切换 tag 前锁定并备份当前 Desktop 直连/本地代理选择与 bootstrap，目标安装器不得重做中继迁移；无法证明活动 App Server 使用同一网络模式时会在修改 checkout 前停止，不会猜成直连。macOS 使用 `./update.sh --version <tag>`，且必须先完全退出 Desktop，再从独立 Terminal 执行；updater 会拒绝从活跃 Codex 任务中自更新。私有镜像可分别显式使用 Windows `-Remote private` 或 macOS `--remote private`，升级器不会改写 `origin`。不得跨平台混用。详见 [macOS 更新](docs/INSTALL_MACOS.md#更新固定版本) 与 [Windows 更新](docs/INSTALL.md#更新)。
 
 ## 文档
 

@@ -52,6 +52,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     "if grep -q broken release.txt; then",
     "  printf '%s\\n' target-only > \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE\"",
     "  printf '%s\\n' target-only > \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_TEMPORARY_CHAT_STATE\"",
+    "  printf '%s\\n' target-only > \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_ACCESS_STATE\"",
     "fi",
     "exit 0",
     "",
@@ -84,6 +85,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await commitRelease(source, "broken", "broken release", "v1.2.0");
 
   await git(root, ["clone", "--quiet", source, installation]);
+  await git(installation, ["remote", "add", "private", source]);
   await git(installation, ["checkout", "--quiet", "--detach", "v1.0.0"]);
   const config = {
     schemaVersion: 4,
@@ -102,6 +104,8 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await fs.writeFile(path.join(runtime, "session-relay-settings.json"), '{"keep":"one"}\n', { mode: 0o600 });
   const temporaryChatState = path.join(runtime, "session-relay-temporary-chats.json");
   await fs.writeFile(temporaryChatState, '[{"keep":"chat-one"}]\n', { mode: 0o600 });
+  const accessState = path.join(runtime, "session-relay-access.json");
+  await fs.writeFile(accessState, '{"keep":"access-one"}\n', { mode: 0o600 });
   await fs.writeFile(path.join(runtime, "session-relay-inbound-attachments", "message", "sample.bin"), "attachment-state", { mode: 0o600 });
   const relayStatePath = path.join(testHome, "Library", "Application Support", "FeishuCodexBridge", "bootstrap", "desktop-relay-state.json");
   const relayPlistPath = path.join(testHome, "Library", "LaunchAgents", "com.feishu-codex-bridge.desktop-relay.plist");
@@ -125,6 +129,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_DOCTOR_ARGS: doctorArgs,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE: targetOnlyState,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_TEMPORARY_CHAT_STATE: temporaryChatState,
+    FEISHU_CODEX_BRIDGE_UPDATE_TEST_ACCESS_STATE: accessState,
   };
 
   const dirtyPath = path.join(installation, "local-user-change.txt");
@@ -136,7 +141,8 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await fs.unlink(dirtyPath);
 
   const success = await execFile(process.execPath, [
-    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"), "--version", "v1.1.0", "--test-mode",
+    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"),
+    "--version", "v1.1.0", "--remote", "private", "--test-mode",
   ], { cwd: installation, env: environment, encoding: "utf8", timeout: 30_000 });
   assert.match(success.stdout, /Upgrade completed successfully: v1\.1\.0/);
   assert.equal(success.stdout.includes(root), false);
@@ -146,6 +152,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), config);
   assert.equal((await fs.readFile(path.join(runtime, "session-relay-settings.json"), "utf8")).trim(), '{"keep":"one"}');
   assert.equal((await fs.readFile(temporaryChatState, "utf8")).trim(), '[{"keep":"chat-one"}]');
+  assert.equal((await fs.readFile(accessState, "utf8")).trim(), '{"keep":"access-one"}');
   assert.equal(await fs.readFile(path.join(runtime, "session-relay-inbound-attachments", "message", "sample.bin"), "utf8"), "attachment-state");
   assert.equal(await exists(runningMarker), true);
   assert.equal(await exists(relayMarker), true);
@@ -153,6 +160,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
 
   await fs.writeFile(path.join(runtime, "session-relay-settings.json"), '{"keep":"two"}\n', { mode: 0o600 });
   await fs.writeFile(temporaryChatState, '[{"keep":"chat-two"}]\n', { mode: 0o600 });
+  await fs.writeFile(accessState, '{"keep":"access-two"}\n', { mode: 0o600 });
   let failure;
   try {
     await execFile(process.execPath, [
@@ -168,6 +176,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   assert.equal((await fs.readFile(path.join(installation, "release.txt"), "utf8")).trim(), "two");
   assert.equal((await fs.readFile(path.join(runtime, "session-relay-settings.json"), "utf8")).trim(), '{"keep":"two"}');
   assert.equal((await fs.readFile(temporaryChatState, "utf8")).trim(), '[{"keep":"chat-two"}]');
+  assert.equal((await fs.readFile(accessState, "utf8")).trim(), '{"keep":"access-two"}');
   assert.equal(JSON.parse(await fs.readFile(relayStatePath, "utf8")).keep, "relay");
   assert.equal(await exists(targetOnlyState), false);
   const backupRoot = path.join(runtime, "upgrade-backups");

@@ -89,6 +89,10 @@ test("Windows Desktop launcher preserves the saved network mode and accepts only
 
 test("Windows updater locks and backs up the Desktop network selection before checkout", async () => {
   const updater = await read("update.ps1");
+  assert.match(updater, /\[ValidateSet\('origin', 'private'\)\]/);
+  assert.match(updater, /ninmon\/feishu-codex-bridge-private/);
+  assert.match(updater, /remote', 'get-url', \$Remote/);
+  assert.match(updater, /fetch', '--quiet', \$Remote/);
   assert.match(updater, /\[string\]\$Proxy/);
   assert.match(updater, /\[switch\]\$NoProxy/);
   assert.match(updater, /active App Server network mode does not match the preserved selection/);

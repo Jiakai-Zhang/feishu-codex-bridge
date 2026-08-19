@@ -162,13 +162,21 @@ Desktop 重新打开后执行：
 
 ## 8. 升级已有安装
 
-用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或未跟踪改动时停止；不得 reset、clean、stash 或覆盖。
+用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或未跟踪改动时停止；不得 reset、clean、stash 或覆盖。默认更新源为 `origin`；用户指定私有测试 release 时，只能选择名称为 `private`、URL 精确匹配 `ninmon/feishu-codex-bridge-private` 的已有远端，不得替用户重写 `origin`，也不得把 GitHub Token 放进 remote URL。
 
 使用当前 release 自带升级器和明确 tag：
 
 ```powershell
 .\update.ps1 -Version <目标 release tag>
 ```
+
+私有测试 release 使用：
+
+```powershell
+.\update.ps1 -Version <目标 private release tag> -Remote private
+```
+
+如果当前安装的旧升级器尚无 `Remote` 参数，严格使用目标 release note 的认证 Git fetch 与临时目标 updater 引导；先证明 `gh auth status`、私有仓库访问、精确 remote URL 和目标 tag，再从 tag 中读取 updater。不得改用 `main`、公开 raw URL、任意下载脚本或手工 checkout 代替事务升级。
 
 升级器负责先锁定 Desktop relay 的直连/代理模式，再停止/恢复 Bridge、创建本机恢复备份、切换精确 tag、执行 `npm ci`，并保留本机配置、DPAPI 密文、绑定、成员/个人 Project 状态、Session 设置、队列、账本、附件缓存、投递状态、relay state 与 bootstrap。目标安装器必须跳过 Desktop relay 迁移；失败时回滚且不重启 App Server、不改代理。升级前 Desktop relay 已启用时，`doctor.ps1 -RequireDesktopRelay` 是成功条件。
 

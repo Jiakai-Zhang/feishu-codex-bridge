@@ -196,8 +196,17 @@ macOS 升级器只接受明确的语义化 release tag：
 ./update.sh --version <目标 release tag>
 ```
 
+默认从 `origin` 获取 tag。若现有安装保留公开 `origin`，并另行配置了精确私有镜像远端，则使用：
+
+```bash
+git remote get-url private
+./update.sh --version <目标 private release tag> --remote private
+```
+
+`--remote` 只接受 `origin` 或 `private`；选中远端必须精确匹配受维护的公开仓库或 `ninmon/feishu-codex-bridge-private`，升级器不会改写 remote。私有仓库访问由已登录的 GitHub CLI/Git credential helper 提供，不得把访问 Token 写进 URL、命令参数或聊天。全新 rc.12 私有安装的 `origin` 已指向私有仓库，仍可省略 `--remote`。
+
 运行更新前必须完全退出 ChatGPT/Codex Desktop，并从独立的 macOS Terminal 执行上述命令。不得从正在使用该共享 App Server 的 Codex 任务中执行自更新。升级器会在停止任何服务之前检查这两项条件，检测到活跃 Codex 任务、Desktop 进程或 Desktop 内嵌 App Server 时会直接拒绝更新。公开仓库、上游仓库和受维护的私有发行仓库均使用相同的固定 tag 校验与安全更新流程。
 
-升级器会验证 origin 与目标 tag，拒绝任何已跟踪或未跟踪的工作树改动，优雅停止正在运行的 Bridge，并在本机 runtime 中创建权限受限的恢复备份。备份包括配置、绑定请求、Session 设置、临时 Chat、队列、输入账本、投递状态、长回答/流式卡状态、附件草稿与入站附件缓存。Keychain Secret 留在原有安全存储中，不会读取或重新索取。
+升级器会验证选定 remote 与目标 tag，拒绝任何已跟踪或未跟踪的工作树改动，优雅停止正在运行的 Bridge，并在本机 runtime 中创建权限受限的恢复备份。备份包括配置、绑定请求、Session 设置、临时 Chat、多用户 Session access 状态、队列、输入账本、投递状态、长回答/流式卡状态、附件草稿与入站附件缓存。Keychain Secret 留在原有安全存储中，不会读取或重新索取。
 
 目标版本的依赖安装、安装器或 Doctor 失败时，脚本会切回原提交、恢复备份、重新生成 LaunchAgent，并恢复升级前的 Bridge/relay 运行状态。不会执行 `git reset`、`git clean` 或 `git stash`。目标 tag 必须已包含 macOS 脚本；Windows `update.ps1` 不得在 macOS 上使用。

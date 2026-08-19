@@ -48,6 +48,7 @@ const PERSISTENT_FILES = Object.freeze([
   "session-relay-stream-cards.json",
   "session-relay-attachment-drafts.json",
   "session-relay-temporary-chats.json",
+  "session-relay-access.json",
 ]);
 const PERSISTENT_DIRECTORIES = Object.freeze([
   "session-relay-inbound-attachments",
@@ -299,19 +300,23 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   assertMacOS();
   const options = optionMap(args);
   for (const name of options.keys()) {
-    if (!["version", "start-bridge", "test-mode"].includes(name)) throw new Error(`Unknown update option: --${name}`);
+    if (!["version", "remote", "start-bridge", "test-mode"].includes(name)) throw new Error(`Unknown update option: --${name}`);
   }
   const version = String(options.get("version") || "");
+  const remote = String(options.get("remote") || "origin");
   const startRequested = options.has("start-bridge");
   const testMode = options.has("test-mode");
   if (!VERSION_PATTERN.test(version)) throw new Error("--version must be an explicit semantic release tag such as v1.2.3.");
+  if (!["origin", "private"].includes(remote)) throw new Error("--remote must be either origin or private.");
   await assertTestMode(testMode);
   await assertSafeUpdateContext({ testMode });
 
   const gitDirectory = path.join(repositoryRoot, ".git");
   if (!(await exists(gitDirectory))) throw new Error("This updater must run from a Git checkout of Feishu Codex Bridge.");
-  const origin = await gitText(["remote", "get-url", "origin"]);
-  if (!testMode && !approvedMacOSUpdateOrigin(origin)) throw new Error("The origin remote is not an approved Feishu Codex Bridge repository.");
+  const updateRemoteUrl = await gitText(["remote", "get-url", remote]);
+  if (!testMode && !approvedMacOSUpdateOrigin(updateRemoteUrl)) {
+    throw new Error(`The selected '${remote}' remote is not an approved Feishu Codex Bridge repository.`);
+  }
   const dirty = await gitText(["status", "--porcelain", "--untracked-files=normal"]);
   if (dirty) throw new Error("The installation has tracked or untracked changes; preserve them separately before updating.");
 
@@ -324,7 +329,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   const shouldStart = state.bridgeRunning || startRequested;
 
   const previousCommit = await gitText(["rev-parse", "--verify", "HEAD"]);
-  await git(["fetch", "--quiet", "origin", `refs/tags/${version}:refs/tags/${version}`]);
+  await git(["fetch", "--quiet", remote, `refs/tags/${version}:refs/tags/${version}`]);
   const targetCommit = await gitText(["rev-parse", "--verify", `refs/tags/${version}^{commit}`]);
   if (targetCommit === previousCommit) {
     process.stdout.write(`${version} is already installed.\n`);

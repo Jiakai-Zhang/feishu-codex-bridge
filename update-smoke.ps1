@@ -8,6 +8,7 @@ $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $temporaryBase ('feishu-bridge-update-' + [guid]::NewGuid().ToString('N'))
 $seedRoot = Join-Path $testRoot 'seed'
 $originRoot = Join-Path $testRoot 'origin.git'
+$privateRoot = Join-Path $testRoot 'private.git'
 $installRoot = Join-Path $testRoot 'installed'
 $runtimeWorkspace = Join-Path $testRoot 'runtime'
 New-Item -ItemType Directory -Force -Path $seedRoot | Out-Null
@@ -104,10 +105,15 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
 
     & git init --bare --quiet $originRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the test origin.' }
+    & git init --bare --quiet $privateRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the test private remote.' }
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('remote', 'add', 'origin', $originRoot) | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'origin', 'HEAD', '--tags') | Out-Null
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'private', 'HEAD', '--tags') | Out-Null
     & git clone --quiet --branch v9.0.0-test.1 $originRoot $installRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not clone the test installation.' }
+    Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
 
     $relayUrl = 'ws://127.0.0.1:47991/rpc'
     $config = [ordered]@{
@@ -149,7 +155,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $relayUrl
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH = $relayStatePath
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH = $relayBootstrapPath
-    & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -StartBridge -TestMode
+    & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -Remote private -StartBridge -TestMode
     $tagAfterUpgrade = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
     if ($tagAfterUpgrade -ne 'v9.0.0-test.2') { throw 'The updater did not switch to the requested tag.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $installRoot 'release-marker.txt')).Trim() -ne 'two') {

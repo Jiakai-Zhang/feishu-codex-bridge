@@ -179,6 +179,15 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 .\update.ps1 -Version <目标 release tag>
 ```
 
+默认只从 `origin` 获取目标 tag。受维护的私有测试版本可以从一个名为 `private` 的独立远端更新，不需要也不允许升级器改写 `origin`：
+
+```powershell
+git remote get-url private
+.\update.ps1 -Version <目标 private release tag> -Remote private
+```
+
+第一个命令的结果必须精确指向 `ninmon/feishu-codex-bridge-private`。`-Remote` 只接受 `origin` 或 `private`，且两者的 URL 都必须匹配维护清单中的公开上游、公开 fork 或该精确私有镜像；相似仓库名和其他 owner 会在停止服务或切换 checkout 前被拒绝。升级器不会创建、覆盖或重命名 Git remote。私有仓库认证必须使用本机 GitHub CLI/credential helper，不得把 Token 放进 URL、命令参数或聊天。
+
 Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止且 Desktop relay 未启用时保持停止。Desktop relay 已启用时，升级器会启动 Bridge、把已保存的精确网络模式显式交给目标版本，并执行 `doctor.ps1 -RequireDesktopRelay`；目标 `install.ps1` 被要求跳过中继迁移，不能自行落回直连。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
 
 健康的新版本安装通常直接运行不带网络参数的更新命令。只有保存状态不可读/缺失时，升级器才要求显式选择，并且仍会核对当前 App Server 记录：
@@ -216,4 +225,4 @@ Invoke-WebRequest "https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/
 & $updater -InstallRoot (Get-Location).Path -Version $version
 ```
 
-升级后运行 `git describe --tags --exact-match`、`.\status-bridge.ps1` 和 `.\doctor.ps1 -RequireRunning` 验证版本与实时连接。此版本无需为 Bridge 代码更新强制重启 Codex Desktop；只有 release notes 明确要求、共享 App Server 地址变化或 Desktop 环境检查失败时才完整重启。
+升级后运行 `git describe --tags --exact-match`、`.\status-bridge.ps1` 和 `.\doctor.ps1 -RequireRunning` 验证版本与实时连接。私有测试版本还应确认 tag 来自选定的 `private` remote。此版本无需为 Bridge 代码更新强制重启 Codex Desktop；只有 release notes 明确要求、共享 App Server 地址变化或 Desktop 环境检查失败时才完整重启。

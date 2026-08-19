@@ -40,6 +40,21 @@ test("macOS lifecycle wrappers route through the single safe Node launcher", asy
   }
 });
 
+test("macOS updater selects only maintained public or private remotes", async () => {
+  const source = await fs.readFile(path.join(
+    repositoryRoot,
+    "src",
+    "runtime",
+    "platform",
+    "macos",
+    "update.mjs",
+  ), "utf8");
+  assert.match(source, /\["origin", "private"\]\.includes\(remote\)/);
+  assert.match(source, /\["remote", "get-url", remote\]/);
+  assert.match(source, /\["fetch", "--quiet", remote/);
+  assert.match(source, /session-relay-access\.json/);
+});
+
 test("macOS Desktop relay activation reloads the launchd registration", async () => {
   const source = await fs.readFile(path.join(
     repositoryRoot,
