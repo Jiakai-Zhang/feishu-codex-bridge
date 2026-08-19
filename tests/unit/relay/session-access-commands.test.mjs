@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   executeMembersCommand,
   parseMembersCommand,
+  publicMembersFailure,
 } from "../../../src/relay/session-access-commands.mjs";
 
 test("parses the owner member-management command surface", () => {
@@ -69,4 +70,10 @@ test("does not expose the global member roster in a shared group acknowledgement
   });
   assert.doesNotMatch(result.markdown, /Alice|Bob|2/);
   assert.match(result.markdown, /完整成员清单只在与 Bot 的私聊中显示/);
+});
+
+test("points missing Project root setup at both supported platform entrypoints", () => {
+  const result = publicMembersFailure({ code: "project_root_missing" });
+  assert.match(result, /setup-project-root\.ps1/);
+  assert.match(result, /setup-project-root\.sh/);
 });

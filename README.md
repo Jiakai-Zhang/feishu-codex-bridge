@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 当前固定候选版为 `v0.3.2-macos-rc.12`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户测试版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。macOS rc.12 不包含 v0.4 的成员目录与多人 Session 权限功能。
+> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.1`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。两个 v0.4 tag 共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
 
 ## 版本边界
 
@@ -15,11 +15,13 @@
 | `v0.3.2-macos-rc.12` | 合入原生媒体、临时 Chat、串行持久化和单 Session writer 隔离，并补齐私有发行源、升级回滚与 macOS CI |
 | `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
 | `v0.4.0-windows-rc.1` | 私有 Windows 测试版：成员个人 Project 目录、Session 共享权限、多人群 queue/steer 规则，以及保留 Desktop 代理/守护状态的事务升级 |
+| `v0.4.0-macos-rc.1` | 私有 macOS 测试版：同步 Windows v0.4 的多用户 Session 权限，新增不暴露绝对路径的 `setup-project-root.sh`，并保留 Keychain、launchd relay 和升级回滚边界 |
 
 当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
 - [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
 - [v0.3.2-macos-rc.12 Release Note](docs/releases/v0.3.2-macos-rc.12.md)
+- [v0.4.0-macos-rc.1 Release Note](docs/releases/v0.4.0-macos-rc.1.md)
 - [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
@@ -36,7 +38,7 @@
 
 ## 能做什么
 
-- **固定绑定**：一个仅含 owner 与当前 Bot 的飞书群，对应一个 Codex Session；同一 Bot 可以管理多个绑定群。
+- **固定绑定**：一个初始只含 Session owner 与当前 Bot 的规范绑定群，对应一个 Codex Session；启用多用户后可加入已登记成员共享该 Session，同一 Bot 可以管理多个绑定群。
 - **双向续聊**：飞书和 Codex Desktop 都能向同一 Session 输入，最终回答同步回绑定群。
 - **异步输入**：普通消息可按 Session 选择 `queue` 或 `steer`；持久队列在 Bridge 重启后继续恢复。
 - **原生控制**：直接在群内查看状态、切换模型与推理强度、控制 Plan/Goal、停止当前 Turn 或管理队列，不把这些命令发送给模型。
@@ -64,12 +66,12 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用私有仓库固定候选 tag `v0.3.2-macos-rc.12`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
+macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.1`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
 
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.3.2-macos-rc.12
+tag：v0.4.0-macos-rc.1
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
 如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
@@ -161,7 +163,7 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 
 绑定群只有一名人类用户时可直接发送文本、图片或附件，无需 `@Bot`；多人群只有 `@Bot`、回复 Bot 或斜杠命令会进入 Codex，其他消息保留为普通群聊。多人普通 Prompt 固定排入新 Turn，显式 `/steer <调整方向>` 才调整当前回答。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。普通文件可以连续上传，草稿按“Session + 发送者”隔离，直到同一发送者的第一条普通文字 Prompt 到达。Session Relay 不提供 `/new`、`/use` 或全局长期任务切换；每个群的长期绑定始终指向自己的 Session，临时 `/chat` 不会修改该绑定。
 
-可选多用户模式由 Owner 在 Bridge 主机运行 `setup-project-root.ps1` 设置唯一 Project 根目录和自己的一级目录，再在 Bot 私聊或已有绑定群用 `/members add <目录名> @成员` 显式登记。每个用户只能 `/add` 自己目录中的 Project/Session；Owner 仍可看到自己目录和不属于任何成员的旧任务。把已登记成员加入绑定群即共享该 Session，但不会共享 Project 列表或目录。群内出现未登记/已停用成员时，Session 内容收发会安全停止。
+可选多用户模式由 Owner 在 Bridge 主机运行 macOS `./setup-project-root.sh` 或 Windows `.\setup-project-root.ps1`，设置唯一 Project 根目录和自己的一级目录，再在 Bot 私聊或已有绑定群用 `/members add <目录名> @成员` 显式登记。每个用户只能 `/add` 自己目录中的 Project/Session；Owner 仍可看到自己目录和不属于任何成员的旧任务。把已登记成员加入绑定群即共享该 Session，但不会共享 Project 列表或目录。群内出现未登记/已停用成员时，Session 内容收发会安全停止。
 
 ### 3. 会话命令
 
@@ -283,7 +285,7 @@ Windows：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS rc.12](docs/releases/v0.3.2-macos-rc.12.md) · [Windows rc.4](docs/releases/v0.3.2-windows-rc.4.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md)
 
 ## 开发与验证
 

@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { configureSessionAccess } from "../../../app/configure-session-access.mjs";
 import {
   appServerReadyProbe,
   loopbackPortOpen,
@@ -138,6 +140,35 @@ async function verifyFeishuAppCommand(args) {
   const summary = summarizeFeishuBridgeAppVerification(authStatus, eventDryRun);
   process.stdout.write(`${JSON.stringify(summary)}\n`);
   if (!summary.ok) process.exitCode = 1;
+}
+
+async function setupProjectRootCommand(args) {
+  assertMacOS();
+  if (args.length > 0) throw new Error("setup-project-root does not accept arguments.");
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Project root setup requires an interactive local Terminal.");
+  }
+  const prompts = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  let projectRoot;
+  let ownerDirectoryName;
+  try {
+    projectRoot = await prompts.question("Bridge Project root (absolute local directory): ");
+    ownerDirectoryName = await prompts.question("Owner directory name under that root: ");
+  } finally {
+    prompts.close();
+  }
+  if (!projectRoot.trim() || !ownerDirectoryName.trim()) {
+    throw new Error("Both Project root and Owner directory name are required.");
+  }
+  try {
+    await configureSessionAccess({ repositoryDirectory: repositoryRoot, projectRoot, ownerDirectoryName });
+  } catch (error) {
+    const code = String(error?.code || "invalid_configuration").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+    throw new Error(`Project root configuration failed (${code || "invalid_configuration"}); no path was printed.`);
+  }
+  process.stdout.write(
+    "Bridge Project root and Owner directory configured locally. Restart the Bridge before using /members or member-scoped /add.\n",
+  );
 }
 
 async function resumeRelayIfEnabled(layout) {
@@ -462,6 +493,7 @@ async function main() {
     case "setup-secret": return setupSecretCommand(args);
     case "configure-feishu-app": return configureFeishuAppCommand(args);
     case "verify-feishu-app": return verifyFeishuAppCommand(args);
+    case "setup-project-root": return setupProjectRootCommand(args);
     case "start": return startCommand(args);
     case "stop": return stopCommand(args);
     case "status": return runStatusCommand(args);
@@ -471,7 +503,7 @@ async function main() {
     case "lark-cli": return larkCliCommand(args);
     case "dependencies": return runDependenciesCommand();
     case "update": return (await import("./update.mjs")).runMacOSUpdate(args);
-    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|configure-feishu-app|verify-feishu-app|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
+    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|configure-feishu-app|verify-feishu-app|setup-project-root|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
   }
 }
 

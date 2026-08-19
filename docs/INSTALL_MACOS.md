@@ -2,7 +2,7 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 私有固定候选版为 `v0.3.2-macos-rc.12`，代码已同步到上游 `be75d65`；附件、原生媒体、串行 JSON 持久化、私聊临时 Chat 和单 Session writer 冲突隔离均已包含。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。它尚不是上游固定 release。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.1`。它在 rc.12 的 Keychain、附件、私聊临时 Chat、单 Session writer 隔离和事务升级基础上，同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限与多人群 queue/steer 语义。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
 
@@ -105,7 +105,19 @@ OAuth 命令同样会输出 verification URL。自动打开失败时，使用 CL
 
 现有配置默认保留。不要在未审核本机数据的情况下使用 `--force-config`，也不要手工编辑或输出 `bridge.config.json`。
 
-## 5. 启动与 Desktop relay
+## 5. 可选多用户 Project 目录
+
+未执行本节时，Bridge 继续保持 Owner-only，与旧 macOS 安装完全兼容。只有明确要在这台 Mac 上登记多个飞书用户时，才由 Bridge Owner 在本机可见的交互式 Terminal 中运行：
+
+```bash
+./setup-project-root.sh
+```
+
+该脚本不接受路径参数，会在 stdin 中交互询问一个绝对 Project 根目录和 Owner 的一级目录名。不得把绝对路径放入聊天、命令参数、日志、文档或 Git。一旦启用，自动流程不会把该根目录或已分配的成员目录改指到其他位置。
+
+如果在首次启动前完成设置，可直接继续下一节。已运行的安装则需用官方入口停止并重新启动 Bridge，才会载入新权限状态。随后 Owner 可在 Bot 私聊或已绑定群使用 `/members add <一级目录名> @成员` 逐人登记。新成员目录必须不存在或为空，飞书应用可用范围也必须包含该成员。
+
+## 6. 启动与 Desktop relay
 
 ```bash
 ./start-bridge.sh
@@ -145,7 +157,7 @@ Desktop 重新打开后运行：
 ./doctor.sh --require-running --require-desktop-relay --require-desktop-attached
 ```
 
-## 6. 真实验收
+## 7. 真实验收
 
 1. 在当前 Codex 任务中使用安装后的 `$feishu-session-bind`，为本任务创建或复用只有当前用户与 Bot 的专属绑定群；
 2. 以该 skill 返回的绑定群作为初次绑定结果，不要求用户先创建 Bot 私聊或发送 `/add`；`/add` 只是以后在已存在的 Bot 私聊或绑定群中的可选入口；
@@ -153,6 +165,8 @@ Desktop 重新打开后运行：
 4. 在 Desktop 的同一任务再发一条 Prompt，确认最终答案也返回飞书群；
 5. 从飞书上传一张小图和一个普通小文件，确认 Codex 能读取；让 Codex 最终回答引用一个本地文件，确认飞书收到原生附件；
 6. 再运行 `./status-bridge.sh` 和 `./doctor.sh --require-running --require-desktop-relay --require-desktop-attached`，确认 Channel、App Server、watchdog、Desktop pointer 与 Desktop attachment 仍全部正常。
+
+如果已启用多用户 Project 目录，还必须验收：Owner 与一名已登记成员的 `/add` 列表互不泄露；成员只能在自己目录内新建 Project/任务；把成员加入绑定群后可共享该 Session，但不获得 Owner Project 列表；多人群的普通 Prompt 需 `@Bot` 或回复 Bot 且固定 queue，`/steer` 只允许 Session owner 或当前 Turn 初始发起者执行；两名成员的附件草稿互不混合。
 
 只有上述实测完成才算部署成功。
 
@@ -188,6 +202,8 @@ LaunchAgent 位于 `$HOME/Library/LaunchAgents`，标签为：
 
 运行日志位于配置 workspace 的 `work/feishu-codex-bridge` 与 `$HOME/Library/Logs/FeishuCodexBridge`。日志可能包含本机运行信息，不要整份粘贴到公开渠道。
 
+多用户目录和成员的完整行为见 [Session Relay 参考](SESSION_RELAY.md#多用户目录与成员登记)。
+
 ## 更新固定版本
 
 macOS 升级器只接受明确的语义化 release tag：
@@ -203,7 +219,7 @@ git remote get-url private
 ./update.sh --version <目标 private release tag> --remote private
 ```
 
-`--remote` 只接受 `origin` 或 `private`；选中远端必须精确匹配受维护的公开仓库或 `ninmon/feishu-codex-bridge-private`，升级器不会改写 remote。私有仓库访问由已登录的 GitHub CLI/Git credential helper 提供，不得把访问 Token 写进 URL、命令参数或聊天。全新 rc.12 私有安装的 `origin` 已指向私有仓库，仍可省略 `--remote`。
+`--remote` 只接受 `origin` 或 `private`；选中远端必须精确匹配受维护的公开仓库或 `ninmon/feishu-codex-bridge-private`，升级器不会改写 remote。私有仓库访问由已登录的 GitHub CLI/Git credential helper 提供，不得把访问 Token 写进 URL、命令参数或聊天。全新 v0.4 macOS 私有安装的 `origin` 已指向私有仓库，仍可省略 `--remote`。
 
 运行更新前必须完全退出 ChatGPT/Codex Desktop，并从独立的 macOS Terminal 执行上述命令。不得从正在使用该共享 App Server 的 Codex 任务中执行自更新。升级器会在停止任何服务之前检查这两项条件，检测到活跃 Codex 任务、Desktop 进程或 Desktop 内嵌 App Server 时会直接拒绝更新。公开仓库、上游仓库和受维护的私有发行仓库均使用相同的固定 tag 校验与安全更新流程。
 

@@ -234,7 +234,15 @@ Owner 自己的绑定仍要求 Feed 标签成功后才持久化。Feed 标签属
 
 ## 多用户目录与成员登记
 
-多用户是显式启用的兼容扩展；本轮提供 Windows 本机设置入口。旧安装不运行下列设置时继续保持 Owner-only：
+多用户是显式启用的兼容扩展。旧安装不运行下列设置时继续保持 Owner-only。
+
+macOS：
+
+```bash
+./setup-project-root.sh
+```
+
+Windows：
 
 ```powershell
 .\setup-project-root.ps1

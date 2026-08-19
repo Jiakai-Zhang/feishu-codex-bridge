@@ -105,7 +105,7 @@ export async function executeMembersCommand(command, {
 
 export function publicMembersFailure(error) {
   switch (error?.code) {
-    case "project_root_missing": return "请先在 Bridge 主机上运行 `setup-project-root.ps1` 设置 Project 根目录。";
+    case "project_root_missing": return "请先在 Bridge 主机上运行 macOS `setup-project-root.sh` 或 Windows `setup-project-root.ps1` 设置 Project 根目录。";
     case "member_directory_not_empty": return "指定的成员目录已存在且不为空；为避免接管已有数据，没有添加该成员。";
     case "member_directory_conflict": return "该成员目录名已经分配给其他用户。";
     case "member_directory_immutable": return "该成员已有固定目录，不能通过飞书自动改到另一个目录。";

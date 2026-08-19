@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”，确保安装和 Doctor 能访问当前用户的 macOS Keychain。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文锁定到 `v0.3.2-macos-rc.12`。它保留当前对话 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试与飞书直连校验隔离，并加入原生媒体、临时 Chat、单 Session writer 冲突隔离和完整升级回滚。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文锁定到 `v0.4.0-macos-rc.1`。它保留 rc.12 的 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试、飞书直连校验隔离与完整升级回滚，并同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限、多人群 queue/steer 和按发送者隔离的附件草稿。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge-private.git
-- tag：v0.3.2-macos-rc.12
+- tag：v0.4.0-macos-rc.1
 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
@@ -54,7 +54,7 @@
 
    如果缺少系统依赖，先说明缺少什么并请求用户批准；不要擅自选择 Homebrew 或其他系统安装方式。如果系统电脑名称为空，先让用户在 macOS“系统设置 > 通用 > 共享”中设置，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.3.2-macos-rc.12。
+2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.4.0-macos-rc.1。
    - 使用 GitHub CLI 的已登录凭据克隆私有仓库；不得把 GitHub Token 放入 URL、命令参数、聊天或日志；
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
@@ -151,14 +151,22 @@
     - 不得手工编辑 bridge.config.json；
     - 不得输出本机配置、身份标识或本机任务路径。
 
-11. 启动并验证 Bridge：
+11. 多用户 Project 目录是可选能力，不要为单用户安装增加不必要的配置：
+    - 如果用户在当前部署请求中没有明确要求“同机多用户”，不要额外询问，不运行设置脚本；Bridge 保持 Owner-only；
+    - 如果用户已明确要求同机多用户，在本机可见的独立 Terminal 中让 Bridge Owner 亲自运行：
+      ./setup-project-root.sh
+    - 脚本会交互询问绝对 Project 根目录和 Owner 的一级目录名；不得在聊天、命令参数、日志或文档中代输、捕获或回显该路径；
+    - 绝对路径只通过脚本 stdin 进入本机私有状态，不得放入 bridge.config.json 或 Git；
+    - 新成员以后由 Owner 在 Bot 私聊或已绑定群用 `/members add <一级目录名> @成员` 登记；不替用户推断成员、目录或自动邀请任何人。
+
+12. 启动并验证 Bridge：
     - ./start-bridge.sh
     - ./configure-codex-desktop-relay.sh
     - ./doctor.sh --require-running --require-desktop-relay
 
     如果检查失败，先诊断具体检查项。不得通过删除配置、凭据或重建应用来绕过问题。
 
-12. 在给出 Desktop 启动命令前，必须明确询问并等待用户回答：
+13. 在给出 Desktop 启动命令前，必须明确询问并等待用户回答：
 
     “这台 Mac 上 Codex 访问服务是直连，还是需要本机代理？不需要代理请回复‘直连’；需要代理请提供一个无认证、带明确端口的 loopback URL，例如 http://127.0.0.1:7897。不要提供用户名、密码或远程代理地址。”
 
@@ -170,33 +178,35 @@
     - 代理只应用于 Desktop 与共享 Codex App Server；飞书 Bridge、Channel 和 watchdog 保持直连。
     - 代理状态变化后，启动脚本必须重启并验证共享 App Server，再重新注册 relay watchdog；必须等待 watchdog 保持加载并发布新鲜 ready 心跳。首次注册未驻留时由脚本自动完整重试一次，两次均失败才停止，不得继续打开 Desktop，也不得把手工重跑 configure-codex-desktop-relay.sh 当作正常安装步骤。
 
-13. 最终启动 Desktop 前：
+14. 最终启动 Desktop 前：
     - 在当前仓库目录为用户打开一个独立 Terminal；
-    - 只给出第 12 步选定的那一条启动命令；
+    - 只给出第 13 步选定的那一条启动命令；
     - 要求用户完全退出 ChatGPT/Codex Desktop，确认应用进程结束；
     - 停止当前回合，等待用户从独立 Terminal 运行命令并重新打开 Desktop。
 
     不得从正在使用共享 App Server 的 Codex 任务中强制退出、杀死或自行重启 Desktop。
 
-14. Desktop 重新打开、用户回到当前任务后，运行：
+15. Desktop 重新打开、用户回到当前任务后，运行：
     ./doctor.sh --require-running --require-desktop-relay --require-desktop-attached
 
     只有全部 Doctor 检查通过，且 Bridge Channel、共享 App Server、watchdog 和 Desktop relay 都健康时，才能进入真实验收。
 
-15. 使用安装后的 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书绑定群。
+16. 使用安装后的 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书绑定群。
     - 初次绑定以该 skill 成功返回的群为准；
     - 不要再要求用户先搜索 Bot、创建 Bot 私聊或发送 /add；
     - /add 仅是用户以后在已经存在的 Bot 私聊或已绑定群中的可选手工入口，不是本安装的前置条件；
     - 不得在聊天中输出 user/bot open ID、chat ID、Codex task ID 或任务路径。
 
-16. 在绑定群完成真实验收：
+17. 在绑定群完成真实验收：
     - 从飞书向 Codex 发送一条文本，确认进入同一任务并返回最终回答；
     - 从 Desktop 的同一任务发送一条文本，确认结果返回绑定群；
     - 从飞书发送一张小图和一个普通小文件，确认 Codex 可以读取；
     - 让 Codex 的最终回答引用一个本地文件，确认飞书收到原生附件；
     - 再运行 ./status-bridge.sh 和严格 Doctor。
 
-17. 安全与完成标准：
+    如果第 11 步启用了多用户，还必须先由用户把一名测试成员加入应用可用范围并完成必要的发布/审批，再由 Owner 使用 `/members add` 登记。实测 Owner 与成员的 `/add` 列表隔离、成员目录内新建 Project/任务、把成员加入绑定群后的 Session 共享、多人群 `@Bot`/queue/`/steer` 权限、按发送者隔离的附件草稿，以及未登记成员加群时的 fail-closed。成员身份和本机目录不得输出到聊天或日志。
+
+18. 安全与完成标准：
     - 除人工认证停点中 Lark CLI 原样生成的一次性 verification URL，以及应用模板脚本生成的临时本机 loopback URL 外，不得在聊天、日志、命令参数、文档或 Git 中输出 App Secret、OAuth token、App ID、device code、user/bot open ID、chat ID、Codex task ID、本机配置或任务路径；
     - 不得修改 Codex 全局状态来伪造 Project 归属；
     - 不得删除或覆盖用户文件；
@@ -212,6 +222,7 @@
 - `bootstrap.sh` 安装仓库锁定的 Lark CLI，无需全局安装。
 - `configure-feishu-app.sh` 把 11 项权限和消息事件合并到飞书官方的一次确认页；默认已有的 Bot、长连接与消息事件不再重复逐页设置。
 - `setup-channel-secret.sh` 现在可以在生成 Bridge 配置前运行，因此 Secret 输入紧跟应用创建。
+- `setup-project-root.sh` 与 Windows v0.4 共享同一访问状态模型，但只在用户明确要求同机多用户时才交互执行；单用户默认仍是 Owner-only。
 - 直连或代理是用户必须明确回答的安装选项，安装代理不得自行假设。
 - 初次绑定直接使用 `$feishu-session-bind`；Bot 私聊中的 `/add` 不再是验收前置条件。
 - Lark CLI 认证始终向用户提供当次 verification URL；应用模板脚本提供不含 App ID 的临时本机备用 URL。
