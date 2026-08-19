@@ -19,14 +19,21 @@ function withNotice(markdown, notice) {
 }
 
 function projectMenu(catalog, notice) {
+  const independentLabel = catalog.independentLabel || "独立";
   const lines = [
     "### 创建 Session 群",
     "",
     "回复编号选择任务归属：",
     "",
-    choiceLine(1, "**独立**"),
+    choiceLine(1, `**${independentLabel}**`),
   ];
-  catalog.projects.forEach((project, index) => lines.push(choiceLine(index + 2, project.name)));
+  catalog.projects.forEach((project, index) => {
+    const suffix = project.accessKind === "unassigned" ? " · 无归属" : "";
+    lines.push(choiceLine(index + 2, `${project.name}${suffix}`));
+  });
+  if (catalog.canCreateProject) {
+    lines.push(choiceLine(catalog.projects.length + 2, "**新建 Project**"));
+  }
   lines.push("", "发送 `/cancel` 取消。");
   return withNotice(lines.join("\n"), notice);
 }
@@ -87,10 +94,10 @@ function successReply(result, { projectTaskCreated = false } = {}) {
     "### Session 群已创建",
     "",
     `- 群名：${result.groupName}`,
-    `- 标签：${result.feedGroupName}`,
+    ...(result.feedGroupName ? [`- 标签：${result.feedGroupName}`] : []),
     "- 绑定：一个群固定对应一个 Codex 任务",
     "",
-    "Bridge 将自动重载；随后可在新群中直接发送 Prompt，无需 @Bot。",
+    "Bridge 将自动重载；群内只有一名用户时可直接发送 Prompt，无需 @Bot。邀请其他已启用成员进群后即共享 Session，多人聊天需 @Bot。",
   ];
   if (projectTaskCreated) {
     lines.push(
@@ -107,6 +114,7 @@ export class SessionAddFlow {
     provision,
     createIndependent,
     createProject,
+    createWorkspaceProject,
     now = () => Date.now(),
     ttlMs = 15 * 60_000,
     pageSize = 20,
@@ -115,6 +123,7 @@ export class SessionAddFlow {
     this.provision = provision;
     this.createIndependent = createIndependent;
     this.createProject = createProject;
+    this.createWorkspaceProject = createWorkspaceProject;
     this.now = now;
     this.ttlMs = ttlMs;
     this.pageSize = pageSize;
@@ -133,19 +142,20 @@ export class SessionAddFlow {
     return this.states.delete(conversationId);
   }
 
-  async begin(conversationId) {
-    const catalog = await this.loadCatalog();
+  async begin(conversationId, actorOpenId) {
+    const catalog = await this.loadCatalog(actorOpenId);
     this.states.set(conversationId, {
       step: "project",
       catalog,
+      actorOpenId,
       updatedAtMs: this.now(),
     });
     return { handled: true, reply: projectMenu(catalog) };
   }
 
-  async handle({ conversationId, text }) {
+  async handle({ conversationId, text, actorOpenId }) {
     const content = String(text || "").trim();
-    if (/^\/add(?:@[^\s]+)?$/i.test(content)) return this.begin(conversationId);
+    if (/^\/add(?:@[^\s]+)?$/i.test(content)) return this.begin(conversationId, actorOpenId);
     if (/^\/cancel(?:@[^\s]+)?$/i.test(content)) {
       if (!this.has(conversationId)) return { handled: false };
       this.states.delete(conversationId);
@@ -153,15 +163,28 @@ export class SessionAddFlow {
     }
     if (!this.has(conversationId)) return { handled: false };
     const state = this.states.get(conversationId);
+    if (state.actorOpenId && actorOpenId && state.actorOpenId !== actorOpenId) {
+      return { handled: true, reply: "这个创建流程属于另一名用户，请发送 `/add` 开始自己的流程。" };
+    }
     state.updatedAtMs = this.now();
 
     if (state.step === "project") {
       const number = selectionNumber(content);
-      if (!number || number > state.catalog.projects.length + 1) {
-        return { handled: true, reply: `请输入 1-${state.catalog.projects.length + 1} 的 Project 编号，或发送 \`/cancel\`。` };
+      const maxChoice = state.catalog.projects.length + 1 + (state.catalog.canCreateProject ? 1 : 0);
+      if (!number || number > maxChoice) {
+        return { handled: true, reply: `请输入 1-${maxChoice} 的 Project 编号，或发送 \`/cancel\`。` };
+      }
+      if (state.catalog.canCreateProject && number === state.catalog.projects.length + 2) {
+        state.step = "new-workspace-project-name";
+        return { handled: true, reply: "请输入新 Project 名称。Bridge 只会在你的个人 Project 目录中创建它。" };
       }
       const selection = number === 1
-        ? { kind: "independent", id: "independent", name: "独立", sessions: state.catalog.independent }
+        ? {
+            kind: "independent",
+            id: "independent",
+            name: state.catalog.independentLabel || "独立",
+            sessions: state.catalog.independent,
+          }
         : { ...state.catalog.projects[number - 2], kind: "project" };
       Object.assign(state, {
         step: "session",
@@ -178,7 +201,7 @@ export class SessionAddFlow {
       if (!independent && state.sessions.length === 0) {
         const action = selectionNumber(content);
         if (action === 1 || content === "重新扫描") {
-          const catalog = await this.loadCatalog();
+          const catalog = await this.loadCatalog(state.actorOpenId);
           const project = catalog.projects.find(({ id }) => id === state.selection.id);
           state.catalog = catalog;
           if (!project) {
@@ -232,7 +255,8 @@ export class SessionAddFlow {
       if (!session) {
         return { handled: true, reply: "请输入列表中的任务编号，或发送 `/cancel`。" };
       }
-      const result = await this.provision(session.id);
+      const options = state.actorOpenId ? { ownerOpenId: state.actorOpenId } : undefined;
+      const result = await this.provision(session.id, options);
       this.states.delete(conversationId);
       return { handled: true, reply: successReply(result), result, restart: !result.alreadyBound };
     }
@@ -241,8 +265,12 @@ export class SessionAddFlow {
       if (!content || content.length > 100 || content.startsWith("/")) {
         return { handled: true, reply: "任务名称需要是 1-100 个字符，且不能以 `/` 开头。" };
       }
-      const session = await this.createProject({ name: content, project: state.selection });
-      const result = await this.provision(session.id, { session });
+      const session = await this.createProject({
+        name: content,
+        project: state.selection,
+        actorOpenId: state.actorOpenId,
+      });
+      const result = await this.provision(session.id, { session, ownerOpenId: state.actorOpenId });
       this.states.delete(conversationId);
       return {
         handled: true,
@@ -257,15 +285,38 @@ export class SessionAddFlow {
         return { handled: true, reply: "任务名称需要是 1-100 个字符，且不能以 `/` 开头。" };
       }
       state.taskName = content;
+      if (state.catalog.independentCreateMode === "member-root") {
+        const session = await this.createIndependent({ name: content, actorOpenId: state.actorOpenId });
+        const result = await this.provision(session.id, { session, ownerOpenId: state.actorOpenId });
+        this.states.delete(conversationId);
+        return { handled: true, reply: successReply(result), result, restart: !result.alreadyBound };
+      }
       state.step = "new-cwd";
       return { handled: true, reply: "请输入新独立任务使用的本机绝对工作目录。" };
     }
 
     if (state.step === "new-cwd") {
-      const session = await this.createIndependent({ name: state.taskName, cwd: content });
-      const result = await this.provision(session.id, { session });
+      const session = await this.createIndependent({ name: state.taskName, cwd: content, actorOpenId: state.actorOpenId });
+      const result = await this.provision(session.id, { session, ownerOpenId: state.actorOpenId });
       this.states.delete(conversationId);
       return { handled: true, reply: successReply(result), result, restart: !result.alreadyBound };
+    }
+
+    if (state.step === "new-workspace-project-name") {
+      if (!content || content.length > 64 || content.startsWith("/")) {
+        return { handled: true, reply: "Project 名称需要是 1-64 个字符，且不能以 `/` 开头。" };
+      }
+      if (!this.createWorkspaceProject) {
+        this.states.delete(conversationId);
+        return { handled: true, reply: "当前安装尚未启用 Bridge Project 创建。" };
+      }
+      const project = await this.createWorkspaceProject({ name: content, actorOpenId: state.actorOpenId });
+      state.selection = { ...project, kind: "project" };
+      state.step = "new-project-name";
+      return {
+        handled: true,
+        reply: `Project **${project.name}** 已在你的个人目录中创建。请输入首个 Codex 任务名称。`,
+      };
     }
 
     this.states.delete(conversationId);

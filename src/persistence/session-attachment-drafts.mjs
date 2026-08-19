@@ -24,6 +24,7 @@ function normalizeRecord(record) {
     sessionThreadId,
     chatId,
     feishuThreadId: record.feishuThreadId ? String(record.feishuThreadId) : undefined,
+    senderOpenId: record.senderOpenId ? String(record.senderOpenId) : undefined,
     attachments,
     claimedBy: record.claimedBy ? String(record.claimedBy) : undefined,
     createdAt: Number(record.createdAt) || Date.now(),
@@ -41,6 +42,7 @@ function sameRecord(left, right) {
   return left.sessionThreadId === right.sessionThreadId
     && left.chatId === right.chatId
     && left.feishuThreadId === right.feishuThreadId
+    && left.senderOpenId === right.senderOpenId
     && JSON.stringify(left.attachments) === JSON.stringify(right.attachments);
 }
 
@@ -52,6 +54,11 @@ function attachmentBytes(attachments) {
   return attachments.reduce((sum, attachment) => sum + (Number(attachment.size) || 0), 0);
 }
 
+function claimedByForActor(record, actor, legacySenderOpenId) {
+  if (!record?.claimedBy) return false;
+  return actor === undefined || (record.senderOpenId || legacySenderOpenId) === actor;
+}
+
 export function shouldStageAttachmentPrompt(prompt, { hasPendingDraft = false } = {}) {
   const text = String(prompt?.text || "").trim();
   const attachments = normalizeCodexPromptAttachments(prompt?.attachments);
@@ -60,9 +67,14 @@ export function shouldStageAttachmentPrompt(prompt, { hasPendingDraft = false } 
 }
 
 export class SessionAttachmentDraftStore {
-  constructor(filePath, records = [], { maxItems = 10, maxTotalBytes = 60 * 1024 * 1024 } = {}) {
+  constructor(filePath, records = [], {
+    maxItems = 10,
+    maxTotalBytes = 60 * 1024 * 1024,
+    legacySenderOpenId,
+  } = {}) {
     this.maxItems = Math.max(1, Number(maxItems) || 10);
     this.maxTotalBytes = Math.max(1, Number(maxTotalBytes) || 60 * 1024 * 1024);
+    this.legacySenderOpenId = legacySenderOpenId ? String(legacySenderOpenId) : undefined;
     this.records = new Map(records.map((record) => {
       const value = normalizeRecord(record);
       return [value.messageId, value];
@@ -75,21 +87,23 @@ export class SessionAttachmentDraftStore {
     return new SessionAttachmentDraftStore(filePath, records, options);
   }
 
-  list(sessionThreadId, { includeClaimed = false } = {}) {
+  list(sessionThreadId, { includeClaimed = false, senderOpenId } = {}) {
     const target = sessionThreadId == null ? undefined : String(sessionThreadId);
+    const actor = senderOpenId == null ? undefined : String(senderOpenId);
     return [...this.records.values()]
       .filter((record) => target === undefined || record.sessionThreadId === target)
+      .filter((record) => actor === undefined || (record.senderOpenId || this.legacySenderOpenId) === actor)
       .filter((record) => includeClaimed || !record.claimedBy)
       .sort(compareRecords)
       .map(cloneRecord);
   }
 
-  count(sessionThreadId) {
-    return this.list(sessionThreadId).reduce((sum, record) => sum + record.attachments.length, 0);
+  count(sessionThreadId, options) {
+    return this.list(sessionThreadId, options).reduce((sum, record) => sum + record.attachments.length, 0);
   }
 
-  hasPending(sessionThreadId) {
-    return this.count(sessionThreadId) > 0;
+  hasPending(sessionThreadId, options) {
+    return this.count(sessionThreadId, options) > 0;
   }
 
   protectedMessageIds() {
@@ -113,11 +127,12 @@ export class SessionAttachmentDraftStore {
       }
       return Object.freeze({
         record: Object.freeze(cloneRecord(existing)),
-        attachmentCount: this.count(value.sessionThreadId),
+        attachmentCount: this.count(value.sessionThreadId, { senderOpenId: value.senderOpenId || this.legacySenderOpenId }),
         alreadyStaged: true,
       });
     }
-    const pending = this.list(value.sessionThreadId);
+    const senderOpenId = value.senderOpenId || this.legacySenderOpenId;
+    const pending = this.list(value.sessionThreadId, { senderOpenId });
     const attachments = [...pending.flatMap((entry) => entry.attachments), ...value.attachments];
     if (attachments.length > this.maxItems) {
       throw new SessionAttachmentDraftError(
@@ -140,17 +155,18 @@ export class SessionAttachmentDraftStore {
     });
   }
 
-  async claim(sessionThreadId, promptMessageId, { additionalAttachments = [] } = {}) {
+  async claim(sessionThreadId, promptMessageId, { additionalAttachments = [], senderOpenId } = {}) {
     const target = String(sessionThreadId || "");
     const claimId = String(promptMessageId || "");
     if (!target) throw new TypeError("Attachment draft claim requires a sessionThreadId");
     if (!claimId) throw new TypeError("Attachment draft claim requires a promptMessageId");
     const additional = normalizeCodexPromptAttachments(additionalAttachments);
+    const actor = senderOpenId == null ? undefined : String(senderOpenId);
     const alreadyClaimed = this.list(target, { includeClaimed: true })
-      .filter(({ claimedBy }) => claimedBy === claimId);
-    const pending = this.list(target);
+      .filter((record) => record.claimedBy === claimId && (actor === undefined || (record.senderOpenId || this.legacySenderOpenId) === actor));
+    const pending = this.list(target, { senderOpenId: actor });
     const otherClaim = this.list(target, { includeClaimed: true })
-      .find(({ claimedBy }) => claimedBy && claimedBy !== claimId);
+      .find((record) => claimedByForActor(record, actor, this.legacySenderOpenId) && record.claimedBy !== claimId);
     if (otherClaim) {
       throw new SessionAttachmentDraftError(
         "attachment_draft_busy",
@@ -207,11 +223,13 @@ export class SessionAttachmentDraftStore {
     return released;
   }
 
-  async clear(sessionThreadId) {
+  async clear(sessionThreadId, { senderOpenId } = {}) {
     const target = String(sessionThreadId || "");
+    const actor = senderOpenId == null ? undefined : String(senderOpenId);
     const removed = [];
     for (const [messageId, record] of this.records) {
       if (record.sessionThreadId !== target || record.claimedBy) continue;
+      if (actor !== undefined && (record.senderOpenId || this.legacySenderOpenId) !== actor) continue;
       removed.push(cloneRecord(record));
       this.records.delete(messageId);
     }

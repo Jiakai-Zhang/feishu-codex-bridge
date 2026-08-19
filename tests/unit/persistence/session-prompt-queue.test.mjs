@@ -22,6 +22,7 @@ function record(messageId, text, sessionThreadId = "codex-thread") {
     sessionThreadId,
     chatId: "oc_group",
     feishuThreadId: "omt_topic",
+    senderOpenId: "ou_member",
     text,
     createdAt: Number(messageId.replace(/\D/g, "")) || 1,
   };
@@ -33,6 +34,7 @@ test("persists a per-Session FIFO and supports numbered removal and clearing", a
     assert.equal((await queue.enqueue(record("om_2", "second"))).position, 2);
     assert.equal((await queue.enqueue(record("om_3", "other", "other-thread"))).position, 1);
     assert.deepEqual(queue.list("codex-thread").map(({ text }) => text), ["first", "second"]);
+    assert.equal(queue.list("codex-thread")[0].senderOpenId, "ou_member");
 
     const removed = await queue.removeAt("codex-thread", 2);
     assert.equal(removed.messageId, "om_2");

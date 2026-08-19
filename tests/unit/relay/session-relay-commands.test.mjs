@@ -25,6 +25,11 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   });
   assert.deepEqual(parseSessionCommand("/stop@relay_bot"), { name: "stop", args: "", raw: "/stop@relay_bot" });
   assert.deepEqual(parseSessionCommand("/queue run tests"), { name: "queue", args: "run tests", raw: "/queue run tests" });
+  assert.deepEqual(parseSessionCommand("/steer change direction"), {
+    name: "steer",
+    args: "change direction",
+    raw: "/steer change direction",
+  });
   assert.deepEqual(parseSessionCommand("/settings progress on"), {
     name: "settings",
     args: "progress on",
@@ -153,6 +158,20 @@ test("routes stop, model, plan, and Goal commands to native controller operation
     ["setPlan", "thread-id", true],
     ["startGoal", "thread-id", "finish it"],
   ]);
+});
+
+test("routes an explicit steer independently from the Session default input mode", async () => {
+  const calls = [];
+  const result = await executeSessionCommand(parseSessionCommand("/steer use the other API"), {
+    controller: {},
+    threadId: "thread-id",
+    steerPrompt: async (text) => {
+      calls.push(text);
+      return { kind: "steered" };
+    },
+  });
+  assert.deepEqual(calls, ["use the other API"]);
+  assert.match(result, /已调整方向/);
 });
 
 test("rejects malformed recognized commands instead of sending them to Codex", async () => {

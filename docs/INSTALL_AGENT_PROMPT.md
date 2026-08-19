@@ -25,7 +25,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-macos-rc.11/
 ## Windows 从旧版升级
 
 ```text
-请按照目标 Windows release 中的 AGENTS.md、docs/INSTALL_AGENT.md 和 Release Note，把这台电脑上已有的 Feishu Codex Bridge 安全升级到我指定的精确 tag。先只读检查安装目录、origin、精确 tag、git status、Bridge、Desktop relay 与可能存在的自建 watchdog/guardian；必须使用 update.ps1 -Version <目标 tag>，保留 bridge.config.json、DPAPI App Secret、绑定、设置、队列、账本、附件和投递状态，不得 reset、clean、stash，也不得停止或删除自建守护。完成后核对精确 tag，并运行 status-bridge.ps1 与严格 Doctor。
+请按照目标 Windows release 中的 AGENTS.md、docs/INSTALL_AGENT.md 和 Release Note，把这台电脑上已有的 Feishu Codex Bridge 安全升级到我指定的精确 tag。先只读检查安装目录、origin、精确 tag、git status、Bridge、Desktop relay 的已保存直连/代理模式与可能存在的自建 watchdog/guardian；必须使用 update.ps1 -Version <目标 tag>，保留 bridge.config.json、DPAPI App Secret、绑定、成员/个人 Project 状态、设置、队列、账本、附件缓存、投递状态、relay state 和 bootstrap，不得 reset、clean、stash，也不得停止或删除自建守护。健康状态必须沿用原网络模式，不能默认改成直连；无法证明时在改变 checkout 前停止。完成后核对精确 tag，并运行 status-bridge.ps1 与严格 Doctor。
 ```
 
 新安装必须使用已存在的固定 tag，不得用 `main` 伪装成固定版本。

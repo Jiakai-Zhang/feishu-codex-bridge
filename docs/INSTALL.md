@@ -132,6 +132,8 @@ OAuth 命令同样需要将当次 verification URL 原样交给用户，不输�
 
 隔离的 `-Proxy` 模式需要能找到可直接启动的 Win32 Desktop 可执行文件。如果只安装了 packaged Desktop，启动器会安全停止，不会修改系统或用户全局代理；packaged Desktop 仍可使用默认直连模式。
 
+首次激活且尚无本机网络状态时，不带参数表示直连。以后再次运行启动器时，不带参数会沿用已验证保存的直连/代理选择，不会把已有代理静默改回直连；要主动切换必须显式使用 `-NoProxy` 或 `-Proxy <loopback URL>`。
+
 Desktop 打开后运行：
 
 ```powershell
@@ -148,6 +150,14 @@ Desktop 打开后运行：
 5. 没有附件草稿时单独发送一张图片，确认图片立即进入 Codex 原生视觉输入。再测试 `/attachments clear`，确认放弃草稿不会启动 Turn。
 6. 最后再运行 `status-bridge.ps1` 与严格 Doctor。
 
+可选多用户部署由 Owner 在主机本地运行：
+
+```powershell
+.\setup-project-root.ps1
+```
+
+脚本交互设置唯一 Project 根目录与 Owner 一级目录，随后重启 Bridge。Owner 再在 Bot 私聊或已绑定群发送 `/members add <目录名> @成员`；新成员目录必须为空，应用可用范围也必须包含该成员。未执行这一步的既有安装保持 Owner-only。
+
 ## 日常命令
 
 ```powershell
@@ -161,7 +171,7 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 
 ## 更新
 
-升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，再优雅停止 Bridge，并在本机运行目录备份 `bridge.config.json`、DPAPI 密文、Session 设置、待提交附件草稿、队列、输入账本和投递状态。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交、恢复备份并重新启动原版本；不会执行 `git reset`、`git clean` 或覆盖用户代码。
+升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，并在切换 checkout 前证明活动 Desktop relay 的直连/代理选择与 App Server 进程记录一致。随后才优雅停止 Bridge，并备份 `bridge.config.json`、DPAPI 密文、成员/Project 状态、Session 设置、待提交附件与缓存、队列、输入账本、投递状态、Desktop relay 状态和稳定 bootstrap。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交并恢复备份；不会执行 `git reset`、`git clean`、`stash` 或覆盖用户代码，也不会在回滚中重启 App Server 或改换代理。
 
 从 `v0.2.0-beta.1` 开始，后续升级使用：
 
@@ -169,7 +179,16 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 .\update.ps1 -Version <目标 release tag>
 ```
 
-Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止则保持停止。升级前若 Desktop relay 已启用，`doctor.ps1 -RequireDesktopRelay` 也会成为升级成功条件。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止且 Desktop relay 未启用时保持停止。Desktop relay 已启用时，升级器会启动 Bridge、把已保存的精确网络模式显式交给目标版本，并执行 `doctor.ps1 -RequireDesktopRelay`；目标 `install.ps1` 被要求跳过中继迁移，不能自行落回直连。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+
+健康的新版本安装通常直接运行不带网络参数的更新命令。只有保存状态不可读/缺失时，升级器才要求显式选择，并且仍会核对当前 App Server 记录：
+
+```powershell
+.\update.ps1 -Version <目标 release tag> -NoProxy
+.\update.ps1 -Version <目标 release tag> -Proxy http://127.0.0.1:7897
+```
+
+如果活动 App Server 记录也无法证明该模式，升级会在 checkout 未变更时停止。先用现有版本的 launcher/Doctor 修复模式；无法安全修复的旧版应按下面的 v0.2 路径先禁用 pointer，再升级并重新激活。
 
 ### 从 v0.2 启动故障恢复并升级
 
@@ -182,7 +201,7 @@ Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -Re
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-第一条命令先恢复 Desktop 的可启动性。升级后仍要先询问用户直连或本机代理；上例是直连，用户明确选择代理时将第三条改为 `launch-codex-desktop-with-relay.ps1 -Proxy <loopback URL>`。运行启动器前完全退出 Desktop；若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
+第一条命令先恢复 Desktop 的可启动性。因为 v0.2 没有可证明的 App Server 网络记录，禁用后升级是安全迁移边界；升级完成再明确选择直连或代理。上例是直连，用户明确选择代理时将第三条改为 `launch-codex-desktop-with-relay.ps1 -Proxy <loopback URL>`。运行启动器前完全退出 Desktop；若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
 
 ### 已有自建守护的升级
 

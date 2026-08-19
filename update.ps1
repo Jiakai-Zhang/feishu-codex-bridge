@@ -4,6 +4,8 @@ param(
     [string]$Version,
     [string]$InstallRoot = $PSScriptRoot,
     [switch]$StartBridge,
+    [string]$Proxy,
+    [switch]$NoProxy,
     [switch]$TestMode
 )
 
@@ -11,6 +13,23 @@ $ErrorActionPreference = 'Stop'
 
 if ($env:OS -ne 'Windows_NT') {
     throw 'This updater supports Windows only.'
+}
+if ($PSBoundParameters.ContainsKey('Proxy') -and $NoProxy) {
+    throw '-Proxy cannot be combined with -NoProxy.'
+}
+
+function ConvertTo-SafeLoopbackProxy {
+    param([string]$Value)
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    if ($text -notmatch '^(?i)(https?|socks4|socks5)://(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})/?$') {
+        throw 'The Desktop proxy must be an unauthenticated loopback URL with an explicit port.'
+    }
+    $uri = [Uri]$text
+    if ($uri.Port -lt 1 -or $uri.Port -gt 65535) {
+        throw 'The Desktop proxy port must be between 1 and 65535.'
+    }
+    return $text.TrimEnd('/')
 }
 
 function Get-CommandPath {
@@ -87,7 +106,9 @@ function New-RecoveryBackup {
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][string]$RuntimeDirectory,
         [Parameter(Mandatory)][string]$SourceCommit,
-        [Parameter(Mandatory)][string]$TargetVersion
+        [Parameter(Mandatory)][string]$TargetVersion,
+        [string]$DesktopRelayStatePath,
+        [string]$DesktopRelayBootstrapPath
     )
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
     $safeVersion = $TargetVersion -replace '[^0-9A-Za-z.-]', '_'
@@ -110,7 +131,12 @@ function New-RecoveryBackup {
         'session-relay-input-ledger.json',
         'session-relay-prompt-queue.json',
         'session-relay-settings.json',
-        'session-relay-attachment-drafts.json'
+        'session-relay-attachment-drafts.json',
+        'session-relay-temporary-chats.json',
+        'session-relay-long-answer-documents.json',
+        'session-relay-stream-cards.json',
+        'session-relay-access.json',
+        'codex-app-server-environment.json'
     )
     $backedUpNames = [Collections.Generic.List[string]]::new()
     foreach ($name in $stateNames) {
@@ -126,7 +152,11 @@ function New-RecoveryBackup {
             $backedUpNames.Add($_.Name)
         }
 
-    foreach ($directoryName in @('session-binding-requests', 'collaboration-inbox')) {
+    foreach ($directoryName in @(
+        'session-binding-requests',
+        'collaboration-inbox',
+        'session-relay-inbound-attachments'
+    )) {
         $source = Join-Path $RuntimeDirectory $directoryName
         if (Test-Path -LiteralPath $source -PathType Container) {
             $destination = Join-Path $runtimeBackupDirectory $directoryName
@@ -135,6 +165,18 @@ function New-RecoveryBackup {
                 ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force }
             $backedUpNames.Add("$directoryName/")
         }
+    }
+
+    $bootstrapBackupDirectory = Join-Path $backupDirectory 'desktop-relay-bootstrap'
+    foreach ($item in @(
+        @{ Source = $DesktopRelayStatePath; Name = 'desktop-relay-state.json' },
+        @{ Source = $DesktopRelayBootstrapPath; Name = 'desktop-relay-bootstrap.ps1' }
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$item.Source) -or
+            -not (Test-Path -LiteralPath ([string]$item.Source) -PathType Leaf)) { continue }
+        New-Item -ItemType Directory -Force -Path $bootstrapBackupDirectory | Out-Null
+        Copy-Item -LiteralPath ([string]$item.Source) -Destination (Join-Path $bootstrapBackupDirectory $item.Name) -Force
+        $backedUpNames.Add("desktop-relay-bootstrap/$($item.Name)")
     }
 
     $manifest = [ordered]@{
@@ -156,7 +198,9 @@ function Restore-RecoveryBackup {
     param(
         [Parameter(Mandatory)][string]$BackupDirectory,
         [Parameter(Mandatory)][string]$ConfigPath,
-        [Parameter(Mandatory)][string]$RuntimeDirectory
+        [Parameter(Mandatory)][string]$RuntimeDirectory,
+        [string]$DesktopRelayStatePath,
+        [string]$DesktopRelayBootstrapPath
     )
     $configBackup = Join-Path $BackupDirectory 'bridge.config.json'
     if (Test-Path -LiteralPath $configBackup -PathType Leaf) {
@@ -173,6 +217,17 @@ function Restore-RecoveryBackup {
             Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue |
                 ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force }
         }
+
+    $bootstrapBackupDirectory = Join-Path $BackupDirectory 'desktop-relay-bootstrap'
+    foreach ($item in @(
+        @{ Backup = (Join-Path $bootstrapBackupDirectory 'desktop-relay-state.json'); Destination = $DesktopRelayStatePath },
+        @{ Backup = (Join-Path $bootstrapBackupDirectory 'desktop-relay-bootstrap.ps1'); Destination = $DesktopRelayBootstrapPath }
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$item.Destination) -or
+            -not (Test-Path -LiteralPath ([string]$item.Backup) -PathType Leaf)) { continue }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent ([string]$item.Destination)) | Out-Null
+        Copy-Item -LiteralPath ([string]$item.Backup) -Destination ([string]$item.Destination) -Force
+    }
 }
 
 $gitPath = Get-CommandPath -Name 'git.exe'
@@ -211,11 +266,94 @@ if ($TestMode -and -not [string]::IsNullOrWhiteSpace($env:FEISHU_CODEX_BRIDGE_UP
 $desktopRelayWasEnabled = -not [string]::IsNullOrWhiteSpace($expectedDesktopRelayUrl) -and
     $currentDesktopRelayUrl -eq $expectedDesktopRelayUrl
 
+$desktopRelayBootstrapRoot = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap'
+$desktopRelayStatePath = Join-Path $desktopRelayBootstrapRoot 'desktop-relay-state.json'
+$desktopRelayBootstrapPath = Join-Path $desktopRelayBootstrapRoot 'desktop-relay-bootstrap.ps1'
+if ($TestMode) {
+    if (-not [string]::IsNullOrWhiteSpace($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH)) {
+        $desktopRelayStatePath = [IO.Path]::GetFullPath($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH)) {
+        $desktopRelayBootstrapPath = [IO.Path]::GetFullPath($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH)
+    }
+}
+
+$savedDesktopRelayState = $null
+if (Test-Path -LiteralPath $desktopRelayStatePath -PathType Leaf) {
+    try {
+        $savedDesktopRelayState = Get-Content -Raw -LiteralPath $desktopRelayStatePath | ConvertFrom-Json
+    } catch {
+        if ($desktopRelayWasEnabled -and
+            -not $PSBoundParameters.ContainsKey('Proxy') -and -not $NoProxy) {
+            throw 'The saved Desktop relay network selection is unreadable. Retry with an explicit -Proxy or -NoProxy choice before changing the installation.'
+        }
+    }
+}
+
+$desktopNetworkMode = $null
+$desktopProxyUrl = $null
+if ($PSBoundParameters.ContainsKey('Proxy')) {
+    $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value $Proxy
+    if (-not $desktopProxyUrl) { throw '-Proxy requires a loopback URL.' }
+    $desktopNetworkMode = 'proxy'
+} elseif ($NoProxy) {
+    $desktopNetworkMode = 'direct'
+} elseif ($savedDesktopRelayState) {
+    $savedExpectedUrl = [string]$savedDesktopRelayState.expectedUrl
+    if (-not [string]::IsNullOrWhiteSpace($savedExpectedUrl) -and $savedExpectedUrl -ne $expectedDesktopRelayUrl) {
+        throw 'The saved Desktop relay belongs to a different App Server URL. Retry with an explicit -Proxy or -NoProxy choice; the updater will not guess.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$savedDesktopRelayState.desktopProxyUrl)) {
+        $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value ([string]$savedDesktopRelayState.desktopProxyUrl)
+        $desktopNetworkMode = 'proxy'
+    } else {
+        $desktopNetworkMode = 'direct'
+    }
+}
+
+if ($desktopRelayWasEnabled -and -not $desktopNetworkMode) {
+    throw 'Desktop relay is enabled, but its direct/proxy selection cannot be proven. Retry with -NoProxy or -Proxy <loopback-url>; the updater has not changed the installation.'
+}
+
+if ($desktopRelayWasEnabled) {
+    $networkStatePath = Join-Path $runtimeDirectory 'codex-app-server-environment.json'
+    $networkPidPath = Join-Path $runtimeDirectory 'codex-app-server.pid'
+    $networkRecordMatches = $false
+    try {
+        $networkRecord = Get-Content -Raw -LiteralPath $networkStatePath | ConvertFrom-Json
+        $networkProcessId = [int](Get-Content -Raw -LiteralPath $networkPidPath)
+        if ([int]$networkRecord.processId -ne $networkProcessId) { throw 'App Server PID record mismatch' }
+        if ($TestMode) {
+            $networkProcess = Get-Process -Id $networkProcessId -ErrorAction Stop
+        } else {
+            $networkProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$networkProcessId" -ErrorAction Stop
+            if (-not $networkProcess -or [string]$networkProcess.CommandLine -notmatch '(?i)(?:^|\s)app-server(?:\s|$)') {
+                throw 'The recorded App Server process identity is invalid'
+            }
+        }
+        if ($networkProcess -and $desktopNetworkMode -eq 'proxy') {
+            $networkRecordMatches = [string]$networkRecord.mode -eq 'proxy' -and
+                [string]$networkRecord.desktopProxyUrl -eq $desktopProxyUrl
+        } elseif ($networkProcess) {
+            $networkRecordMatches = [string]$networkRecord.mode -eq 'direct' -and
+                [string]::IsNullOrWhiteSpace([string]$networkRecord.desktopProxyUrl)
+        }
+    } catch { }
+    if (-not $networkRecordMatches) {
+        throw 'Desktop relay is enabled, but the active App Server network mode does not match the preserved selection. Repair or relaunch Desktop relay with the intended -Proxy/-NoProxy mode before updating; the installation is unchanged.'
+    }
+}
+
 $previousCommit = Invoke-Git -Arguments @('rev-parse', '--verify', 'HEAD') -Capture
 Invoke-Git -Arguments @('fetch', '--quiet', 'origin', "refs/tags/${Version}:refs/tags/${Version}")
 $targetCommit = Invoke-Git -Arguments @('rev-parse', '--verify', "refs/tags/$Version^{commit}") -Capture
+$targetInstallerSource = Invoke-Git -Arguments @('show', "${targetCommit}:install.ps1") -Capture
+if ($desktopRelayWasEnabled -and $previousCommit -ne $targetCommit -and
+    $targetInstallerSource -notmatch '(?i)SkipDesktopRelayMigration') {
+    throw 'The target release installer cannot preserve an active Desktop relay transactionally. The checkout and running Bridge are unchanged; disable Desktop relay first or choose a newer release.'
+}
 $bridgeWasRunning = Test-BridgeRunning -Config $config -RuntimeDirectory $runtimeDirectory
-$shouldStart = $bridgeWasRunning -or $StartBridge
+$shouldStart = $bridgeWasRunning -or $StartBridge -or $desktopRelayWasEnabled
 
 if ($previousCommit -eq $targetCommit) {
     Write-Output "$Version is already installed."
@@ -240,7 +378,9 @@ try {
     }
 
     $backupDirectory = New-RecoveryBackup -ConfigPath $configPath -RuntimeDirectory $runtimeDirectory `
-        -SourceCommit $previousCommit -TargetVersion $Version
+        -SourceCommit $previousCommit -TargetVersion $Version `
+        -DesktopRelayStatePath $desktopRelayStatePath `
+        -DesktopRelayBootstrapPath $desktopRelayBootstrapPath
     Write-Output 'Created a local recovery backup of configuration, credentials, and relay state.'
 
     Invoke-Git -Arguments @('checkout', '--quiet', '--detach', $Version)
@@ -250,10 +390,25 @@ try {
     & $npmPath ci --prefix $repositoryRoot --ignore-scripts=false
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
 
-    & (Join-Path $repositoryRoot 'install.ps1') -SkipDependencyInstall
+    $targetInstaller = Join-Path $repositoryRoot 'install.ps1'
+    $targetInstallerCommand = Get-Command $targetInstaller -ErrorAction Stop
+    if ($desktopRelayWasEnabled -and -not $targetInstallerCommand.Parameters.ContainsKey('SkipDesktopRelayMigration')) {
+        throw 'The target release installer cannot preserve an active Desktop relay transactionally. Disable Desktop relay first or choose a newer release.'
+    }
+    $installParameters = @{ SkipDependencyInstall = $true }
+    if ($targetInstallerCommand.Parameters.ContainsKey('SkipDesktopRelayMigration')) {
+        $installParameters['SkipDesktopRelayMigration'] = $true
+    }
+    & $targetInstaller @installParameters
 
     if ($shouldStart) {
         & (Join-Path $repositoryRoot 'start-bridge.ps1')
+        if ($desktopRelayWasEnabled) {
+            $relayConfigureParameters = @{}
+            if ($desktopNetworkMode -eq 'proxy') { $relayConfigureParameters['Proxy'] = $desktopProxyUrl }
+            else { $relayConfigureParameters['NoProxy'] = $true }
+            & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1') @relayConfigureParameters
+        }
         if ($desktopRelayWasEnabled) {
             & (Join-Path $repositoryRoot 'doctor.ps1') -RequireRunning -RequireDesktopRelay
         } else {
@@ -284,31 +439,31 @@ try {
             Invoke-Git -Arguments @('checkout', '--quiet', '--detach', $previousCommit)
         }
         if ($backupDirectory) {
-            Restore-RecoveryBackup -BackupDirectory $backupDirectory -ConfigPath $configPath -RuntimeDirectory $runtimeDirectory
+            Restore-RecoveryBackup -BackupDirectory $backupDirectory -ConfigPath $configPath `
+                -RuntimeDirectory $runtimeDirectory `
+                -DesktopRelayStatePath $desktopRelayStatePath `
+                -DesktopRelayBootstrapPath $desktopRelayBootstrapPath
         }
         if ($checkoutChanged) {
             & $npmPath ci --prefix $repositoryRoot --ignore-scripts=false
             if ($LASTEXITCODE -ne 0) { throw 'npm ci failed while restoring the previous release.' }
-            & (Join-Path $repositoryRoot 'install.ps1') -SkipDependencyInstall
+            $previousInstaller = Join-Path $repositoryRoot 'install.ps1'
+            $previousInstallParameters = @{ SkipDependencyInstall = $true }
+            $previousInstallerCommand = Get-Command $previousInstaller -ErrorAction Stop
+            if ($previousInstallerCommand.Parameters.ContainsKey('SkipDesktopRelayMigration')) {
+                $previousInstallParameters['SkipDesktopRelayMigration'] = $true
+            }
+            & $previousInstaller @previousInstallParameters
         }
         if ($bridgeWasRunning -or $StartBridge) {
             & (Join-Path $repositoryRoot 'start-bridge.ps1')
         }
         if ($desktopRelayWasEnabled) {
-            $previousStarter = Join-Path $repositoryRoot 'start-app-server.ps1'
-            if (Test-Path -LiteralPath $previousStarter -PathType Leaf) {
-                & $previousStarter | Out-Null
-                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1')
-            } elseif ($bridgeWasRunning -or $StartBridge) {
-                # v0.2 has no standalone starter. start-bridge.ps1 above has
-                # already restored its App Server, so the old pointer is safe.
-                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1')
-            } else {
-                # Never roll back to an enabled v0.2 pointer when no listener
-                # was restored. Preserve Desktop availability over the unsafe
-                # pointer while leaving the previous release and data intact.
-                & (Join-Path $repositoryRoot 'configure-codex-desktop-relay.ps1') -Disable
-            }
+            # The preflight proves the App Server network mode before checkout,
+            # and the target configure step is allowed to reuse only that exact
+            # process. Restore the previous bootstrap/state without restarting
+            # the App Server or silently changing its proxy selection.
+            & (Join-Path $repositoryRoot 'doctor.ps1') -RequireDesktopRelay
         }
     } catch {
         $rollbackError = $_.Exception.Message

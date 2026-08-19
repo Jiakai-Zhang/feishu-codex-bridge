@@ -17,7 +17,7 @@ test("fresh install does not persist the Desktop relay pointer", async () => {
   assert.equal(source.split(configureInvocation).length - 1, 1);
   assert.match(
     source,
-    /if \(-not \[string\]::IsNullOrWhiteSpace\(\$currentRelayUrl\) -and \$currentRelayUrl -eq \$expectedRelayUrl\) \{[\s\S]*configure-codex-desktop-relay\.ps1/,
+    /if \(-not \$SkipDesktopRelayMigration -and[\s\S]*-not \[string\]::IsNullOrWhiteSpace\(\$currentRelayUrl\) -and \$currentRelayUrl -eq \$expectedRelayUrl\) \{[\s\S]*configure-codex-desktop-relay\.ps1/,
   );
   assert.match(
     source,
@@ -200,13 +200,19 @@ test("Bridge status exposes the continuous watchdog health", async () => {
   assert.match(source, /heartbeatAgeSeconds[\s\S]*-le 20/);
 });
 
-test("updater requires strict relay verification when the previous relay was enabled", async () => {
+test("updater preserves and strictly verifies an enabled Desktop relay", async () => {
   const source = await readScript("update.ps1");
   assert.match(source, /\$desktopRelayWasEnabled/);
+  assert.match(source, /\$targetInstallerSource -notmatch '\(\?i\)SkipDesktopRelayMigration'/);
+  assert.match(source, /\$installParameters\['SkipDesktopRelayMigration'\] = \$true/);
+  assert.match(
+    source,
+    /if \(\$desktopNetworkMode -eq 'proxy'\) \{ \$relayConfigureParameters\['Proxy'\] = \$desktopProxyUrl \}[\s\S]*else \{ \$relayConfigureParameters\['NoProxy'\] = \$true \}/,
+  );
   assert.match(source, /doctor\.ps1'\) -RequireRunning -RequireDesktopRelay/);
   assert.match(source, /doctor\.ps1'\) -RequireDesktopRelay/);
   assert.match(
     source,
-    /Never roll back to an enabled v0\.2 pointer[\s\S]*configure-codex-desktop-relay\.ps1'\) -Disable/,
+    /Restore the previous bootstrap\/state without restarting[\s\S]*silently changing its proxy selection/,
   );
 });

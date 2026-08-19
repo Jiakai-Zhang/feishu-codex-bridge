@@ -113,3 +113,25 @@ test("restores the Feed label when a turn starts during label removal", async ()
   );
   assert.deepEqual(calls, ["tag", "restore"]);
 });
+
+test("removes a member binding even when the Owner OAuth cannot see its optional Feed label", async () => {
+  const calls = [];
+  const memberBinding = { ...binding, ownerOpenId: "ou_member" };
+  const remover = new SessionBindingRemover({
+    registry: {
+      list: async () => [memberBinding],
+      remove: async () => { calls.push("binding"); return memberBinding; },
+    },
+    feedGroupManager: {
+      removeChat: async () => { calls.push("tag"); throw new Error("not visible"); },
+      restoreChat: async () => { calls.push("restore"); },
+    },
+    shouldManageFeedGroup: () => "best-effort",
+    getStatus: async () => ({ status: { type: "idle" } }),
+    onWarning: () => calls.push("warning"),
+  });
+
+  const result = await remover.remove(memberBinding);
+  assert.deepEqual(calls, ["tag", "warning", "binding"]);
+  assert.equal(result.tagRemoved, false);
+});

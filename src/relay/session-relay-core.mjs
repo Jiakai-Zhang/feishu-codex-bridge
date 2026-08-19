@@ -8,7 +8,7 @@ export class SessionRelayError extends Error {
 
 const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video"]);
 
-export function assertRelayMessage(msg, binding) {
+export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?.ownerOpenId] } = {}) {
   if (!msg || msg.chatId !== binding.groupChatId) {
     throw new SessionRelayError("wrong_group", "Message is outside the bound group");
   }
@@ -16,8 +16,9 @@ export function assertRelayMessage(msg, binding) {
   if (msg.chatType !== expectedChatType) {
     throw new SessionRelayError("not_group", "Session Relay accepts group messages only");
   }
-  if (msg.senderIsBot !== false || msg.senderId !== binding.ownerOpenId) {
-    throw new SessionRelayError("untrusted_sender", "Message sender is not the bound human owner");
+  const authorized = new Set(authorizedOpenIds || []);
+  if (msg.senderIsBot !== false || !authorized.has(msg.senderId)) {
+    throw new SessionRelayError("untrusted_sender", "Message sender is not an authorized Session participant");
   }
   const resources = Array.isArray(msg.resources) ? msg.resources : [];
   if (!RELAY_MESSAGE_TYPES.has(String(msg.rawContentType || "")) || (msg.rawContentType !== "text" && resources.length === 0)) {
@@ -26,6 +27,34 @@ export function assertRelayMessage(msg, binding) {
   const content = String(msg.content || "");
   if (!content.trim() && resources.length === 0) throw new SessionRelayError("empty_message", "Message has no usable content");
   return content;
+}
+
+export function assertSessionGroup({ chatInfo, members, bots, binding, connectedBotOpenId, activeOpenIds }) {
+  if (chatInfo?.chatType !== "group") {
+    throw new SessionRelayError("not_group", "The binding target is not an ordinary group");
+  }
+  if (!Array.isArray(members) || !members.some(({ id }) => id === binding.ownerOpenId)) {
+    throw new SessionRelayError("owner_missing", "The Session owner must remain in the bound group");
+  }
+  if (!Array.isArray(bots) || bots.length !== 1 || bots[0]?.id !== connectedBotOpenId) {
+    throw new SessionRelayError("unexpected_bot", "The group must contain exactly this Bridge Bot as its only bot");
+  }
+  const active = new Set(activeOpenIds || [binding.ownerOpenId]);
+  if (!active.has(binding.ownerOpenId)) {
+    throw new SessionRelayError("owner_inactive", "The Session owner is not an active Bridge user");
+  }
+  const unauthorizedMembers = members.filter(({ id }) => !active.has(id));
+  if (unauthorizedMembers.length > 0) {
+    throw new SessionRelayError(
+      "unregistered_member",
+      "Every human member of a Session group must be an active Bridge user",
+    );
+  }
+  const participantOpenIds = members.map(({ id }) => id);
+  return Object.freeze({
+    participantOpenIds: Object.freeze(participantOpenIds),
+    humanMemberCount: members.length,
+  });
 }
 
 export function assertSoloGroup({ chatInfo, members, bots, binding, connectedBotOpenId }) {
@@ -43,6 +72,11 @@ export function assertSoloGroup({ chatInfo, members, bots, binding, connectedBot
     throw new SessionRelayError("not_solo", "The group must contain exactly this Bridge Bot as its only bot");
   }
   return true;
+}
+
+export function isSessionPromptAddressed(msg, { humanMemberCount = 1, replyToBot = false } = {}) {
+  if (msg?.chatType !== "group" || Number(humanMemberCount) <= 1) return true;
+  return Boolean(msg?.mentionedBot || replyToBot);
 }
 
 export function assertMatchingNames(groupName, sessionTitle) {

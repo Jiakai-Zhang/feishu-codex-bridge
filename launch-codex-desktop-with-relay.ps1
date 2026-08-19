@@ -117,13 +117,27 @@ if (@(Get-RunningDesktopProcesses).Count -gt 0) {
     throw 'ChatGPT/Codex Desktop is still running. Fully quit it, then run this launcher again.'
 }
 
+$relayUrl = [string]$config.sessionRelay.appServerUrl
+$relayStatePath = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap\desktop-relay-state.json'
 $desktopProxyUrl = $null
 if ($PSBoundParameters.ContainsKey('Proxy')) {
     $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value $Proxy
     if (-not $desktopProxyUrl) { throw '-Proxy requires a loopback URL.' }
+} elseif (-not $NoProxy -and (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) {
+    try {
+        $savedRelayState = Get-Content -Raw -LiteralPath $relayStatePath | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$savedRelayState.expectedUrl) -and
+            [string]$savedRelayState.expectedUrl -ne $relayUrl) {
+            throw 'The saved Desktop relay belongs to a different App Server URL.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$savedRelayState.desktopProxyUrl)) {
+            $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value ([string]$savedRelayState.desktopProxyUrl)
+        }
+    } catch {
+        throw 'The saved Desktop network selection is invalid. Re-run with an explicit -Proxy or -NoProxy choice.'
+    }
 }
 
-$relayUrl = [string]$config.sessionRelay.appServerUrl
 $desktopPath = Find-DesktopExecutable -RequestedPath $DesktopExecutable
 $packagedAppId = $null
 if (-not $desktopPath) { $packagedAppId = Find-PackagedDesktopAppId }
@@ -136,7 +150,7 @@ if ($desktopProxyUrl -and -not $desktopPath) {
 
 $configureParameters = @{}
 if ($desktopProxyUrl) { $configureParameters['Proxy'] = $desktopProxyUrl }
-else { $configureParameters['NoProxy'] = $true }
+elseif ($NoProxy -or -not (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) { $configureParameters['NoProxy'] = $true }
 & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1') @configureParameters
 
 $environmentNames = @('CODEX_APP_SERVER_WS_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')

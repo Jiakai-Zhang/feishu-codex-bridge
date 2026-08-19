@@ -58,7 +58,7 @@ test("Windows Lark CLI and Doctor isolate inherited Desktop proxy variables", as
   assert.match(doctor, /scopes_granted/);
 });
 
-test("Windows Desktop launcher defaults direct and accepts only explicit loopback proxy", async () => {
+test("Windows Desktop launcher preserves the saved network mode and accepts only loopback proxy", async () => {
   const [launcher, configure, appServer, bridge, installer] = await Promise.all([
     read("launch-codex-desktop-with-relay.ps1"),
     read("configure-codex-desktop-relay.ps1"),
@@ -68,7 +68,9 @@ test("Windows Desktop launcher defaults direct and accepts only explicit loopbac
   ]);
   assert.match(launcher, /if \(\$PSBoundParameters\.ContainsKey\('Proxy'\)\)/);
   assert.match(launcher, /127\\\.0\\\.0\\\.1\|localhost\|\\\[::1\\\]/);
-  assert.match(launcher, /else \{ \$configureParameters\['NoProxy'\] = \$true \}/);
+  assert.match(launcher, /desktop-relay-state\.json/);
+  assert.match(launcher, /savedRelayState\.desktopProxyUrl/);
+  assert.match(launcher, /Re-run with an explicit -Proxy or -NoProxy choice/);
   assert.match(launcher, /--proxy-server=\$desktopProxyUrl/);
   assert.match(configure, /AllowProxyRestart/);
   assert.match(configure, /desktopProxyUrl/);
@@ -82,6 +84,32 @@ test("Windows Desktop launcher defaults direct and accepts only explicit loopbac
   assert.match(appServer, /refusing to restart it for a proxy change/);
   assert.match(bridge, /Remove-Item -LiteralPath "Env:\$name"/);
   assert.match(installer, /launch-codex-desktop-with-relay\.ps1/);
+  assert.match(installer, /SkipDesktopRelayMigration/);
+});
+
+test("Windows updater locks and backs up the Desktop network selection before checkout", async () => {
+  const updater = await read("update.ps1");
+  assert.match(updater, /\[string\]\$Proxy/);
+  assert.match(updater, /\[switch\]\$NoProxy/);
+  assert.match(updater, /active App Server network mode does not match the preserved selection/);
+  assert.match(updater, /SkipDesktopRelayMigration/);
+  assert.match(updater, /desktop-relay-state\.json/);
+  assert.match(updater, /desktop-relay-bootstrap\.ps1/);
+  assert.match(updater, /session-relay-access\.json/);
+  assert.match(updater, /session-relay-inbound-attachments/);
+});
+
+test("Windows multi-user Project root setup keeps the absolute path off command arguments", async () => {
+  const [setup, entry] = await Promise.all([
+    read("setup-project-root.ps1"),
+    read("src/app/configure-session-access.mjs"),
+  ]);
+  assert.match(setup, /Read-Host 'Bridge Project root/);
+  assert.match(setup, /ConvertTo-Json -Compress/);
+  assert.match(setup, /\$request \| & \$node \$entry/);
+  assert.doesNotMatch(setup, /-ProjectRoot/);
+  assert.match(entry, /session-relay-access\.json/);
+  assert.match(entry, /no path was printed/);
 });
 
 test("Windows install prompt matches the macOS onboarding contract", async () => {

@@ -166,9 +166,13 @@ test("rejects duplicate groups, duplicate sessions, and unsafe configuration", (
       bindings: [{ groupChatId: "oc_a", threadId: threadA }],
     },
   })), /loopback/);
-  assert.throws(() => normalizeSessionRelayConfig(base({
-    sessionRelay: { bindings: [{ groupChatId: "oc_a", threadId: threadA, ownerOpenId: "ou_other" }] },
-  })), /must match agent.ownerOpenId/);
+  const memberBinding = normalizeSessionRelayConfig(base({
+    sessionRelay: {
+      appServerUrl: "ws://127.0.0.1:47321/rpc",
+      bindings: [{ groupChatId: "oc_a", threadId: threadA, ownerOpenId: "ou_other" }],
+    },
+  }));
+  assert.equal(memberBinding.sessionRelay.bindings[0].ownerOpenId, "ou_other");
   assert.throws(() => normalizeSessionRelayConfig(base({
     sessionRelay: {
       appServerUrl: "ws://127.0.0.1:47321/rpc",
