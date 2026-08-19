@@ -141,13 +141,14 @@ Add-Content -LiteralPath (Join-Path $runtime 'desktop-launch.log') -Value $mode
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH = $relayBootstrapPath
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
     Write-Utf8File -Path (Join-Path $stateRoot 'desktop-running') -Content "running`n"
+    Write-Utf8File -Path (Join-Path $stateRoot 'desktop-window-visible') -Content "visible`n"
 
     & $runnerPath -Version v9.1.0-test.2 -InstallRoot $installRoot -Remote private -TestMode
     $waitingStatuses = @(Get-ChildItem -LiteralPath $stateRoot -Filter '*.status.json' -File | Where-Object {
         try { [string](Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json).state -eq 'waiting-for-desktop-exit' } catch { $false }
     })
     if ($waitingStatuses.Count -ne 1) { throw 'The foreground worker did not reach its Desktop-exit wait.' }
-    Remove-Item -LiteralPath (Join-Path $stateRoot 'desktop-running') -Force
+    Remove-Item -LiteralPath (Join-Path $stateRoot 'desktop-window-visible') -Force
 
     $statusPath = $waitingStatuses[0].FullName
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
@@ -158,6 +159,9 @@ Add-Content -LiteralPath (Join-Path $runtime 'desktop-launch.log') -Value $mode
     } while ([string]$status.state -ne 'completed' -and [DateTime]::UtcNow -lt $deadline)
     if ([string]$status.state -ne 'completed' -or -not [bool]$status.succeeded) {
         throw 'The foreground worker did not complete within the smoke-test deadline.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $stateRoot 'desktop-residual-stop.log') -PathType Leaf)) {
+        throw 'The foreground worker did not stop the verified residual Desktop process after its window closed.'
     }
 
     $tag = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
@@ -179,7 +183,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'desktop-launch.log') -Value $mode
     $dirty = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('status', '--porcelain', '--untracked-files=all') | Out-String).Trim()
     if (-not [string]::IsNullOrWhiteSpace($dirty)) { throw 'The foreground worker left the installation dirty.' }
 
-    Write-Output 'Foreground updater smoke test passed, including Desktop exit wait, proxy-preserving relaunch, and final Doctor.'
+    Write-Output 'Foreground updater smoke test passed, including residual Desktop shutdown, proxy-preserving relaunch, and final Doctor.'
 } finally {
     foreach ($name in @(
         'FEISHU_CODEX_BRIDGE_FOREGROUND_UPDATE_TEST',

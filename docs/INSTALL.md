@@ -4,7 +4,7 @@
 
 > 当前仅支持 Windows + Codex Desktop。Bridge 依赖 Codex App Server 的实验性 WebSocket 接口，因此本版本按 Beta 发布，不建议作为无人值守的生产服务。
 
-> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.4`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
+> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.5`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
 
 ## 1. 安装依赖
 
@@ -41,7 +41,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.4 --depth 1
+gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.5 --depth 1
 Set-Location .\feishu-codex-bridge-private
 npm ci
 .\lark-cli.ps1 --version
@@ -135,7 +135,7 @@ OAuth 命令同样需要将当次 verification URL 原样交给用户，不输�
 
 先让用户完全退出 Desktop，再从仓库目录的独立 PowerShell 运行唯一选定的命令。启动器只将代理应用到 Desktop 和共享 App Server；Bridge、Channel、watchdog 与飞书 CLI 保持直连。它会验证 App Server 拥有权、Scheduled Task watchdog 和同一 activation 的新鲜 heartbeat；失败时撤销 Bridge-owned pointer，不继续打开 Desktop。
 
-隔离的 `-Proxy` 模式需要能找到可直接启动的 Win32 Desktop 可执行文件。如果只安装了 packaged Desktop，启动器会安全停止，不会修改系统或用户全局代理；packaged Desktop 仍可使用默认直连模式。
+隔离的 `-Proxy` 模式需要可验证的 Desktop 可执行文件。Win32 安装直接使用其可执行文件；packaged Desktop 则从 `Get-AppxPackage OpenAI.Codex` 与 `AppxManifest.xml` 动态解析当前包内的真实 `ChatGPT.exe`，并仅向该进程注入 loopback 代理。清单或可执行文件无法验证时安全停止，不修改系统或用户全局代理。
 
 首次激活且尚无本机网络状态时，不带参数表示直连。以后再次运行启动器时，不带参数会沿用已验证保存的直连/代理选择，不会把已有代理静默改回直连；要主动切换必须显式使用 `-NoProxy` 或 `-Proxy <loopback URL>`。
 
@@ -176,7 +176,7 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 
 ## 更新
 
-交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 启动可见前台升级器，用户只需在提示后完全退出 Desktop；升级器会按升级前保存的网络模式自动重开 Desktop 并完成最终 Doctor。以下安全检查与回滚边界不会被省略。
+交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 启动可见前台升级器，用户只需在提示后关闭 Desktop 可见窗口；升级器会安全结束已验证的残留 Desktop 进程、按升级前保存的网络模式自动重开并完成最终 Doctor。以下安全检查与回滚边界不会被省略。
 
 升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，并在切换 checkout 前证明活动 Desktop relay 的直连/代理选择与 App Server 进程记录一致。随后才优雅停止 Bridge，并备份 `bridge.config.json`、DPAPI 密文、成员/Project 状态、Session 设置、待提交附件与缓存、队列、输入账本、投递状态、Desktop relay 状态和稳定 bootstrap。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交并恢复备份；不会执行 `git reset`、`git clean`、`stash` 或覆盖用户代码，也不会在回滚中重启 App Server 或改换代理。
 

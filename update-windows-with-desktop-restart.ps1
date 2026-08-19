@@ -111,20 +111,85 @@ function Test-ApprovedUpdateRemote {
 }
 
 function Get-RunningDesktopProcesses {
+    param([string[]]$ExecutablePaths = @())
     if ($TestMode) {
         $marker = Join-Path $stateRoot 'desktop-running'
         if (Test-Path -LiteralPath $marker -PathType Leaf) {
-            return @([pscustomobject]@{ ProcessId = 1 })
+            return @([pscustomobject]@{
+                ProcessId = 1
+                Name = 'ChatGPT.exe'
+                ExecutablePath = 'C:\TestOnly\ChatGPT.exe'
+                CommandLine = ''
+            })
         }
         return @()
     }
+    $knownPaths = @($ExecutablePaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+        ForEach-Object {
+            try { [IO.Path]::GetFullPath([string]$_) } catch { $null }
+        } | Where-Object { $_ })
     $results = @()
     foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
         if ([string]$process.Name -notmatch '(?i)(ChatGPT|Codex).*\.exe$') { continue }
         if ([string]$process.CommandLine -match '(?i)\bapp-server\b') { continue }
+        if ($knownPaths.Count -gt 0) {
+            $processPath = [string]$process.ExecutablePath
+            if ([string]::IsNullOrWhiteSpace($processPath)) { continue }
+            try { $processPath = [IO.Path]::GetFullPath($processPath) } catch { continue }
+            if (@($knownPaths | Where-Object {
+                [string]::Equals($_, $processPath, [StringComparison]::OrdinalIgnoreCase)
+            }).Count -eq 0) { continue }
+        }
         $results += $process
     }
     return @($results)
+}
+
+function Get-DesktopExecutablePaths {
+    param([object[]]$Processes)
+    return @($Processes | ForEach-Object {
+        $processPath = [string]$_.ExecutablePath
+        if ([string]::IsNullOrWhiteSpace($processPath)) { return }
+        try { [IO.Path]::GetFullPath($processPath) } catch { return }
+    } | Sort-Object -Unique)
+}
+
+function Test-DesktopWindowVisible {
+    param([object[]]$Processes)
+    if ($TestMode) {
+        return Test-Path -LiteralPath (Join-Path $stateRoot 'desktop-window-visible') -PathType Leaf
+    }
+    foreach ($process in $Processes) {
+        $liveProcess = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
+        if ($liveProcess -and $liveProcess.MainWindowHandle -ne 0) { return $true }
+    }
+    return $false
+}
+
+function Stop-LingeringDesktopProcesses {
+    param(
+        [object[]]$Processes,
+        [string[]]$ExecutablePaths
+    )
+    if ($TestMode) {
+        Remove-Item -LiteralPath (Join-Path $stateRoot 'desktop-running') -Force -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath (Join-Path $stateRoot 'desktop-residual-stop.log') `
+            -Value 'stopped' -Encoding UTF8
+        return
+    }
+    $knownPaths = @(Get-DesktopExecutablePaths -Processes $Processes)
+    if ($ExecutablePaths.Count -eq 0 -or $knownPaths.Count -eq 0) {
+        throw 'Desktop closed its window but its executable identity could not be proven; fully quit it from the tray.'
+    }
+    foreach ($process in $Processes) {
+        $processPath = [string]$process.ExecutablePath
+        if ([string]::IsNullOrWhiteSpace($processPath)) { continue }
+        try { $processPath = [IO.Path]::GetFullPath($processPath) } catch { continue }
+        if (@($ExecutablePaths | Where-Object {
+            [string]::Equals($_, $processPath, [StringComparison]::OrdinalIgnoreCase)
+        }).Count -eq 0) { continue }
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-RelayStatePath {
@@ -307,7 +372,7 @@ function Start-ForegroundWorker {
                 } catch { }
                 if ($status) {
                     if ([string]$status.state -eq 'waiting-for-desktop-exit') {
-                        Write-Output 'Foreground upgrade is ready. Fully exit ChatGPT/Codex Desktop; the visible PowerShell will update, relaunch, and verify it.'
+                        Write-Output 'Foreground upgrade is ready. Close the ChatGPT/Codex Desktop window; the visible PowerShell will stop verified residuals, update, relaunch, and verify it.'
                         return
                     }
                     if ([string]$status.state -eq 'completed') {
@@ -402,23 +467,42 @@ function Invoke-ForegroundWorker {
         Invoke-StrictDoctor
         Invoke-TargetUpdater -UpdaterPath $temporaryUpdaterPath -Parameters $preflightParameters
         $network = Get-SavedDesktopNetwork
+        $initialDesktopProcesses = @(Get-RunningDesktopProcesses)
+        $desktopExecutablePaths = @(Get-DesktopExecutablePaths -Processes $initialDesktopProcesses)
+        $desktopWindowWasVisible = Test-DesktopWindowVisible -Processes $initialDesktopProcesses
+        $residualStopDeadline = $null
 
         Write-RunStatus -Id $RunId -TargetVersion $Version -State 'waiting-for-desktop-exit' `
-            -Detail 'Preflight passed; waiting for the user to fully exit Desktop.'
+            -Detail 'Preflight passed; waiting for the user to close the Desktop window.'
         Write-Host ''
         Write-Host 'Preflight passed.' -ForegroundColor Green
-        Write-Host 'Now fully exit ChatGPT/Codex Desktop. Do not reopen it yourself.' -ForegroundColor Yellow
+        Write-Host 'Now close the ChatGPT/Codex Desktop window. Do not reopen it yourself.' -ForegroundColor Yellow
         Write-Host 'This window will continue the update and reopen Desktop automatically.'
 
         $exitDeadline = [DateTime]::UtcNow.AddMinutes(30)
-        while (@(Get-RunningDesktopProcesses).Count -gt 0) {
+        while ($true) {
+            $runningDesktopProcesses = @(Get-RunningDesktopProcesses -ExecutablePaths $desktopExecutablePaths)
+            if ($runningDesktopProcesses.Count -eq 0) { break }
             if ([DateTime]::UtcNow -ge $exitDeadline) {
-                throw 'Desktop did not fully exit within 30 minutes.'
+                throw 'The Desktop window was not closed within 30 minutes.'
+            }
+            if (Test-DesktopWindowVisible -Processes $runningDesktopProcesses) {
+                $desktopWindowWasVisible = $true
+            } elseif ($desktopWindowWasVisible -or $residualStopDeadline) {
+                if (-not $residualStopDeadline) {
+                    Write-Host 'Desktop window closed. Stopping its verified residual package processes before the update.' -ForegroundColor Cyan
+                    $residualStopDeadline = [DateTime]::UtcNow.AddSeconds(10)
+                } elseif ([DateTime]::UtcNow -ge $residualStopDeadline) {
+                    throw 'The verified residual Desktop processes did not exit within 10 seconds.'
+                }
+                Stop-LingeringDesktopProcesses -Processes $runningDesktopProcesses `
+                    -ExecutablePaths $desktopExecutablePaths
+                $desktopWindowWasVisible = $false
             }
             Start-Sleep -Milliseconds 500
         }
         Start-Sleep -Seconds 2
-        if (@(Get-RunningDesktopProcesses).Count -gt 0) {
+        if (@(Get-RunningDesktopProcesses -ExecutablePaths $desktopExecutablePaths).Count -gt 0) {
             throw 'Desktop restarted before the foreground updater could begin.'
         }
         $desktopExited = $true

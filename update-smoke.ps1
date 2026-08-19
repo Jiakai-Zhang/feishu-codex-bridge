@@ -222,6 +222,18 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
         throw 'The updater removed an existing recovery backup.'
     }
 
+    $startCountBeforeRepeat = @(Get-Content -LiteralPath (Join-Path $runtimeDirectory 'start-ran.log')).Count
+    & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot `
+        -Version v9.0.0-test.2 -Remote private -TestMode
+    $startCountAfterRepeat = @(Get-Content -LiteralPath (Join-Path $runtimeDirectory 'start-ran.log')).Count
+    if ($startCountAfterRepeat -le $startCountBeforeRepeat) {
+        throw 'A same-version update with an enabled Desktop relay did not recover the stopped Bridge.'
+    }
+    $repeatDoctorLine = @(Get-Content -LiteralPath (Join-Path $runtimeDirectory 'doctor-ran.log')) | Select-Object -Last 1
+    if ($repeatDoctorLine -ne 'running=True;relay=True') {
+        throw 'A same-version update did not require the recovered Bridge and Desktop relay.'
+    }
+
     Write-Utf8File -Path (Join-Path $installRoot 'user-change.txt') -Content "preserve me`n"
     $dirtyTreeRejected = $false
     try {

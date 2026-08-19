@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Windows 电脑。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”；“替我审批（Approve for me）”只处理审批请求，不会解除沙盒边界。新流程在飞书 CLI 创建专用应用后立即用 Windows DPAPI 安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。Lark CLI 认证始终提供可点击 verification URL，应用模板脚本会在尝试打开浏览器前输出不含 App ID 的临时本机备用 URL。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文为私有多用户候选版 `v0.4.0-windows-rc.4` 的固定安装协议；只能在该 tag 已发布、本机 GitHub CLI 已登录且当前账号能读取私有仓库时使用。它包含成员主动私聊、用户名片登记、非空 Project 新建 Session、owner 远程调整 Session 权限，以及独立于 Desktop 的前台升级入口。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文为私有多用户候选版 `v0.4.0-windows-rc.5` 的固定安装协议；只能在该 tag 已发布、本机 GitHub CLI 已登录且当前账号能读取私有仓库时使用。它包含成员主动私聊、用户名片登记、非空 Project 新建 Session、owner 远程调整 Session 权限，以及独立于 Desktop 的前台升级入口。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge-private.git
-- tag：v0.4.0-windows-rc.4
+- tag：v0.4.0-windows-rc.5
 
 已知条件：
 - 这是一台独立的新 Windows 电脑，不迁移、复用或停止其他机器上的 Bridge。
@@ -56,7 +56,7 @@
 
    如果缺少 Git、GitHub CLI 或 Node.js，先说明将安装哪个软件并取得用户批准，再使用 winget 的官方包。如果计算机名为空，先让用户在 Windows 设置中修复，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，然后克隆仓库并检出精确 tag v0.4.0-windows-rc.4。
+2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，然后克隆仓库并检出精确 tag v0.4.0-windows-rc.5。
    - 使用 GitHub CLI/Git credential helper 的已登录凭据访问私有仓库；不得把 GitHub Token 放入 URL、命令参数、聊天或日志；
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
@@ -167,7 +167,7 @@
       .\launch-codex-desktop-with-relay.ps1 -Proxy <用户确认的本机代理 URL>
     - 不带 -Proxy 默认为直连；-NoProxy 只是兼容别名；
     - 代理只应用于 Desktop 与共享 Codex App Server；飞书 Bridge、Channel、watchdog 与飞书 CLI 校验保持直连；
-    - 若只发现 Windows packaged Desktop 且用户选择代理，启动器必须安全停止；不得为了继续而修改系统或用户全局代理。只有能找到可直接启动的 Win32 Desktop 可执行文件时才支持隔离的 -Proxy 模式；
+- Windows packaged Desktop 选择代理时，启动器必须通过 `Get-AppxPackage OpenAI.Codex` 和当前 `AppxManifest.xml` 验证包内真实 Desktop 可执行文件，再仅向该进程注入 loopback 代理；清单、包内路径或可执行文件无法验证时安全停止，不得修改系统或用户全局代理；
     - 启动器必须保存选择、必要时重启本安装拥有的共享 App Server、重新注册 Scheduled Task watchdog，并等待同一 activation 的新鲜 ready heartbeat；失败时必须移除 Bridge-owned pointer，不得继续打开 Desktop。
 
 14. 最终启动 Desktop 前：

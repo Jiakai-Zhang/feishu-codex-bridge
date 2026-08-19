@@ -15,10 +15,10 @@
 
 ## 0. 固定版本与目标目录
 
-新安装使用私有仓库已发布的精确 Windows tag。当前默认目标为 `v0.4.0-windows-rc.4`：
+新安装使用私有仓库已发布的精确 Windows tag。当前默认目标为 `v0.4.0-windows-rc.5`：
 
 ```powershell
-gh repo clone ninmon/feishu-codex-bridge-private "$env:LOCALAPPDATA\FeishuCodexBridge\app" -- --branch v0.4.0-windows-rc.4 --depth 1
+gh repo clone ninmon/feishu-codex-bridge-private "$env:LOCALAPPDATA\FeishuCodexBridge\app" -- --branch v0.4.0-windows-rc.5 --depth 1
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -136,7 +136,7 @@ OAuth 命令也必须将当次 verification URL 原样作为可点击备用链�
 
 启动器把选定网络模式应用到 Desktop 和共享 Codex App Server；飞书 Bridge、Channel、watchdog 和飞书 CLI 保持直连。代理状态变化时，脚本只重启由本安装验证拥有的 App Server，重新注册 Scheduled Task watchdog，等待同一 activation 的新鲜 `ready` heartbeat；任一步失败都移除 Bridge-owned pointer，使 Desktop fail open。
 
-只有能找到可直接启动的 Win32 Desktop 可执行文件时，才能把 `-Proxy` 隔离到 Desktop 进程。若本机只有 packaged Desktop，代理模式必须安全停止；不得自动改系统或用户全局代理。直连模式仍可使用 packaged Desktop。
+`-Proxy` 只能应用到已验证的 Desktop 可执行文件。Win32 安装使用直接发现的可执行文件；packaged Desktop 必须通过 `Get-AppxPackage OpenAI.Codex` 和当前 `AppxManifest.xml` 动态解析包内真实可执行文件后直接启动。解析、包内路径校验或启动失败时安全停止；不得自动改系统或用户全局代理。
 
 必须在用户完全退出和重启 Desktop 时暂停。不得从正在使用共享 App Server 的当前 Codex 回合中强制结束 Desktop。
 
@@ -163,7 +163,7 @@ Desktop 重新打开后执行：
 
 ## 8. 升级已有安装
 
-交给 Codex 执行时优先使用[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)：健康路径由 Codex 启动目标 release 的 `update-windows-with-desktop-restart.ps1`；用户只完全退出 Desktop，前台升级器会独立更新、按原网络模式自动重开并完成 Doctor。以下安全边界仍全部适用。
+交给 Codex 执行时优先使用[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)：健康路径由 Codex 启动目标 release 的 `update-windows-with-desktop-restart.ps1`；用户关闭可见 Desktop 窗口后，前台升级器只结束已验证为同一 Desktop 可执行文件的残留 package 进程，再独立更新、按原网络模式自动重开并完成 Doctor。以下安全边界仍全部适用。
 
 用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或普通未跟踪改动时停止；不得 reset、clean、stash 或覆盖。唯一可交给目标 `-PreflightOnly` 识别的例外，是配置所指 runtime 恰好在 checkout 内且全部未跟踪内容都属于 updater 生成的 `upgrade-backups/`；不得删除这些备份。默认更新源为 `origin`；用户指定私有测试 release 时，只能选择名称为 `private`、URL 精确匹配 `ninmon/feishu-codex-bridge-private` 的已有远端，不得替用户重写 `origin`，也不得把 GitHub Token 放进 remote URL。
 

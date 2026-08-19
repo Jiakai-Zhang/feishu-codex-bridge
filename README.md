@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.6`；Windows 公开基线仍为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.4`。两个私有候选版提供固定链接的极简安装与升级入口；它们仍依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。
+> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.6`；Windows 公开基线仍为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.5`。两个私有候选版提供固定链接的极简安装与升级入口；它们仍依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。
 
 ## 版本边界
 
@@ -18,6 +18,7 @@
 | `v0.4.0-windows-rc.2` | 私有 Windows 测试版：同步主动私聊、非空 Project 新建 Session、用户名片登记和 owner 可远程调整的 Session 权限 |
 | `v0.4.0-windows-rc.3` | Windows 多用户候选版：全新安装切换到私有 v0.4 基线，并提供用户只需重启 Desktop 的固定版本极简升级入口 |
 | `v0.4.0-windows-rc.4` | Windows 多用户候选版：加入独立于 Desktop 的可见前台升级器，用户退出后自动保留代理并重开 Desktop；修复 PowerShell 5/7 升级与 heartbeat 兼容问题 |
+| `v0.4.0-windows-rc.5` | Windows 多用户候选版：修复 packaged Desktop 代理恢复启动，并在用户关闭窗口后安全结束已验证的残留 Desktop 进程 |
 | `v0.4.0-macos-rc.1` | 私有 macOS 测试版：同步 Windows v0.4 的多用户 Session 权限，新增不暴露绝对路径的 `setup-project-root.sh`，并保留 Keychain、launchd relay 和升级回滚边界 |
 | `v0.4.0-macos-rc.2` | macOS 多用户候选版：登记成员后由 Bot 主动发送私聊欢迎消息和 `/add` 指引；投递失败不回滚成员状态，并向 Owner 提供安全兜底 |
 | `v0.4.0-macos-rc.3` | macOS 多用户候选版：在 `/add` 的任意非空 Project 任务列表中提供“新建任务”，创建 Session 后立即建立专属绑定群 |
@@ -39,6 +40,7 @@
 - [v0.4.0-windows-rc.2 Release Note](docs/releases/v0.4.0-windows-rc.2.md)
 - [v0.4.0-windows-rc.3 Release Note](docs/releases/v0.4.0-windows-rc.3.md)
 - [v0.4.0-windows-rc.4 Release Note](docs/releases/v0.4.0-windows-rc.4.md)
+- [v0.4.0-windows-rc.5 Release Note](docs/releases/v0.4.0-windows-rc.5.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
 - [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
@@ -98,7 +100,7 @@ Windows：
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-windows-rc.4
+tag：v0.4.0-windows-rc.5
 文件：docs/INSTALL_WINDOWS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
@@ -106,7 +108,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 ### 交给 Codex 极简升级
 
-健康安装的正常升级路径不会再让用户执行 Terminal/PowerShell 命令。macOS 用户只需按提示完全退出、等待独立 Terminal 成功并重新打开 Desktop；Windows 用户只需按提示完全退出，独立前台升级器会自动保留原网络模式并重开 Desktop。异常安全停点仍会明确暂停。
+健康安装的正常升级路径不会再让用户执行 Terminal/PowerShell 命令。macOS 用户只需按提示完全退出、等待独立 Terminal 成功并重新打开 Desktop；Windows 用户只需按提示关闭可见窗口，独立前台升级器会安全结束已验证的残留 Desktop 进程、保留原网络模式并重开 Desktop。异常安全停点仍会明确暂停。
 
 macOS：
 
@@ -124,7 +126,7 @@ Windows：
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-windows-rc.4
+tag：v0.4.0-windows-rc.5
 文件：docs/UPGRADE_WINDOWS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
@@ -345,7 +347,7 @@ Windows 底层升级入口：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [macOS v0.4 rc.6](docs/releases/v0.4.0-macos-rc.6.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md) · [Windows v0.4 rc.2](docs/releases/v0.4.0-windows-rc.2.md) · [Windows v0.4 rc.3](docs/releases/v0.4.0-windows-rc.3.md) · [Windows v0.4 rc.4](docs/releases/v0.4.0-windows-rc.4.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [macOS v0.4 rc.6](docs/releases/v0.4.0-macos-rc.6.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md) · [Windows v0.4 rc.2](docs/releases/v0.4.0-windows-rc.2.md) · [Windows v0.4 rc.3](docs/releases/v0.4.0-windows-rc.3.md) · [Windows v0.4 rc.4](docs/releases/v0.4.0-windows-rc.4.md) · [Windows v0.4 rc.5](docs/releases/v0.4.0-windows-rc.5.md)
 
 ## 开发与验证
 

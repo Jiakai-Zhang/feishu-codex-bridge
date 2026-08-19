@@ -389,12 +389,12 @@ if ($PreflightOnly) {
 
 if ($previousCommit -eq $targetCommit) {
     Write-Output "$Version is already installed."
-    if ($StartBridge -and -not $bridgeWasRunning) {
+    if ($shouldStart -and -not $bridgeWasRunning) {
         & (Join-Path $repositoryRoot 'start-bridge.ps1')
         $bridgeWasRunning = $true
     }
     $doctorArguments = @{}
-    if ($bridgeWasRunning) { $doctorArguments['RequireRunning'] = $true }
+    if ($shouldStart) { $doctorArguments['RequireRunning'] = $true }
     if ($desktopRelayWasEnabled) { $doctorArguments['RequireDesktopRelay'] = $true }
     & (Join-Path $repositoryRoot 'doctor.ps1') @doctorArguments
     exit 0
