@@ -31,15 +31,21 @@ test("persists independent settings per Session and resets to defaults", async (
     await store.update("thread-b", { publicProgress: false });
 
     const reopened = await SessionRelaySettingsStore.open(filePath);
-    assert.deepEqual(reopened.get("thread-a"), { inputMode: "steer", publicProgress: false, finalMention: true });
-    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false, finalMention: true });
+    assert.deepEqual(reopened.get("thread-a"), {
+      inputMode: "steer", publicProgress: false, finalMention: true, sandboxMode: "inherit",
+    });
+    assert.deepEqual(reopened.get("thread-b"), {
+      inputMode: "queue", publicProgress: false, finalMention: true, sandboxMode: "inherit",
+    });
     const document = JSON.parse(await readFile(filePath, "utf8"));
     assert.deepEqual(document.defaults, DEFAULT_SESSION_RELAY_SETTINGS);
     assert.deepEqual(document.sessionFallback, DEFAULT_SESSION_RELAY_SETTINGS);
     assert.equal(document.sessions.length, 2);
 
     assert.deepEqual(await reopened.reset("thread-a"), DEFAULT_SESSION_RELAY_SETTINGS);
-    assert.deepEqual(reopened.get("thread-b"), { inputMode: "queue", publicProgress: false, finalMention: true });
+    assert.deepEqual(reopened.get("thread-b"), {
+      inputMode: "queue", publicProgress: false, finalMention: true, sandboxMode: "inherit",
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -53,11 +59,13 @@ test("copies global defaults only when a new Session binding is initialized", as
     const initialized = await store.initialize("thread-new");
     assert.deepEqual(initialized, {
       created: true,
-      settings: { inputMode: "queue", publicProgress: true, finalMention: true },
+      settings: { inputMode: "queue", publicProgress: true, finalMention: true, sandboxMode: "inherit" },
     });
 
     await store.updateDefaults({ inputMode: "steer", publicProgress: false });
-    assert.deepEqual(store.get("thread-new"), { inputMode: "queue", publicProgress: true, finalMention: true });
+    assert.deepEqual(store.get("thread-new"), {
+      inputMode: "queue", publicProgress: true, finalMention: true, sandboxMode: "inherit",
+    });
     assert.deepEqual(store.get("thread-existing-without-record"), DEFAULT_SESSION_RELAY_SETTINGS);
     assert.deepEqual(await store.reset("thread-new"), LEGACY_SESSION_RELAY_SETTINGS);
   } finally {
@@ -76,11 +84,13 @@ test("migrates the legacy top-level Session array without changing its overrides
     }]), "utf8");
     const store = await SessionRelaySettingsStore.open(filePath);
     assert.deepEqual(store.getDefaults(), LEGACY_SESSION_RELAY_SETTINGS);
-    assert.deepEqual(store.get("thread-old"), { inputMode: "queue", publicProgress: true, finalMention: true });
+    assert.deepEqual(store.get("thread-old"), {
+      inputMode: "queue", publicProgress: true, finalMention: true, sandboxMode: "inherit",
+    });
     assert.deepEqual(store.get("thread-unconfigured"), LEGACY_SESSION_RELAY_SETTINGS);
     await store.updateDefaults({ publicProgress: true });
     const document = JSON.parse(await readFile(filePath, "utf8"));
-    assert.equal(document.version, 3);
+    assert.equal(document.version, 4);
     assert.deepEqual(document.sessionFallback, LEGACY_SESSION_RELAY_SETTINGS);
     assert.equal(document.sessions.length, 1);
   } finally {
@@ -98,7 +108,9 @@ test("keeps version-one global defaults while retaining the legacy fallback for 
       sessions: [],
     }), "utf8");
     const store = await SessionRelaySettingsStore.open(filePath);
-    assert.deepEqual(store.getDefaults(), { inputMode: "queue", publicProgress: false, finalMention: true });
+    assert.deepEqual(store.getDefaults(), {
+      inputMode: "queue", publicProgress: false, finalMention: true, sandboxMode: "inherit",
+    });
     assert.deepEqual(store.get("existing-unrecorded-thread"), LEGACY_SESSION_RELAY_SETTINGS);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -126,6 +138,29 @@ test("rejects invalid setting values", async () => {
     await assert.rejects(() => store.update("thread-a", { inputMode: "later" }), /steer or queue/);
     await assert.rejects(() => store.update("thread-a", { publicProgress: "yes" }), /must be boolean/);
     await assert.rejects(() => store.update("thread-a", { finalMention: "yes" }), /must be boolean/);
+    await assert.rejects(() => store.update("thread-a", { sandboxMode: "host-root" }), /sandbox mode is invalid/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("persists a Session permission override and never changes it through settings reset", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "relay-settings-"));
+  const filePath = path.join(directory, "settings.json");
+  try {
+    const store = await SessionRelaySettingsStore.open(filePath);
+    await store.update("thread-a", { inputMode: "steer", sandboxMode: "danger-full-access" });
+    const reset = await store.reset("thread-a");
+    assert.deepEqual(reset, {
+      inputMode: "queue",
+      publicProgress: true,
+      finalMention: true,
+      sandboxMode: "danger-full-access",
+    });
+
+    const reopened = await SessionRelaySettingsStore.open(filePath);
+    assert.equal(reopened.get("thread-a").sandboxMode, "danger-full-access");
+    assert.equal(JSON.parse(await readFile(filePath, "utf8")).version, 4);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

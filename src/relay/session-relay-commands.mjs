@@ -1,4 +1,17 @@
-const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "steer", "settings", "attachments"]);
+import { sessionSandboxModeLabel } from "./session-permission-command.mjs";
+
+const COMMANDS = new Set([
+  "status",
+  "stop",
+  "model",
+  "plan",
+  "goal",
+  "queue",
+  "steer",
+  "settings",
+  "attachments",
+  "permissions",
+]);
 
 export class SessionCommandError extends Error {
   constructor(code, message) {
@@ -171,7 +184,7 @@ export function formatSessionSettings(settings, { changed = false } = {}) {
     "",
     "命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off`、`/settings reset`",
     "",
-    "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session。",
+    "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session，但不会修改 `/permissions` 权限。",
     "",
     "> 最终回答提醒只在 Turn 的最终消息中 @本轮发起者；公开进度始终不会 @。",
     "",
@@ -264,6 +277,9 @@ export function formatSessionStatus(status, { queueEntries = [], attachmentDraft
     `- 公开进度：${relaySettings?.publicProgress ? "开启" : "关闭"}`,
     `- 最终回答提醒：${relaySettings?.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
   );
+  if (status?.sandboxMode) {
+    lines.push(`- Session 权限：${sessionSandboxModeLabel(status.sandboxMode)}（\`${status.sandboxMode}\`）`);
+  }
   if (usage) {
     lines.push(`- 上下文累计：${Number(usage.totalTokens || 0).toLocaleString("zh-CN")} tokens`);
   }
@@ -527,6 +543,10 @@ export async function executeSessionCommand(command, context) {
   }
   if (command.name === "attachments") return executeAttachments(command, context);
   if (command.name === "settings") return executeSettings(command, context);
+  if (command.name === "permissions") {
+    if (!context.permissionFlow) throw new TypeError("Permissions command execution requires a permission flow");
+    return context.permissionFlow.execute(command, context);
+  }
   return executeGoal(command, context);
 }
 

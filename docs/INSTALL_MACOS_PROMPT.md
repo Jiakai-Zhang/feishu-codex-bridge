@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Mac。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”，确保安装和 Doctor 能访问当前用户的 macOS Keychain。新流程在飞书 CLI 创建专用应用后立即安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文锁定到 `v0.4.0-macos-rc.4`。它保留 rc.12 的 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试、飞书直连校验隔离与完整升级回滚，同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限、多人群 queue/steer 和按发送者隔离的附件草稿，在登记成员后主动发送 Bot 私聊欢迎消息和 `/add` 指引，允许从 `/add` 在任意非空 Project 中继续创建及绑定新 Session，并支持 Owner 通过飞书用户名片登记成员。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文锁定到 `v0.4.0-macos-rc.5`。它保留 rc.12 的 Full access 停点、Keychain 诊断、浏览器备用 URL、watchdog 驻留重试、飞书直连校验隔离与完整升级回滚，同步 Windows v0.4 的可选多用户 Project 目录、Session 共享权限、多人群 queue/steer 和按发送者隔离的附件草稿，在登记成员后主动发送 Bot 私聊欢迎消息和 `/add` 指引，允许从 `/add` 在任意非空 Project 中继续创建及绑定新 Session，支持 Owner 通过飞书用户名片登记成员，并允许 Session owner 从飞书安全调整自己 Session 的权限。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -26,7 +26,7 @@
 
 固定安装目标：
 - 仓库：https://github.com/ninmon/feishu-codex-bridge-private.git
-- tag：v0.4.0-macos-rc.4
+- tag：v0.4.0-macos-rc.5
 
 已知条件：
 - 这是一台独立的新 Mac，不迁移、复用或停止其他机器上的 Bridge。
@@ -54,7 +54,7 @@
 
    如果缺少系统依赖，先说明缺少什么并请求用户批准；不要擅自选择 Homebrew 或其他系统安装方式。如果系统电脑名称为空，先让用户在 macOS“系统设置 > 通用 > 共享”中设置，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.4.0-macos-rc.4。
+2. 让用户确认仓库的最终存放位置，并确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，再克隆仓库并检出精确 tag v0.4.0-macos-rc.5。
    - 使用 GitHub CLI 的已登录凭据克隆私有仓库；不得把 GitHub Token 放入 URL、命令参数、聊天或日志；
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；

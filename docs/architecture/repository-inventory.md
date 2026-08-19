@@ -38,16 +38,16 @@ The classifications mean:
 
 ## Production module ledger
 
-The following lists account for all 54 root production modules exactly once.
+The following lists account for all 55 root production modules exactly once.
 
-### Stable Session Relay — 26 modules
+### Stable Session Relay — 27 modules
 
 | Target area | Current files |
 | --- | --- |
 | `src/app/` | `session-relay.mjs`, `request-session-binding.mjs` |
 | `src/codex/` | `codex-answer-media.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs` |
 | `src/feishu/` | `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-stream-card.mjs` |
-| `src/relay/` | `session-add-flow.mjs`, `session-binding-provisioner.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs` |
+| `src/relay/` | `session-add-flow.mjs`, `session-binding-provisioner.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-permission-command.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs` |
 | `src/persistence/` | `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-registry.mjs`, `session-input-ledger.mjs`, `session-prompt-queue.mjs`, `session-relay-settings.mjs` |
 
 `session-stream-card.mjs` is Feishu presentation code even though its current name
@@ -220,7 +220,8 @@ packages are omitted.
 | `session-delete-flow.mjs` | Stable | — |
 | `session-input-ledger.mjs` | Stable | — |
 | `session-prompt-queue.mjs` | Stable | `feishu-inbound-attachment.mjs` |
-| `session-relay.mjs` | Stable entry | `codex-answer-media.mjs`, `codex-app-server.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs`, `delivery-outbox.mjs`, `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-add-flow.mjs`, `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-provisioner.mjs`, `session-binding-registry.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-input-ledger.mjs`, `session-prompt-queue.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs`, `session-relay-settings.mjs`, `session-stream-card.mjs`, `thread-work-queue.mjs` |
+| `session-relay.mjs` | Stable entry | `codex-answer-media.mjs`, `codex-app-server.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs`, `delivery-outbox.mjs`, `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-add-flow.mjs`, `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-provisioner.mjs`, `session-binding-registry.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-input-ledger.mjs`, `session-permission-command.mjs`, `session-prompt-queue.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs`, `session-relay-settings.mjs`, `session-stream-card.mjs`, `thread-work-queue.mjs` |
+| `session-permission-command.mjs` | Stable | `session-relay-settings.mjs` |
 | `session-relay-commands.mjs` | Stable | — |
 | `session-relay-config.mjs` | Stable | `feishu-inbound-attachment.mjs` |
 | `session-relay-core.mjs` | Stable | — |

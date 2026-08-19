@@ -159,12 +159,34 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 群内命令只修改当前 Session。兼容旧的 `/settings thinking on|off` 写法，但界面会明确称为“公开进度（非隐藏思维链）”。
 
+`/settings reset` 只重置输入、公开进度和最终提醒，不会改变 Session 权限。权限只能通过下面的 `/permissions` 显式修改。
+
 在 Bot 私聊使用相同命令时，修改的是后续新绑定的全局默认快照：
 
 - 新安装默认 `queue + 公开进度开启 + 最终回答提醒开启`；
 - 新绑定在创建时复制当时的默认值；
 - 修改全局默认不会追改已有群；
 - 旧部署中没有设置记录的已有绑定继续保留旧安全默认 `steer + 公开进度关闭`。
+
+### `/permissions`
+
+```text
+/permissions
+/permissions inherit
+/permissions read-only
+/permissions workspace-write
+/permissions danger-full-access
+/permissions confirm
+/permissions cancel
+```
+
+- 仅 Session owner 可用，并且只修改当前绑定 Session；普通成员、当前 Turn 发起者和 Bridge Owner 都不能借此修改不属于自己的 Session。
+- `inherit` 使用 Bridge 主机的 `sandboxMode`；其余三个值形成当前 Session 的持久覆盖。
+- 修改时 Session 必须空闲且没有运行中的 Goal。它不改正在运行的 Turn、其他 Session、Bridge 全局配置或 Desktop 代理。
+- 下一次由 Bridge 调用 `turn/start` 时会显式发送该 Session 的 `sandboxPolicy`；启动或恢复 Goal 前也会先用保存的权限重新恢复 thread。App Server 随后把它作为同一 thread 后续 Turn 的默认值。`turn/steer` 不能修改活动 Turn 的权限。
+- `danger-full-access` 或继承到完全访问时，必须在 5 分钟内另发 `/permissions confirm`。确认请求同时绑定 Session、发送者和飞书会话，不能跨群复用。
+- 完全访问配合 Bridge 的无审批执行策略，可让 Codex 使用当前系统账户可访问的文件与命令，并可能访问钥匙串。共享群中其他已授权成员之后提交的 Prompt 也会获得相同执行边界，只能用于完全可信的环境。
+- `/permissions cancel` 取消当前会话尚未确认的完全访问请求。
 
 ### `/model`
 
@@ -206,7 +228,7 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 - 所有已启用且仍在群内的成员：`/status`、查看/清理自己的 `/attachments`、查看队列、`/queue <Prompt>`。
 - 当前 Turn 初始发起者：额外允许 `/steer` 与 `/stop`。
-- Session owner：允许全部 Session 命令，包括模型、Plan、Goal、设置、队列删除/清空和 `/delete`。
+- Session owner：允许全部 Session 命令，包括模型、Plan、Goal、设置、权限、队列删除/清空和 `/delete`。
 - `/members` 与 Bot 私聊中的全局 `/settings` 只允许 Bridge Owner。
 
 ### `/delete`
@@ -276,11 +298,11 @@ Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送�
 - Session owner 必须仍在群内且处于启用状态；所有其他人类成员也必须已启用。群内只能有当前 Bridge Bot，不能加入第三方 Bot。
 - 未登记/已停用成员、Session 被归档或成员无法完整核验时，敏感入站和出站内容全部 fail closed。
 - `im.message.receive_v1` 与 `im:message.group_msg` 都必须发布；只有群内 `@Bot` 权限时，平台不会投递普通未 @ 消息。
-- 默认沙盒是 `workspace-write`。`danger-full-access` 会扩大远程消息可触发的本机写入范围，只应在完全可信的个人环境中使用。
+- 默认沙盒是 `workspace-write`。Session owner 可通过 `/permissions` 为自己的 Session 设置持久覆盖；`danger-full-access` 会扩大所有该群已授权 Prompt 可触发的本机访问范围，只应在完全可信的个人环境中使用。
 
 ## 持久状态与投递
 
-- 用户目录/成员状态、每个 Session 的设置、按发送者隔离的附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
+- 用户目录/成员状态、每个 Session 的设置与权限覆盖、按发送者隔离的附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
 - 所有最终答案先写入持久发件箱，再调用飞书发送。
 - 最终答案使用按 Turn 派生的确定性投递 ID；网络重试不会重复运行 Codex。
 - 主动发送最终结果前仍会重新校验群成员。

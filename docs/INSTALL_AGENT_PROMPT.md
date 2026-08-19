@@ -18,7 +18,7 @@ https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/v0.3.2-windows-rc.4
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.4
+tag：v0.4.0-macos-rc.5
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
 如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
@@ -29,13 +29,13 @@ tag：v0.4.0-macos-rc.4
 ## macOS 从私有镜像升级到 v0.4
 
 ```text
-请把这台 Mac 上已有的 Feishu Codex Bridge 安全升级到私有测试 tag v0.4.0-macos-rc.4。运行任何命令前先要求我确认当前 Codex 对话已设为 Full access，然后完整读取私有仓库 ninmon/feishu-codex-bridge-private 中该 tag 的 AGENTS.md、docs/INSTALL_MACOS.md 和 Release Note。
+请把这台 Mac 上已有的 Feishu Codex Bridge 安全升级到私有测试 tag v0.4.0-macos-rc.5。运行任何命令前先要求我确认当前 Codex 对话已设为 Full access，然后完整读取私有仓库 ninmon/feishu-codex-bridge-private 中该 tag 的 AGENTS.md、docs/INSTALL_MACOS.md 和 Release Note。
 
 先只读检查操作系统、安装目录、GitHub CLI 登录和私有仓库访问、所有 Git remote、当前精确 tag、git status（包括未跟踪文件）、Bridge、Desktop relay 及 App Server 运行状态。不得输出 Token、配置、身份标识或本机任务路径。
 
 工作树不干净、GitHub 未认证、private remote 指向其他 URL、tag 不存在、Desktop 未完全退出或当前 Codex 任务仍在使用共享 App Server 时，必须在停止服务或改变 checkout 前停止。若没有 private remote，可在确认不存在同名远端后添加精确 URL https://github.com/ninmon/feishu-codex-bridge-private.git；不得改写 origin。
 
-必须在独立 Terminal 中运行 ./update.sh --version v0.4.0-macos-rc.4 --remote private，不得使用 main、手工 checkout、reset、clean 或 stash 代替。保留 bridge.config.json、Keychain Secret、绑定、成员/Project 状态、Session 设置、临时 Chat、队列、账本、附件缓存、投递状态、relay state 和 bootstrap；不得重新索取 App Secret。完成后核对精确 tag，并运行 ./status-bridge.sh 与 ./doctor.sh --require-running --require-desktop-relay。
+必须在独立 Terminal 中运行 ./update.sh --version v0.4.0-macos-rc.5 --remote private，不得使用 main、手工 checkout、reset、clean 或 stash 代替。保留 bridge.config.json、Keychain Secret、绑定、成员/Project 状态、Session 设置、临时 Chat、队列、账本、附件缓存、投递状态、relay state、bootstrap 和原有代理模式；不得重新索取 App Secret。完成后核对精确 tag，并运行 ./status-bridge.sh 与 ./doctor.sh --require-running --require-desktop-relay。
 ```
 
 ## Windows 从旧版升级

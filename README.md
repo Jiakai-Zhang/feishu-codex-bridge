@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.4`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。v0.4 候选版共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
+> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.5`；Windows 公开候选版为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.1`。它们都依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。v0.4 候选版共享同一套成员目录与多人 Session 权限模型，平台安装、凭据和 Desktop relay 仍各自隔离。
 
 ## 版本边界
 
@@ -19,6 +19,7 @@
 | `v0.4.0-macos-rc.2` | macOS 多用户候选版：登记成员后由 Bot 主动发送私聊欢迎消息和 `/add` 指引；投递失败不回滚成员状态，并向 Owner 提供安全兜底 |
 | `v0.4.0-macos-rc.3` | macOS 多用户候选版：在 `/add` 的任意非空 Project 任务列表中提供“新建任务”，创建 Session 后立即建立专属绑定群 |
 | `v0.4.0-macos-rc.4` | macOS 多用户候选版：Owner 可发送飞书用户名片并按提示回复目录名登记成员，原有 mention 命令继续兼容 |
+| `v0.4.0-macos-rc.5` | macOS 多用户候选版：Session owner 可从飞书安全查看和调整自己 Session 的持久权限边界，完全访问需二次确认 |
 
 当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
 
@@ -28,6 +29,7 @@
 - [v0.4.0-macos-rc.2 Release Note](docs/releases/v0.4.0-macos-rc.2.md)
 - [v0.4.0-macos-rc.3 Release Note](docs/releases/v0.4.0-macos-rc.3.md)
 - [v0.4.0-macos-rc.4 Release Note](docs/releases/v0.4.0-macos-rc.4.md)
+- [v0.4.0-macos-rc.5 Release Note](docs/releases/v0.4.0-macos-rc.5.md)
 - [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
 - [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
 - [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
@@ -72,12 +74,12 @@ Feishu Codex Bridge ── 持久队列 / 设置 / 发件箱
 
 ### 交给 Codex 安装（推荐）
 
-macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.4`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
+macOS 请使用私有仓库固定候选 tag `v0.4.0-macos-rc.5`。把下面内容复制到这台 Mac 上一个新的 Codex 任务；Codex 会通过本机已登录的 GitHub CLI 读取私有固定版本，完整执行要求仍全部放在仓库协议内：
 
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本中的安装协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.4
+tag：v0.4.0-macos-rc.5
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main 或其他版本。
 如果 GitHub CLI 未安装、未登录或没有仓库权限，请明确告诉我并暂停，不得索取或输出访问 Token。
@@ -189,6 +191,9 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 | `/settings input steer\|queue` | 设置普通消息是调整当前 Turn，还是排队新 Turn |
 | `/settings progress on\|off` | 开关公开 commentary 进度 |
 | `/settings mention on\|off` | 开关最终回答对初始 Turn 发起者的 `@` 提醒 |
+| `/permissions` | 查看当前 Session 的实际权限与设置来源 |
+| `/permissions inherit\|read-only\|workspace-write` | 继承主机默认，或为当前 Session 设置只读/工作区写入 |
+| `/permissions danger-full-access` | 请求当前 Session 完全访问；须在 5 分钟内二次确认 |
 | `/model` | 查看或修改模型、推理强度和 `standard\|fast` 速度 |
 | `/plan on\|off` | 切换 App Server 原生 Plan 模式 |
 | `/goal ...` | 创建、暂停、恢复、替换、设置预算或清除原生 Goal |
@@ -208,6 +213,8 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 在绑定群运行 `/settings` 只修改当前 Session。在 Bot 私聊运行 `/settings` 修改后续新绑定的默认快照，不追改已有群。旧安装中没有设置记录的绑定继续保留旧安全默认，升级不会偷偷改变输入方式。
 
+Session owner 可在自己的绑定群运行 `/permissions`，为该 Session 单独选择 `inherit`、`read-only`、`workspace-write` 或 `danger-full-access`。权限修改只作用于后续由 Bridge 启动的新 Turn；活动 Turn 或运行中的 Goal 必须先停止。完全访问需要 5 分钟内二次确认，且共享群中其他已授权成员之后提交的 Prompt 也会使用同一权限边界。`/settings reset` 不会暗中修改权限。
+
 ## 输出、文件与可靠性
 
 - 飞书入站默认单文件不超过 30 MiB；单条消息或同一 Session 的整份暂存草稿最多 10 个资源、总计 60 MiB。暂存附件和已排队附件都会持久化，Bridge 重启后仍能继续。缓存默认保留 7 天，并受 1 GiB 总容量限制。
@@ -224,7 +231,7 @@ queue + 公开进度开启 + 最终回答 @提醒开启
 
 - 入站消息的 `chat_id` 必须精确匹配固定绑定，发送者必须是群内已启用 Bridge 用户。
 - 发送任何可能包含任务内容的结果前，会重新核验 Session owner、所有人类成员与唯一当前 Bot；未登记/已停用成员、第三方 Bot 或无法完整核验时 fail closed。
-- 默认 `sandboxMode` 是 `workspace-write`。配置也接受 `read-only` 和高风险的 `danger-full-access`；不要在不可信群、共享应用或不受控工作区启用全权限。
+- 默认 `sandboxMode` 是 `workspace-write`。配置也接受 `read-only` 和高风险的 `danger-full-access`；Session owner 可通过 `/permissions` 设置仅属于自己 Session 的持久覆盖。不要在不可信群、共享应用或不受控工作区启用全权限。
 - 共享 App Server 只允许 `ws://` loopback 地址，不接受远程监听器。
 - App Secret、OAuth token、App ID、open ID、chat ID、Codex Session 标识、真实配置和本机任务路径都不应进入聊天、日志或 Git。
 - Bridge 不传输隐藏思维链、raw reasoning、完整工具输出或敏感本机路径。
@@ -291,7 +298,7 @@ Windows：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md)
+- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md)
 
 ## 开发与验证
 

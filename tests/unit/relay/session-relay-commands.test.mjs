@@ -35,6 +35,11 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
     args: "progress on",
     raw: "/settings progress on",
   });
+  assert.deepEqual(parseSessionCommand("/permissions full"), {
+    name: "permissions",
+    args: "full",
+    raw: "/permissions full",
+  });
   assert.deepEqual(parseQueueAction("run tests"), { action: "enqueue", text: "run tests" });
   assert.deepEqual(parseQueueAction("remove 2"), { action: "remove", position: 2 });
   assert.deepEqual(parseAttachmentsAction("clear"), { action: "clear" });
@@ -60,6 +65,7 @@ test("formats status, model, and Goal state without exposing reasoning or local 
     },
     tokenUsage: { total: { totalTokens: 12345 } },
     goal: { status: "paused", tokensUsed: 100 },
+    sandboxMode: "workspace-write",
   }, {
     queueEntries: [{ text: "run all tests" }],
     relaySettings: { inputMode: "queue", publicProgress: true, finalMention: true },
@@ -75,6 +81,7 @@ test("formats status, model, and Goal state without exposing reasoning or local 
   assert.match(status, /普通消息：排队新 Turn/);
   assert.match(status, /公开进度：开启/);
   assert.match(status, /最终回答提醒：开启/);
+  assert.match(status, /Session 权限：工作区写入/);
   assert.equal(status.includes("C:\\"), false);
 
   const model = formatModelView({
@@ -256,6 +263,26 @@ test("views, updates, and resets persistent Session relay settings", async () =>
   assert.deepEqual(settingsStore.get("thread-id"), { inputMode: "queue", publicProgress: true, finalMention: false });
   assert.match(await executeSessionCommand(parseSessionCommand("/settings reset"), context), /公开进度：关闭/);
   assert.deepEqual(settingsStore.get("thread-id"), defaults);
+});
+
+test("routes Session permission commands through the owner-scoped permission flow", async () => {
+  const calls = [];
+  const command = parseSessionCommand("/permissions workspace-write");
+  const context = {
+    controller: {},
+    threadId: "thread-id",
+    isSessionOwner: true,
+    permissionFlow: {
+      execute: async (...args) => {
+        calls.push(args);
+        return "permissions updated";
+      },
+    },
+  };
+  assert.equal(await executeSessionCommand(command, context), "permissions updated");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], command);
+  assert.equal(calls[0][1], context);
 });
 
 test("manages new-binding defaults through the global settings command", async () => {

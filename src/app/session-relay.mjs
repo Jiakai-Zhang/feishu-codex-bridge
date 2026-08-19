@@ -79,6 +79,10 @@ import { SessionRelaySettingsStore } from "../persistence/session-relay-settings
 import { parseTemporaryChatCommand } from "../relay/temporary-chat-command.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
 import {
+  effectiveSessionSandboxMode,
+  SessionPermissionFlow,
+} from "../relay/session-permission-command.mjs";
+import {
   executeMembersCommand,
   parseMembersCommand,
   publicMembersFailure,
@@ -143,6 +147,7 @@ const sessionAccess = await SessionAccessStore.open(sessionAccessPath, {
 const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
   legacyInstall: config.sessionRelay.bindings.length > 0,
 });
+const sessionPermissionFlow = new SessionPermissionFlow();
 const temporaryChats = await TemporaryChatStore.open(temporaryChatsPath);
 const longAnswerDocuments = await LongAnswerDocumentStore.open(longAnswerDocumentsPath);
 const longAnswerDocumentManager = config.larkCliEntry
@@ -339,6 +344,10 @@ function createSessionController(targets) {
     appServerUrl: config.sessionRelay.appServerUrl,
     targets,
     sandboxMode: config.sandboxMode,
+    sandboxModeForThread: (threadId) => effectiveSessionSandboxMode(
+      relaySettings.get(threadId).sandboxMode,
+      config.sandboxMode,
+    ),
     onTurnCompleted: async (record) => {
       const actor = activeTurnActors.get(record.threadId);
       const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;
@@ -717,7 +726,7 @@ async function sendBindingWelcome({ chatId, groupName, feedGroupName, settings }
       `- 公开进度：${settings?.publicProgress ? "开启" : "关闭"}`,
       `- 最终回答提醒：${settings?.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
       "",
-      "Bridge 重载后，群内只有一名用户时可直接发送 Prompt；邀请其他已启用成员进群后即共享，多人聊天需 @Bot。使用 `/settings` 调整普通消息方式、公开进度和最终回答 @提醒。",
+      "Bridge 重载后，群内只有一名用户时可直接发送 Prompt；邀请其他已启用成员进群后即共享，多人聊天需 @Bot。使用 `/settings` 调整消息行为；Session owner 可用 `/permissions` 查看或修改当前 Session 权限。",
     ].join("\n"),
   });
 }
@@ -1230,10 +1239,12 @@ async function submitExplicitSteer(msg, binding, text, attachments) {
 async function processCommandMessage(msg, binding, command) {
   log(`accepted session command /${command.name} from ${msg.messageId}`);
   try {
-    await inspectBinding(binding);
+    const inspection = await inspectBinding(binding);
     if (!await commandAllowedForParticipant(msg, binding, command)) {
       await channel.reply(msg, {
-        markdown: "该命令会改变共享 Session 的全局状态，只有 Session 所有者或当前 Turn 发起者可以执行。",
+        markdown: command.name === "permissions"
+          ? "只有当前 Session 的所有者可以修改它的权限。"
+          : "该命令会改变共享 Session 的全局状态，只有 Session 所有者或当前 Turn 发起者可以执行。",
       });
       await persistCompleted(msg.messageId);
       return;
@@ -1255,6 +1266,11 @@ async function processCommandMessage(msg, binding, command) {
         promptQueue,
         attachmentDraftStore: attachmentDrafts,
         settingsStore: relaySettings,
+        permissionFlow: sessionPermissionFlow,
+        defaultSandboxMode: config.sandboxMode,
+        isSessionOwner: msg.senderId === binding.ownerOpenId,
+        conversationId: msg.chatId,
+        humanMemberCount: inspection?.humanMemberCount,
         senderOpenId: msg.senderId,
         enqueuePrompt: async (text) => {
           const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
