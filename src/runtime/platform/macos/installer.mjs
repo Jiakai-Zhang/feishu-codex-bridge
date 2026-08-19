@@ -12,7 +12,11 @@ import {
   writeJsonAtomic,
 } from "../../shared/private-state.mjs";
 import { assertMacOS, MACOS_LABELS } from "./constants.mjs";
-import { persistedDesktopProxyUrl, proxyEnvironment } from "./desktop-runtime.mjs";
+import {
+  installedDesktopApplications,
+  persistedDesktopProxyUrl,
+  proxyEnvironment,
+} from "./desktop-runtime.mjs";
 import { optionMap } from "./cli-options.mjs";
 import {
   buildLaunchAgentPlist,
@@ -73,10 +77,13 @@ export async function discoverNode(configured) {
     await commandPath("node"),
     "/opt/homebrew/bin/node",
     "/usr/local/bin/node",
-    "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node",
-    "/Applications/Codex.app/Contents/Resources/cua_node/bin/node",
   );
   for (const candidate of candidates) {
+    if (await executableWorks(candidate, ["--version"], nodeVersionSupported)) return path.resolve(candidate);
+  }
+  const desktopApplications = await installedDesktopApplications();
+  for (const { bundlePath } of desktopApplications) {
+    const candidate = path.join(bundlePath, "Contents", "Resources", "cua_node", "bin", "node");
     if (await executableWorks(candidate, ["--version"], nodeVersionSupported)) return path.resolve(candidate);
   }
   throw new Error("Node.js 22.13 or newer was not found. Install Node.js and retry.");
@@ -99,10 +106,13 @@ export async function discoverCodex(configured) {
     configured,
     process.env.CODEX_EXECUTABLE,
     await commandPath("codex"),
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
   );
   for (const candidate of candidates) {
+    if (await executableWorks(candidate, ["app-server", "--help"], /--listen\s+<URL>/m)) return path.resolve(candidate);
+  }
+  const desktopApplications = await installedDesktopApplications();
+  for (const { bundlePath } of desktopApplications) {
+    const candidate = path.join(bundlePath, "Contents", "Resources", "codex");
     if (await executableWorks(candidate, ["app-server", "--help"], /--listen\s+<URL>/m)) return path.resolve(candidate);
   }
   throw new Error("A Codex executable with App Server listener support was not found.");

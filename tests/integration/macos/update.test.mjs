@@ -60,7 +60,9 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await writeExecutable(path.join(source, "start-bridge.sh"), [
     "#!/bin/sh",
     "set -eu",
-    "test ! -e \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST\"",
+    "if [ \"${FEISHU_CODEX_BRIDGE_UPDATE_TEST_ASSERT_NO_RELAY_PLIST:-0}\" = 1 ]; then",
+    "  test ! -e \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST\"",
+    "fi",
     "/usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING\"",
     "",
   ].join("\n"));
@@ -126,6 +128,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RUNNING: runningMarker,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_MARKER: relayMarker,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_PLIST: relayPlistPath,
+    FEISHU_CODEX_BRIDGE_UPDATE_TEST_ASSERT_NO_RELAY_PLIST: "1",
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_DOCTOR_ARGS: doctorArgs,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE: targetOnlyState,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_TEMPORARY_CHAT_STATE: temporaryChatState,
@@ -156,6 +159,20 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   assert.equal(await fs.readFile(path.join(runtime, "session-relay-inbound-attachments", "message", "sample.bin"), "utf8"), "attachment-state");
   assert.equal(await exists(runningMarker), true);
   assert.equal(await exists(relayMarker), true);
+  assert.equal((await fs.readFile(doctorArgs, "utf8")).trim(), "--require-running --require-desktop-relay");
+
+  await fs.rm(runningMarker, { force: true });
+  const sameVersion = await execFile(process.execPath, [
+    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"),
+    "--version", "v1.1.0", "--remote", "private", "--test-mode",
+  ], {
+    cwd: installation,
+    env: { ...environment, FEISHU_CODEX_BRIDGE_UPDATE_TEST_ASSERT_NO_RELAY_PLIST: "0" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.match(sameVersion.stdout, /v1\.1\.0 is already installed/);
+  assert.equal(await exists(runningMarker), true);
   assert.equal((await fs.readFile(doctorArgs, "utf8")).trim(), "--require-running --require-desktop-relay");
 
   await fs.writeFile(path.join(runtime, "session-relay-settings.json"), '{"keep":"two"}\n', { mode: 0o600 });

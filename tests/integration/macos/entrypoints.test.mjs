@@ -8,8 +8,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   desktopProxySelection,
+  installedDesktopApplications,
   installedDesktopBundlePath,
   proxyEnvironmentMatches,
+  requiredPersistedDesktopProxyUrl,
+  resolveDesktopApplication,
+  runningDesktopApplications,
   safeDesktopLaunchArguments,
   safeLoopbackProxyArgument,
 } from "../../../src/runtime/platform/macos/desktop-runtime.mjs";
@@ -229,18 +233,19 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
-  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.6/);
+  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.7/);
   assert.match(prompt, /setup-project-root\.sh/);
   assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
   assert.match(prompt, /成功后 Bot 主动私聊成员并提示发送 `\/add`/);
   assert.match(prompt, /发送一张飞书用户名片，并按 Bot 提示回复一级目录名/);
   assert.match(prompt, /已有非空 Project 中继续新建并绑定 Session/);
   assert.match(prompt, /Session owner 从飞书安全调整自己 Session 的权限/);
-  assert.match(index, /tag：v0\.4\.0-macos-rc\.6[\s\S]*文件：docs\/INSTALL_MACOS_PROMPT\.md/);
-  assert.match(index, /tag：v0\.4\.0-macos-rc\.6[\s\S]*文件：docs\/UPGRADE_MACOS_PROMPT\.md/);
-  assert.match(upgrade, /\.\/update\.sh --version v0\.4\.0-macos-rc\.6 --remote private/);
-  assert.match(upgrade, /不得要求用户输入、复制、粘贴或运行该命令/);
-  assert.match(upgrade, /原有代理模式/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.7[\s\S]*文件：docs\/INSTALL_MACOS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.7[\s\S]*文件：docs\/UPGRADE_MACOS_PROMPT\.md/);
+  assert.match(upgrade, /update-with-desktop-restart\.sh/);
+  assert.match(upgrade, /不得要求我复制、粘贴或运行命令/);
+  assert.match(upgrade, /--preserve-network/);
+  assert.match(upgrade, /Foreground upgrade is ready/);
   assert.match(readme, /docs\/UPGRADE_MACOS_PROMPT\.md/);
 });
 
@@ -318,6 +323,19 @@ test("macOS Desktop launcher defaults to direct and enables proxy only when expl
   assert.equal(proxyEnvironmentMatches("HTTP_PROXY=http://127.0.0.1:7897", undefined), false);
 });
 
+test("macOS preserved Desktop network mode fails closed on unreadable or unsafe state", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-preserved-network-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const layout = { relayStatePath: path.join(root, "relay.json") };
+  await assert.rejects(() => requiredPersistedDesktopProxyUrl(layout), /missing or unreadable/);
+  await fs.writeFile(layout.relayStatePath, '{"enabled":true}\n');
+  assert.equal(await requiredPersistedDesktopProxyUrl(layout), undefined);
+  await fs.writeFile(layout.relayStatePath, '{"enabled":true,"desktopProxyUrl":"https://proxy.example.com:443"}\n');
+  await assert.rejects(() => requiredPersistedDesktopProxyUrl(layout), /safe loopback URL/);
+  await fs.writeFile(layout.relayStatePath, '{"enabled":true,"desktopProxyUrl":"http://127.0.0.1:7897"}\n');
+  assert.equal(await requiredPersistedDesktopProxyUrl(layout), "http://127.0.0.1:7897");
+});
+
 test("macOS Desktop launcher selects the first installed application bundle", async () => {
   const checked = [];
   const applications = [
@@ -334,4 +352,67 @@ test("macOS Desktop launcher selects the first installed application bundle", as
   });
   assert.equal(selected, "/Applications/Available.app");
   assert.deepEqual(checked, ["/Applications/Missing.app", "/Applications/Available.app"]);
+});
+
+test("macOS Desktop identity is resolved from an approved signed bundle and matched by exact executable path", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-desktop-identity-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const bundlePath = path.join(root, "ChatGPT.app");
+  const executable = path.join(bundlePath, "Contents", "MacOS", "ChatGPT");
+  await fs.mkdir(path.dirname(executable), { recursive: true });
+  await fs.writeFile(executable, "#!/bin/sh\n", { mode: 0o755 });
+  await fs.chmod(executable, 0o755);
+  const application = await resolveDesktopApplication(bundlePath, {
+    readMetadata: async () => ({ bundleIdentifier: "com.openai.codex", executableName: "ChatGPT" }),
+    verifySignature: async () => {},
+  });
+  assert.equal(application.bundlePath, await fs.realpath(bundlePath));
+  assert.equal(application.executable, await fs.realpath(executable));
+  const running = await runningDesktopApplications({
+    applications: [application],
+    processTable: async () => [
+      { pid: 101, command: application.executable },
+      { pid: 102, command: `${application.executable}-helper` },
+      { pid: 103, command: `${application.executable} --safe-flag` },
+    ],
+  });
+  assert.deepEqual(running.map(({ pids }) => pids), [[101, 103]]);
+  await assert.rejects(() => resolveDesktopApplication(bundlePath, {
+    readMetadata: async () => ({ bundleIdentifier: "com.example.fake", executableName: "ChatGPT" }),
+    verifySignature: async () => {},
+  }), /bundle identity/);
+  await assert.rejects(() => resolveDesktopApplication(bundlePath, {
+    readMetadata: async () => ({ bundleIdentifier: "com.openai.codex", executableName: "../ChatGPT" }),
+    verifySignature: async () => {},
+  }), /executable identity/);
+  await assert.rejects(() => installedDesktopApplications({
+    fallbackApplications: [{ bundlePath }],
+    discoverBundlePaths: async () => [],
+    resolveApplication: async () => { throw new Error("invalid signature"); },
+  }), /could not be verified/);
+});
+
+test("macOS foreground updater uses a visible Terminal, target-tag runtime, preserved network mode, and two strict Doctors", async () => {
+  const [wrapper, entrypoint, coordinator, updater, admin] = await Promise.all([
+    fs.readFile(path.join(repositoryRoot, "update.sh"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "src", "runtime", "platform", "macos", "update-with-desktop-restart.sh"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "src", "runtime", "platform", "macos", "foreground-update.mjs"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "src", "runtime", "platform", "macos", "update.mjs"), "utf8"),
+    fs.readFile(path.join(repositoryRoot, "src", "runtime", "platform", "macos", "admin-cli.mjs"), "utf8"),
+  ]);
+  assert.match(wrapper, /--foreground/);
+  assert.match(wrapper, /update-with-desktop-restart\.sh/);
+  assert.match(entrypoint, /git[^\n]*archive[^\n]*src\/runtime/);
+  assert.match(entrypoint, /foreground-update\.mjs/);
+  assert.match(entrypoint, /codesign --verify --deep --strict/);
+  assert.match(entrypoint, /TeamIdentifier=2DC432GLL2/);
+  assert.match(coordinator, /"-a", "Terminal"/);
+  assert.match(coordinator, /waiting-for-desktop-exit/);
+  assert.match(coordinator, /Command-Q/);
+  assert.doesNotMatch(coordinator, /process\.kill\([^,]+,\s*["']SIGKILL/);
+  assert.match(coordinator, /strictDoctor\(repositoryRoot, \{ attached: true \}\)[\s\S]*runTargetUpdater[\s\S]*strictDoctor\(repositoryRoot\)[\s\S]*launchDesktop[\s\S]*strictDoctor\(repositoryRoot, \{ attached: true \}\)/);
+  assert.match(coordinator, /--preserve-network/);
+  assert.match(updater, /preflight-only/);
+  assert.match(updater, /state\.bridgeRunning \|\| startRequested \|\| state\.relayEnabled/);
+  assert.match(admin, /"preserve-network"/);
 });

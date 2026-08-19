@@ -35,6 +35,7 @@ import {
   processProxyEnvironmentMatches,
   proxyEnvironment,
   relayHeartbeatReady,
+  requiredPersistedDesktopProxyUrl,
   runningDesktopApplications,
   safeDesktopLaunchArguments,
 } from "./desktop-runtime.mjs";
@@ -304,7 +305,7 @@ async function launchDesktopRelayCommand(args) {
   assertMacOS();
   const { options, positional } = optionMap(args);
   for (const name of options.keys()) {
-    if (!["wait-for-exit", "proxy", "no-proxy"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
+    if (!["wait-for-exit", "proxy", "no-proxy", "preserve-network"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
   }
   if (positional.length > 0) {
     throw new Error("Unexpected Desktop launch argument. Use --proxy <loopback-url> to enable a proxy.");
@@ -318,6 +319,12 @@ async function launchDesktopRelayCommand(args) {
   if (options.has("proxy") && options.has("no-proxy")) {
     throw new Error("--proxy cannot be combined with --no-proxy.");
   }
+  if (options.has("preserve-network") && (options.has("proxy") || options.has("no-proxy"))) {
+    throw new Error("--preserve-network cannot be combined with --proxy or --no-proxy.");
+  }
+  if (options.has("preserve-network") && options.get("preserve-network") !== true) {
+    throw new Error("--preserve-network does not accept a value.");
+  }
   const status = await statusSnapshot();
   if (!status.listener || !status.appServerProcess || status.pointer !== status.endpoint.href
     || !(await relayHeartbeatReady(status.layout, status.endpoint.href))) {
@@ -327,9 +334,12 @@ async function launchDesktopRelayCommand(args) {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 600) {
     throw new Error("--wait-for-exit must be between 0 and 600 seconds.");
   }
+  const preservedProxyUrl = options.has("preserve-network")
+    ? await requiredPersistedDesktopProxyUrl(status.layout)
+    : undefined;
   const proxySelection = desktopProxySelection({
-    requestedValue: options.get("proxy"),
-    noProxy: options.has("no-proxy"),
+    requestedValue: options.has("preserve-network") ? preservedProxyUrl : options.get("proxy"),
+    noProxy: options.has("preserve-network") ? !preservedProxyUrl : options.has("no-proxy"),
   });
   const proxyUrl = proxySelection.proxyUrl;
   if (proxyUrl) {

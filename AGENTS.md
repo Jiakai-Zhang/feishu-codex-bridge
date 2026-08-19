@@ -12,7 +12,7 @@ When the user asks to install, deploy, set up, or onboard this repository on mac
 6. Do not edit Codex global state files to simulate Project membership.
 7. Do not create, publish, or change a Feishu application without the user's explicit approval of that external change.
 
-For a macOS fixed-release update, read the update section of `docs/INSTALL_MACOS.md` and use `update.sh --version <tag>`. A maintained private-mirror tag must use the exact configured remote through `--remote private`; never replace `origin` on the user's behalf. Never run the Windows updater on macOS.
+For a macOS fixed-release update, read the update section of `docs/INSTALL_MACOS.md` and use the target release's foreground contract (`update.sh --foreground --version <tag>` in an already compatible checkout, or the exact target-tag platform entrypoint described by `docs/UPGRADE_MACOS_PROMPT.md`). A maintained private-mirror tag must use the exact configured remote through `--remote private`; never replace `origin` on the user's behalf. `update.sh --version <tag>` is the lower-level transaction and must not be launched from the active Desktop task. Never run the Windows updater on macOS.
 
 When the user asks to install, deploy, set up, or onboard this repository on Windows:
 
@@ -31,7 +31,7 @@ For ordinary development, debugging, or review requests, follow the repository t
 
 On macOS:
 
-1. Read the update section of `docs/INSTALL_MACOS.md` and use `update.sh` with an explicit release tag. Use `--remote private` only when the selected `private` remote exactly matches the maintained private mirror.
+1. Read the update section of `docs/INSTALL_MACOS.md` and use the target release's visible foreground updater with an explicit release tag. Use `--remote private` only when the selected `private` remote exactly matches the maintained private mirror. Do not bypass the foreground updater with the lower-level transaction during a healthy Desktop-bound update.
 2. Inspect the remote, exact tag, worktree status, Bridge status, and Doctor result before changing anything.
 3. Stop if tracked or untracked user changes exist. Never reset, clean, stash, or overwrite them.
 4. Preserve the existing local configuration, Keychain credential, bindings, Session settings, queues, ledgers, attachment caches, and delivery state. Do not request the App Secret again.

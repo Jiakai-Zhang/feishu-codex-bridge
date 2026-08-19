@@ -1,15 +1,130 @@
 import { execFile as nodeExecFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { RELAY_ENVIRONMENT_VARIABLE } from "./constants.mjs";
 
 const execFile = promisify(nodeExecFile);
 
+export const DESKTOP_BUNDLE_IDENTIFIERS = Object.freeze([
+  "com.openai.codex",
+  "com.openai.chatgpt",
+]);
+export const DESKTOP_TEAM_IDENTIFIERS = Object.freeze(["2DC432GLL2"]);
+
 export const DESKTOP_APPLICATIONS = Object.freeze([
   Object.freeze({ bundlePath: "/Applications/ChatGPT.app", executable: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT" }),
   Object.freeze({ bundlePath: "/Applications/Codex.app", executable: "/Applications/Codex.app/Contents/MacOS/Codex" }),
+  Object.freeze({ bundlePath: path.join(os.homedir(), "Applications", "ChatGPT.app"), executable: path.join(os.homedir(), "Applications", "ChatGPT.app", "Contents", "MacOS", "ChatGPT") }),
+  Object.freeze({ bundlePath: path.join(os.homedir(), "Applications", "Codex.app"), executable: path.join(os.homedir(), "Applications", "Codex.app", "Contents", "MacOS", "Codex") }),
 ]);
+
+async function plistMetadata(bundlePath) {
+  const infoPath = path.join(bundlePath, "Contents", "Info.plist");
+  const read = async (key) => {
+    const { stdout } = await execFile("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", infoPath], {
+      encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 128_000,
+    });
+    return String(stdout || "").trim();
+  };
+  const [bundleIdentifier, executableName] = await Promise.all([
+    read("CFBundleIdentifier"),
+    read("CFBundleExecutable"),
+  ]);
+  return { bundleIdentifier, executableName };
+}
+
+async function verifyDesktopSignature(bundlePath) {
+  await execFile("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundlePath], {
+    encoding: "utf8",
+    timeout: 20_000,
+    maxBuffer: 512_000,
+  });
+  const { stderr } = await execFile("/usr/bin/codesign", ["-dv", "--verbose=4", bundlePath], {
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 512_000,
+  });
+  const teamIdentifier = String(stderr || "").match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim();
+  if (!DESKTOP_TEAM_IDENTIFIERS.includes(teamIdentifier)) {
+    throw new Error("Desktop application signing identity is not approved.");
+  }
+}
+
+export async function resolveDesktopApplication(bundlePath, {
+  realpath = fs.realpath,
+  access = fs.access,
+  readMetadata = plistMetadata,
+  verifySignature = verifyDesktopSignature,
+  allowedBundleIdentifiers = DESKTOP_BUNDLE_IDENTIFIERS,
+} = {}) {
+  const candidate = path.resolve(String(bundlePath || ""));
+  if (!candidate.endsWith(".app")) throw new Error("Desktop candidate is not an application bundle.");
+  const canonicalBundlePath = await realpath(candidate);
+  const { bundleIdentifier, executableName } = await readMetadata(canonicalBundlePath);
+  if (!allowedBundleIdentifiers.includes(bundleIdentifier)) {
+    throw new Error("Desktop application bundle identity is not approved.");
+  }
+  await verifySignature(canonicalBundlePath);
+  if (!executableName || path.basename(executableName) !== executableName || [".", ".."].includes(executableName)) {
+    throw new Error("Desktop application executable identity is invalid.");
+  }
+  const executableDirectory = path.join(canonicalBundlePath, "Contents", "MacOS");
+  const executable = await realpath(path.join(executableDirectory, executableName));
+  const relative = path.relative(executableDirectory, executable);
+  if (relative !== executableName || path.isAbsolute(relative)) {
+    throw new Error("Desktop application executable resolves outside its signed bundle layout.");
+  }
+  await access(executable, fsConstants.X_OK);
+  return Object.freeze({
+    bundlePath: canonicalBundlePath,
+    bundleIdentifier,
+    executable,
+  });
+}
+
+export async function spotlightDesktopBundlePaths() {
+  try {
+    const query = DESKTOP_BUNDLE_IDENTIFIERS
+      .map((identifier) => `kMDItemCFBundleIdentifier == '${identifier}'`)
+      .join(" || ");
+    const { stdout } = await execFile("/usr/bin/mdfind", [query], {
+      encoding: "utf8",
+      timeout: 3_000,
+      maxBuffer: 1_000_000,
+    });
+    return String(stdout || "").split(/\r?\n/).map((value) => value.trim()).filter((value) => value.endsWith(".app"));
+  } catch {
+    return [];
+  }
+}
+
+export async function installedDesktopApplications({
+  fallbackApplications = DESKTOP_APPLICATIONS,
+  discoverBundlePaths = spotlightDesktopBundlePaths,
+  resolveApplication = resolveDesktopApplication,
+} = {}) {
+  const discovered = await discoverBundlePaths();
+  const candidates = [...new Set([
+    ...fallbackApplications.map(({ bundlePath }) => bundlePath),
+    ...discovered,
+  ])];
+  const applications = [];
+  for (const bundlePath of candidates) {
+    try { await fs.access(bundlePath); }
+    catch { continue; }
+    try {
+      const application = await resolveApplication(bundlePath);
+      if (!applications.some(({ executable }) => executable === application.executable)) applications.push(application);
+    } catch {
+      throw new Error("An installed ChatGPT/Codex Desktop candidate could not be verified.");
+    }
+  }
+  return applications;
+}
 
 export function safeLoopbackProxyArgument(value) {
   const candidate = String(value || "").replace(/^--proxy-server=/, "");
@@ -65,6 +180,21 @@ export async function persistedDesktopProxyUrl(layout) {
   }
 }
 
+export async function requiredPersistedDesktopProxyUrl(layout) {
+  let activation;
+  try {
+    activation = JSON.parse(await fs.readFile(layout.relayStatePath, "utf8"));
+  } catch {
+    throw new Error("The saved Desktop relay network selection is missing or unreadable.");
+  }
+  if (activation.enabled !== true) throw new Error("The saved Desktop relay is not enabled.");
+  const rawProxy = String(activation.desktopProxyUrl || "").trim();
+  if (!rawProxy) return undefined;
+  const argument = safeLoopbackProxyArgument(rawProxy);
+  if (!argument) throw new Error("The saved Desktop proxy is not a safe loopback URL.");
+  return argument.slice("--proxy-server=".length);
+}
+
 export async function desktopProcessTable() {
   try {
     const { stdout } = await execFile("/bin/ps", ["-axo", "pid=,command="], {
@@ -83,10 +213,16 @@ export async function desktopProcessTable() {
   }
 }
 
-export async function runningDesktopApplications() {
-  const processes = await desktopProcessTable();
+export async function runningDesktopApplications({
+  applications,
+  processTable = desktopProcessTable,
+} = {}) {
+  const [processes, resolvedApplications] = await Promise.all([
+    processTable(),
+    applications ? Promise.resolve(applications) : installedDesktopApplications(),
+  ]);
   const results = [];
-  for (const application of DESKTOP_APPLICATIONS) {
+  for (const application of resolvedApplications) {
     const matches = processes
       .filter(({ command }) => command === application.executable || command.startsWith(`${application.executable} `));
     if (matches.length > 0) {
@@ -101,9 +237,10 @@ export async function runningDesktopApplications() {
 }
 
 export async function installedDesktopBundlePath({
-  applications = DESKTOP_APPLICATIONS,
+  applications,
   access = fs.access,
 } = {}) {
+  if (!applications) return (await installedDesktopApplications())[0]?.bundlePath;
   for (const application of applications) {
     try {
       await access(application.bundlePath);
@@ -113,9 +250,15 @@ export async function installedDesktopBundlePath({
   return undefined;
 }
 
-export async function embeddedDesktopAppServerRunning() {
-  const processes = await desktopProcessTable();
-  const executables = DESKTOP_APPLICATIONS.map(({ bundlePath }) => path.join(bundlePath, "Contents", "Resources", "codex"));
+export async function embeddedDesktopAppServerRunning({
+  applications,
+  processTable = desktopProcessTable,
+} = {}) {
+  const [processes, resolvedApplications] = await Promise.all([
+    processTable(),
+    applications ? Promise.resolve(applications) : installedDesktopApplications(),
+  ]);
+  const executables = resolvedApplications.map(({ bundlePath }) => path.join(bundlePath, "Contents", "Resources", "codex"));
   return processes.some(({ command }) => executables.some((executable) =>
     command.startsWith(`${executable} `)
       && /(?:^|\s)app-server(?:\s|$)/.test(command)

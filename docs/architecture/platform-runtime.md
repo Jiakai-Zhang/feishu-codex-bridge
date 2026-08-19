@@ -35,13 +35,17 @@ shared product modules and platform capabilities.
   in-process secret retrieval.
 - `launchd-service-manager.mjs`: LaunchAgent lifecycle, environment ownership,
   and plist generation.
-- `desktop-runtime.mjs`: Desktop process discovery, relay attachment, and
-  loopback-only proxy inheritance.
+- `desktop-runtime.mjs`: signed Bundle discovery, exact Desktop process
+  identity, relay attachment, and loopback-only proxy inheritance.
 - `process-inspector.mjs`: PID ownership and command verification.
 - `installer.mjs`: dependency discovery, isolated runtime staging, LaunchAgent
   generation, and binding preservation.
 - `health.mjs`: status and Doctor checks.
-- `update.mjs`: fixed-tag update, private-state backup, and rollback.
+- `update.mjs`: fixed-tag preflight/update, private-state backup, same-version
+  relay self-heal, and rollback.
+- `foreground-update.mjs` plus `update-with-desktop-restart.sh`: target-tag
+  extraction, visible Terminal handoff, user-driven Desktop exit, preserved
+  network relaunch, and pre/post strict Doctor orchestration.
 - `admin-cli.mjs`: thin command composition for stable shell wrappers.
 
 ## Compatibility

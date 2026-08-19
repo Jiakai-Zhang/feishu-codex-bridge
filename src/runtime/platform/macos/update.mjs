@@ -29,7 +29,13 @@ import { isExpectedProcess, readPid } from "./process-inspector.mjs";
 import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
-const repositoryRoot = path.resolve(path.dirname(modulePath), "../../../..");
+const moduleRepositoryRoot = path.resolve(path.dirname(modulePath), "../../../..");
+const foregroundRepositoryRoot = process.env.FEISHU_CODEX_BRIDGE_FOREGROUND_UPDATE === "1"
+  ? String(process.env.FEISHU_CODEX_BRIDGE_FOREGROUND_INSTALL_ROOT || "")
+  : "";
+const repositoryRoot = foregroundRepositoryRoot
+  ? path.resolve(foregroundRepositoryRoot)
+  : moduleRepositoryRoot;
 const VERSION_PATTERN = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/;
 const PERSISTENT_FILES = Object.freeze([
   "completed.json",
@@ -79,6 +85,7 @@ export function approvedMacOSUpdateOrigin(value) {
 
 export async function assertSafeUpdateContext({
   testMode = false,
+  allowDesktop = false,
   environment = process.env,
   listDesktopApplications = runningDesktopApplications,
   isEmbeddedDesktopAppServerRunning = embeddedDesktopAppServerRunning,
@@ -87,6 +94,7 @@ export async function assertSafeUpdateContext({
   if (environment.CODEX_THREAD_ID || environment.CODEX_SESSION_ID) {
     throw new Error("Run update.sh from an independent Terminal, not from inside an active Codex task.");
   }
+  if (allowDesktop) return;
   const [desktopApplications, embeddedAppServer] = await Promise.all([
     listDesktopApplications(),
     isEmbeddedDesktopAppServerRunning(),
@@ -300,16 +308,17 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   assertMacOS();
   const options = optionMap(args);
   for (const name of options.keys()) {
-    if (!["version", "remote", "start-bridge", "test-mode"].includes(name)) throw new Error(`Unknown update option: --${name}`);
+    if (!["version", "remote", "start-bridge", "preflight-only", "test-mode"].includes(name)) throw new Error(`Unknown update option: --${name}`);
   }
   const version = String(options.get("version") || "");
   const remote = String(options.get("remote") || "origin");
   const startRequested = options.has("start-bridge");
+  const preflightOnly = options.has("preflight-only");
   const testMode = options.has("test-mode");
   if (!VERSION_PATTERN.test(version)) throw new Error("--version must be an explicit semantic release tag such as v1.2.3.");
   if (!["origin", "private"].includes(remote)) throw new Error("--remote must be either origin or private.");
   await assertTestMode(testMode);
-  await assertSafeUpdateContext({ testMode });
+  await assertSafeUpdateContext({ testMode, allowDesktop: preflightOnly });
 
   const gitDirectory = path.join(repositoryRoot, ".git");
   if (!(await exists(gitDirectory))) throw new Error("This updater must run from a Git checkout of Feishu Codex Bridge.");
@@ -317,24 +326,28 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
   if (!testMode && !approvedMacOSUpdateOrigin(updateRemoteUrl)) {
     throw new Error(`The selected '${remote}' remote is not an approved Feishu Codex Bridge repository.`);
   }
-  const dirty = await gitText(["status", "--porcelain", "--untracked-files=normal"]);
+  const dirty = await gitText(["status", "--porcelain", "--untracked-files=all"]);
   if (dirty) throw new Error("The installation has tracked or untracked changes; preserve them separately before updating.");
 
   const { raw: config, configPath } = await readBridgeConfig(repositoryRoot);
   if (config.mode !== "session-relay") throw new Error("The existing installation is not in session-relay mode.");
   const layout = runtimeLayout(repositoryRoot, config);
   const endpoint = parseLoopbackAppServerUrl(config.sessionRelay?.appServerUrl);
-  await ensurePrivateDirectory(layout.runtimeDir);
   const state = await serviceState(config, layout, testMode);
-  const shouldStart = state.bridgeRunning || startRequested;
+  const shouldStart = state.bridgeRunning || startRequested || state.relayEnabled;
 
   const previousCommit = await gitText(["rev-parse", "--verify", "HEAD"]);
   await git(["fetch", "--quiet", remote, `refs/tags/${version}:refs/tags/${version}`]);
   const targetCommit = await gitText(["rev-parse", "--verify", `refs/tags/${version}^{commit}`]);
+  if (preflightOnly) {
+    process.stdout.write(`Update preflight passed for ${version}; the checkout and running services are unchanged.\n`);
+    return;
+  }
+  await ensurePrivateDirectory(layout.runtimeDir);
   if (targetCommit === previousCommit) {
     process.stdout.write(`${version} is already installed.\n`);
-    if (startRequested && !state.bridgeRunning) await runRepositoryScript("start-bridge.sh");
-    await runDoctor({ running: state.bridgeRunning || startRequested, relay: state.relayEnabled });
+    if (shouldStart && !state.bridgeRunning) await runRepositoryScript("start-bridge.sh");
+    await runDoctor({ running: shouldStart, relay: state.relayEnabled });
     return;
   }
 

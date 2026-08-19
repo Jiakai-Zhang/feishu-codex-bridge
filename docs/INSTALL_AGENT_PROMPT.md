@@ -7,7 +7,7 @@
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.6
+tag：v0.4.0-macos-rc.7
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
@@ -26,12 +26,12 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 ## macOS 极简升级
 
-正常健康路径由 Codex 完成预检、准备独立 Terminal、升级和 Doctor；用户只在提示后完整退出、等待 Terminal 成功并重新打开 Desktop。
+正常健康路径由 Codex 启动目标版本的可见前台升级器；用户只在提示后按 `⌘Q` 完整退出，升级器会保留原网络模式、自动重开 Desktop 并完成 Doctor。
 
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.6
+tag：v0.4.0-macos-rc.7
 文件：docs/UPGRADE_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
