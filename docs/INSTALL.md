@@ -156,7 +156,7 @@ Desktop 打开后运行：
 .\setup-project-root.ps1
 ```
 
-脚本交互设置唯一 Project 根目录与 Owner 一级目录，随后重启 Bridge。Owner 再在 Bot 私聊或已绑定群发送 `/members add <目录名> @成员`；新成员目录必须为空，应用可用范围也必须包含该成员。未执行这一步的既有安装保持 Owner-only。
+脚本交互设置唯一 Project 根目录与 Owner 一级目录，随后重启 Bridge。Owner 再在 Bot 私聊或已绑定群发送一张飞书用户名片并按提示回复目录名，也可使用 `/members add <目录名> @成员`；新成员目录必须为空，应用可用范围也必须包含该成员。发送名片不会自动邀请成员入群。未执行这一步的既有安装保持 Owner-only。
 
 ## 日常命令
 

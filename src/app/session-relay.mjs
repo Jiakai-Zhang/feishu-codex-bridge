@@ -41,6 +41,10 @@ import {
 } from "../feishu/feishu-long-answer-document.mjs";
 import { FeishuSessionChatManager } from "../feishu/feishu-session-chat.mjs";
 import { sendFeishuMemberOnboarding } from "../feishu/feishu-member-onboarding.mjs";
+import {
+  publicFeishuUserCardFailure,
+  resolveFeishuUserCardOpenId,
+} from "../feishu/feishu-user-card.mjs";
 import { SessionAddFlow } from "../relay/session-add-flow.mjs";
 import {
   SessionAttachmentDraftStore,
@@ -79,6 +83,7 @@ import {
   parseMembersCommand,
   publicMembersFailure,
 } from "../relay/session-access-commands.mjs";
+import { SessionMemberCardFlow } from "../relay/session-member-card-flow.mjs";
 import {
   buildSessionStreamCard,
   buildSessionStreamCardFollowups,
@@ -1313,22 +1318,12 @@ async function processGlobalSettingsMessage(msg, command) {
   await persistCompleted(msg.messageId);
 }
 
-async function processMembersMessage(msg, command) {
-  if (msg.senderId !== config.agent.ownerOpenId) {
-    await channel.reply(msg, { markdown: "只有 Bridge Owner 可以管理成员。" });
-    await persistCompleted(msg.messageId);
-    return;
-  }
-  if (msg.chatType !== "p2p" && command.action === "status") {
-    await channel.reply(msg, { markdown: "成员清单只在与 Bot 的私聊中显示；请在那里发送 `/members`。" });
-    await persistCompleted(msg.messageId);
-    return;
-  }
+async function executeMembersMessage(msg, command, { mentions = msg.mentions } = {}) {
   let restart = false;
   try {
     const result = await executeMembersCommand(command, {
       accessStore: sessionAccess,
-      mentions: msg.mentions,
+      mentions,
       botOpenId: connectedBotOpenId,
       listBindings: () => bindingRegistry.list(),
       includeRoster: msg.chatType === "p2p",
@@ -1343,13 +1338,98 @@ async function processMembersMessage(msg, command) {
     }
     await channel.reply(msg, { markdown: result.markdown });
     await persistCompleted(msg.messageId);
+    return { ok: true, result };
   } catch (error) {
     log(`members command failed: ${safeError(error)}`);
     await channel.reply(msg, { markdown: publicMembersFailure(error) });
     await persistCompleted(msg.messageId);
+    return { ok: false };
   } finally {
     if (restart) await scheduleSelfRestart();
   }
+}
+
+async function processMembersMessage(msg, command) {
+  if (msg.senderId !== config.agent.ownerOpenId) {
+    await channel.reply(msg, { markdown: "只有 Bridge Owner 可以管理成员。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (msg.chatType !== "p2p" && command.action === "status") {
+    await channel.reply(msg, { markdown: "成员清单只在与 Bot 的私聊中显示；请在那里发送 `/members`。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  await executeMembersMessage(msg, command);
+}
+
+function memberCardConversationId(msg) {
+  return `${msg.chatId}:${msg.senderId}`;
+}
+
+async function processMemberCardMessage(msg) {
+  if (msg.senderId !== config.agent.ownerOpenId) {
+    await channel.reply(msg, { markdown: "只有 Bridge Owner 可以通过用户名片登记成员。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (!sessionAccess.isConfigured()) {
+    await channel.reply(msg, { markdown: publicMembersFailure({ code: "project_root_missing" }) });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  try {
+    const targetOpenId = await resolveFeishuUserCardOpenId(msg, { client: channel.rawClient });
+    if (targetOpenId === config.agent.ownerOpenId) {
+      await channel.reply(msg, { markdown: "Bridge Owner 已经登记，无需再次添加。" });
+      await persistCompleted(msg.messageId);
+      return;
+    }
+    if (targetOpenId === connectedBotOpenId) {
+      await channel.reply(msg, { markdown: "机器人不能登记为 Bridge 成员。" });
+      await persistCompleted(msg.messageId);
+      return;
+    }
+    const conversationId = memberCardConversationId(msg);
+    sessionAddFlow.cancel(conversationId);
+    sessionDeleteFlow.cancel(conversationId);
+    const result = sessionMemberCardFlow.begin({
+      conversationId,
+      actorOpenId: msg.senderId,
+      target: {
+        openId: targetOpenId,
+        name: sessionAccess.getUser(targetOpenId)?.displayName,
+      },
+    });
+    await channel.reply(msg, { markdown: result.reply });
+    await persistCompleted(msg.messageId);
+  } catch (error) {
+    log(`member user card could not be resolved: ${safeError(error)}`);
+    await channel.reply(msg, { markdown: publicFeishuUserCardFailure(error) });
+    await persistCompleted(msg.messageId);
+  }
+}
+
+async function processPendingMemberCardText(msg, content) {
+  const conversationId = memberCardConversationId(msg);
+  const flowResult = sessionMemberCardFlow.handle({
+    conversationId,
+    actorOpenId: msg.senderId,
+    text: content,
+  });
+  if (!flowResult.handled) return false;
+  if (flowResult.action !== "add") {
+    await channel.reply(msg, { markdown: flowResult.reply });
+    await persistCompleted(msg.messageId);
+    return true;
+  }
+  const outcome = await executeMembersMessage(
+    msg,
+    { action: "add", args: flowResult.directoryName },
+    { mentions: [{ openId: flowResult.target.openId, name: flowResult.target.name, isBot: false }] },
+  );
+  if (outcome.ok) sessionMemberCardFlow.cancel(conversationId);
+  return true;
 }
 
 async function repliesToBridgeBot(msg) {
@@ -1929,6 +2009,7 @@ const sessionAddFlow = new SessionAddFlow({
   createProject: createProjectSession,
   createWorkspaceProject,
 });
+const sessionMemberCardFlow = new SessionMemberCardFlow();
 
 const bindingRemover = new SessionBindingRemover({
   registry: bindingRegistry,
@@ -2036,8 +2117,13 @@ async function pollSessionBindingInbox() {
 async function processInboundMessage(msg, baseBinding) {
   try {
     let binding = resolveRelayBinding(msg.chatId);
+    if (msg.rawContentType === "share_user") {
+      await processMemberCardMessage(msg);
+      return;
+    }
     if (msg.rawContentType === "text") {
       const rawContent = String(msg.content || "");
+      if (await processPendingMemberCardText(msg, rawContent)) return;
       const membersCommand = parseMembersCommand(rawContent);
       if (membersCommand) {
         await processMembersMessage(msg, membersCommand);

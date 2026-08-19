@@ -50,7 +50,7 @@ function formatMembers(accessStore, { changed, includeRoster = true } = {}) {
   }
   lines.push(
     "",
-    "命令：`/members add <目录名> @成员`、`/members remove @成员`",
+    "命令：发送用户名片后回复目录名，或使用 `/members add <目录名> @成员`、`/members remove @成员`",
     "",
     "> Project 绝对路径只允许在本机设置，不会显示在飞书中。成员目录停用后不会删除本地文件。",
   );
@@ -75,7 +75,7 @@ export async function executeMembersCommand(command, {
   if (!command || !accessStore) throw new TypeError("Members command requires an access store");
   if (command.action === "status") return { markdown: formatMembers(accessStore), restart: false };
   if (command.action === "invalid") {
-    return { markdown: "用法：`/members`、`/members add <目录名> @成员` 或 `/members remove @成员`。", restart: false };
+    return { markdown: "用法：发送用户名片后回复目录名，或使用 `/members`、`/members add <目录名> @成员`、`/members remove @成员`。", restart: false };
   }
   const targets = humanMentions(mentions, botOpenId);
   if (targets.length !== 1) {

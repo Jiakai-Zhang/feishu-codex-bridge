@@ -2,7 +2,7 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.3`。它在 rc.2 的成员主动私聊 onboarding 与多用户能力之上，允许从 `/add` 在任意非空 Project 中继续创建及绑定新 Session，并继续保留 Keychain、附件、私聊临时 Chat、单 Session writer 隔离、launchd Desktop relay 与事务升级。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.4`。它保留 rc.3 在任意非空 Project 中创建及绑定新 Session 的能力，并允许 Owner 发送飞书用户名片、按提示回复目录名完成成员登记；原有 mention 命令、主动私聊 onboarding、Keychain、附件、私聊临时 Chat、单 Session writer 隔离、launchd Desktop relay 与事务升级保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
 
@@ -115,7 +115,7 @@ OAuth 命令同样会输出 verification URL。自动打开失败时，使用 CL
 
 该脚本不接受路径参数，会在 stdin 中交互询问一个绝对 Project 根目录和 Owner 的一级目录名。不得把绝对路径放入聊天、命令参数、日志、文档或 Git。一旦启用，自动流程不会把该根目录或已分配的成员目录改指到其他位置。
 
-如果在首次启动前完成设置，可直接继续下一节。已运行的安装则需用官方入口停止并重新启动 Bridge，才会载入新权限状态。随后 Owner 可在 Bot 私聊或已绑定群使用 `/members add <一级目录名> @成员` 逐人登记。新成员目录必须不存在或为空，飞书应用可用范围也必须包含该成员。
+如果在首次启动前完成设置，可直接继续下一节。已运行的安装则需用官方入口停止并重新启动 Bridge，才会载入新权限状态。随后 Owner 可在 Bot 私聊或已绑定群发送一张飞书用户名片，并按 Bot 提示回复该成员的一级目录名；也可继续使用 `/members add <一级目录名> @成员`。新成员目录必须不存在或为空，飞书应用可用范围也必须包含该成员；发送名片不会自动邀请成员入群。
 
 ## 6. 启动与 Desktop relay
 
