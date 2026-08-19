@@ -15,6 +15,17 @@ function Add-Check {
     $script:checks.Add([pscustomobject]@{ Name = $Name; Passed = $Passed; Detail = $Detail })
 }
 
+function ConvertTo-UtcDateTime {
+    param([Parameter(Mandatory)][object]$Value)
+    if ($Value -is [DateTime]) {
+        return ([DateTime]$Value).ToUniversalTime()
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+}
+
 function Invoke-LarkJson {
     param([string]$NodePath, [string]$EntryPath, [string[]]$Arguments)
     $proxyNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
@@ -181,7 +192,7 @@ if ($config) {
         }
         $relayState = Get-Content -Raw -LiteralPath $relayStatePath | ConvertFrom-Json
         $watchdogStatus = Get-Content -Raw -LiteralPath $watchdogStatusPath | ConvertFrom-Json
-        $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+        $heartbeatAt = ConvertTo-UtcDateTime -Value $watchdogStatus.heartbeatAt
         $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
         $bridgeEnabledProperty = $relayState.PSObject.Properties['bridgeEnabled']
         $bridgeEnabled = -not $bridgeEnabledProperty -or [bool]$bridgeEnabledProperty.Value

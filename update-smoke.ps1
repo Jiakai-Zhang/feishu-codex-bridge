@@ -9,8 +9,8 @@ $testRoot = Join-Path $temporaryBase ('feishu-bridge-update-' + [guid]::NewGuid(
 $seedRoot = Join-Path $testRoot 'seed'
 $originRoot = Join-Path $testRoot 'origin.git'
 $privateRoot = Join-Path $testRoot 'private.git'
-$installRoot = Join-Path $testRoot 'installed'
-$runtimeWorkspace = Join-Path $testRoot 'runtime'
+$runtimeWorkspace = Join-Path $testRoot 'installed-workspace'
+$installRoot = Join-Path $runtimeWorkspace 'work\feishu-codex-bridge'
 New-Item -ItemType Directory -Force -Path $seedRoot | Out-Null
 
 function Invoke-TestGit {
@@ -36,7 +36,16 @@ function Write-Utf8File {
 
 try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'update.ps1') -Destination (Join-Path $seedRoot 'update.ps1')
-    Write-Utf8File -Path (Join-Path $seedRoot '.gitignore') -Content "bridge.config.json`nnode_modules/`n"
+    Write-Utf8File -Path (Join-Path $seedRoot '.gitignore') -Content @'
+bridge.config.json
+node_modules/
+*.log
+channel-secret.dpapi
+session-relay-*.json
+codex-app-server.pid
+codex-app-server-environment.json
+custom-guardian.marker
+'@
     Write-Utf8File -Path (Join-Path $seedRoot 'package.json') -Content @'
 {"name":"feishu-bridge-update-smoke","version":"1.0.0","private":true}
 '@
@@ -89,7 +98,9 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('tag', 'v9.0.0-test.1') | Out-Null
 
     Write-Utf8File -Path (Join-Path $seedRoot 'release-marker.txt') -Content "two`n"
-    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('add', 'release-marker.txt') | Out-Null
+    $legacyIgnore = Get-Content -Raw -LiteralPath (Join-Path $seedRoot '.gitignore')
+    Write-Utf8File -Path (Join-Path $seedRoot '.gitignore') -Content ($legacyIgnore.TrimEnd() + "`nupgrade-backups/`n")
+    Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('add', 'release-marker.txt', '.gitignore') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('commit', '--quiet', '-m', 'release two') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('tag', 'v9.0.0-test.2') | Out-Null
 
@@ -111,6 +122,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'origin', 'HEAD', '--tags') | Out-Null
     Invoke-TestGit -WorkingDirectory $seedRoot -Arguments @('push', '--quiet', 'private', 'HEAD', '--tags') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $installRoot) | Out-Null
     & git clone --quiet --branch v9.0.0-test.1 $originRoot $installRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not clone the test installation.' }
     Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('remote', 'add', 'private', $privateRoot) | Out-Null
@@ -138,6 +150,9 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
         desktopProxyUrl = $desktopProxyUrl
     } | ConvertTo-Json) + "`n")
     Write-Utf8File -Path (Join-Path $runtimeDirectory 'custom-guardian.marker') -Content 'preserve external guardian'
+    $legacyBackupDirectory = Join-Path $runtimeDirectory 'upgrade-backups\legacy-backup'
+    New-Item -ItemType Directory -Force -Path $legacyBackupDirectory | Out-Null
+    Write-Utf8File -Path (Join-Path $legacyBackupDirectory 'manifest.json') -Content '{"schemaVersion":1}'
 
     $relayBootstrapDirectory = Join-Path $testRoot 'bootstrap'
     New-Item -ItemType Directory -Force -Path $relayBootstrapDirectory | Out-Null
@@ -155,6 +170,21 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $relayUrl
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH = $relayStatePath
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH = $relayBootstrapPath
+
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $preflightOutput = & $windowsPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File (Join-Path $installRoot 'update.ps1') -Version v9.0.0-test.2 -Remote private -PreflightOnly -TestMode
+    if ($LASTEXITCODE -ne 0 -or ($preflightOutput -join "`n") -notmatch 'Update preflight passed') {
+        throw 'The target updater preflight did not complete successfully through powershell.exe -File.'
+    }
+    $tagAfterPreflight = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
+    if ($tagAfterPreflight -ne 'v9.0.0-test.1') { throw 'PreflightOnly changed the installed checkout.' }
+    $backupManifestsAfterPreflight = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDirectory 'upgrade-backups') -Filter manifest.json -Recurse -File)
+    if ($backupManifestsAfterPreflight.Count -ne 1) { throw 'PreflightOnly created or removed a recovery backup.' }
+    if (Test-Path -LiteralPath (Join-Path $runtimeDirectory 'install-ran.log')) {
+        throw 'PreflightOnly ran the target installer.'
+    }
+
     & (Join-Path $installRoot 'update.ps1') -InstallRoot $installRoot -Version v9.0.0-test.2 -Remote private -StartBridge -TestMode
     $tagAfterUpgrade = (Invoke-TestGit -WorkingDirectory $installRoot -Arguments @('describe', '--tags', '--exact-match') | Out-String).Trim()
     if ($tagAfterUpgrade -ne 'v9.0.0-test.2') { throw 'The updater did not switch to the requested tag.' }
@@ -187,7 +217,10 @@ Add-Content -LiteralPath (Join-Path $runtime 'relay-configure-ran.log') -Value $
         throw 'The updater did not carry the preserved proxy selection into target relay verification.'
     }
     $backupManifests = @(Get-ChildItem -LiteralPath (Join-Path $runtimeDirectory 'upgrade-backups') -Filter manifest.json -Recurse -File)
-    if ($backupManifests.Count -lt 1) { throw 'The updater did not create a recovery manifest.' }
+    if ($backupManifests.Count -lt 2) { throw 'The updater did not preserve the legacy backup and create a recovery manifest.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $legacyBackupDirectory 'manifest.json') -PathType Leaf)) {
+        throw 'The updater removed an existing recovery backup.'
+    }
 
     Write-Utf8File -Path (Join-Path $installRoot 'user-change.txt') -Content "preserve me`n"
     $dirtyTreeRejected = $false

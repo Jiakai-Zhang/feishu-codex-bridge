@@ -18,7 +18,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-windows-rc.3
+tag：v0.4.0-windows-rc.4
 文件：docs/INSTALL_WINDOWS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
@@ -39,12 +39,12 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 ## Windows 极简升级
 
-正常健康路径由 Codex 完成预检、独立 PowerShell 升级和 Doctor；用户只在提示后完整重启 Desktop。
+正常健康路径由 Codex 完成预检并启动可见前台升级器；用户只在提示后完全退出 Desktop，升级器会按原网络模式自动重开并完成 Doctor。
 
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-windows-rc.3
+tag：v0.4.0-windows-rc.4
 文件：docs/UPGRADE_WINDOWS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。

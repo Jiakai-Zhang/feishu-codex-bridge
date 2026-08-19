@@ -333,6 +333,17 @@ $statusText = ($statusLines | ForEach-Object { [string]$_ }) -join ' '
 if (-not $statusCommandSucceeded -or $statusText -notmatch 'connected=True') {
     throw 'Start the Bridge and wait for its authenticated Channel connection before enabling Desktop relay.'
 }
+
+function ConvertTo-UtcDateTime {
+    param([Parameter(Mandatory)][object]$Value)
+    if ($Value -is [DateTime]) {
+        return ([DateTime]$Value).ToUniversalTime()
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+}
 $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
 if ($current -and $current -ne $url.AbsoluteUri -and -not $Force) {
     throw "$variableName already contains a different value; refusing to overwrite another setup."
@@ -459,7 +470,7 @@ try {
             if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
                 try {
                     $watchdogStatus = Get-Content -Raw -LiteralPath $statusPath | ConvertFrom-Json
-                    $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+                    $heartbeatAt = ConvertTo-UtcDateTime -Value $watchdogStatus.heartbeatAt
                     $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
                     if ([string]$watchdogStatus.activationId -eq $activationId -and
                         [string]$watchdogStatus.state -eq 'ready' -and

@@ -101,6 +101,11 @@ test("Windows updater locks and backs up the Desktop network selection before ch
   assert.match(updater, /desktop-relay-bootstrap\.ps1/);
   assert.match(updater, /session-relay-access\.json/);
   assert.match(updater, /session-relay-inbound-attachments/);
+  assert.match(updater, /\[switch\]\$PreflightOnly/);
+  assert.match(updater, /Update preflight passed/);
+  assert.match(updater, /\$MyInvocation\.MyCommand\.Path/);
+  assert.match(updater, /function Get-DirtyState/);
+  assert.match(updater, /upgrade-backups/);
 });
 
 test("Windows multi-user Project root setup keeps the absolute path off command arguments", async () => {
@@ -138,19 +143,23 @@ test("Windows install prompt matches the macOS onboarding contract", async () =>
   assert.match(prompt, /\u5c0f\u56fe[\s\S]*\u666e\u901a\u5c0f\u6587\u4ef6[\s\S]*\u539f\u751f\u9644\u4ef6/);
   assert.match(prompt, /CLI \u539f\u6837\u8f93\u51fa\u7684\u8be5 URL \u4f5c\u4e3a\u53ef\u70b9\u51fb\u7684\u5907\u7528\u94fe\u63a5/);
   assert.match(prompt, /\u4e34\u65f6\u672c\u673a loopback \u5907\u7528 URL/);
-  assert.match(prompt, /tag：v0\.4\.0-windows-rc\.3/);
+  assert.match(prompt, /tag：v0\.4\.0-windows-rc\.4/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
   assert.match(prompt, /setup-project-root\.ps1/);
   assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
   assert.match(prompt, /Session owner 使用 `\/permissions`/);
-  assert.match(index, /tag：v0\.4\.0-windows-rc\.3[\s\S]*文件：docs\/INSTALL_WINDOWS_PROMPT\.md/);
-  assert.match(index, /tag：v0\.4\.0-windows-rc\.3[\s\S]*文件：docs\/UPGRADE_WINDOWS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-windows-rc\.4[\s\S]*文件：docs\/INSTALL_WINDOWS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-windows-rc\.4[\s\S]*文件：docs\/UPGRADE_WINDOWS_PROMPT\.md/);
   assert.doesNotMatch(index, /raw\.githubusercontent\.com/);
-  assert.match(upgrade, /\.\\update\.ps1 -Version v0\.4\.0-windows-rc\.3 -Remote private/);
-  assert.match(upgrade, /不得要求用户输入命令/);
+  assert.match(upgrade, /update-windows-with-desktop-restart\.ps1/);
+  assert.match(upgrade, /v0\.4\.0-windows-rc\.4/);
+  assert.match(upgrade, /不得要求用户复制、粘贴或运行升级命令/);
+  assert.match(upgrade, /Foreground upgrade is ready/);
+  assert.match(upgrade, /只负责.*完全退出.*不负责重新打开/);
+  assert.match(upgrade, /Interactive、Limited、无自动触发器/);
   assert.match(upgrade, /原有代理模式/);
   assert.match(readme, /docs\/UPGRADE_WINDOWS_PROMPT\.md/);
-  assert.match(installAgent, /v0\.4\.0-windows-rc\.3/);
+  assert.match(installAgent, /v0\.4\.0-windows-rc\.4/);
   assert.match(doctor, /current conversation to Full access/);
   assert.match(doctor, /Approve for me[^\r\n]*does not remove sandbox boundaries/);
 });

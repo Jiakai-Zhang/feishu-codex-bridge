@@ -4,7 +4,7 @@
 
 > 当前仅支持 Windows + Codex Desktop。Bridge 依赖 Codex App Server 的实验性 WebSocket 接口，因此本版本按 Beta 发布，不建议作为无人值守的生产服务。
 
-> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.3`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
+> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.4`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
 
 ## 1. 安装依赖
 
@@ -41,7 +41,7 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.3 --depth 1
+gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.4 --depth 1
 Set-Location .\feishu-codex-bridge-private
 npm ci
 .\lark-cli.ps1 --version
@@ -176,11 +176,20 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 
 ## 更新
 
-交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 自行完成独立 PowerShell 更新和 Doctor，用户只需在提示后完整重启 Desktop；以下安全检查与回滚边界不会被省略。
+交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 启动可见前台升级器，用户只需在提示后完全退出 Desktop；升级器会按升级前保存的网络模式自动重开 Desktop 并完成最终 Doctor。以下安全检查与回滚边界不会被省略。
 
 升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，并在切换 checkout 前证明活动 Desktop relay 的直连/代理选择与 App Server 进程记录一致。随后才优雅停止 Bridge，并备份 `bridge.config.json`、DPAPI 密文、成员/Project 状态、Session 设置、待提交附件与缓存、队列、输入账本、投递状态、Desktop relay 状态和稳定 bootstrap。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交并恢复备份；不会执行 `git reset`、`git clean`、`stash` 或覆盖用户代码，也不会在回滚中重启 App Server 或改换代理。
 
-从 `v0.2.0-beta.1` 开始，后续升级使用：
+需要自动重开 Desktop 的正常升级使用：
+
+```powershell
+.\update-windows-with-desktop-restart.ps1 -Version <目标 release tag>
+.\update-windows-with-desktop-restart.ps1 -Version <目标 private release tag> -Remote private
+```
+
+该入口会创建无触发器的一次性可见 Scheduled Task，先运行目标 updater 的只读预检，再等待用户退出 Desktop。它不依赖发起升级的 Codex 进程继续存活。成功后任务自行注销；失败窗口保持可见，并在可能时用原网络模式恢复 Desktop。
+
+底层事务升级器仍可用于不需要 Desktop 重开编排的维护：
 
 ```powershell
 .\update.ps1 -Version <目标 release tag>

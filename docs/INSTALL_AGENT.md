@@ -15,10 +15,10 @@
 
 ## 0. 固定版本与目标目录
 
-新安装使用私有仓库已发布的精确 Windows tag。当前默认目标为 `v0.4.0-windows-rc.3`：
+新安装使用私有仓库已发布的精确 Windows tag。当前默认目标为 `v0.4.0-windows-rc.4`：
 
 ```powershell
-gh repo clone ninmon/feishu-codex-bridge-private "$env:LOCALAPPDATA\FeishuCodexBridge\app" -- --branch v0.4.0-windows-rc.3 --depth 1
+gh repo clone ninmon/feishu-codex-bridge-private "$env:LOCALAPPDATA\FeishuCodexBridge\app" -- --branch v0.4.0-windows-rc.4 --depth 1
 Set-Location "$env:LOCALAPPDATA\FeishuCodexBridge\app"
 git describe --tags --exact-match
 ```
@@ -163,23 +163,31 @@ Desktop 重新打开后执行：
 
 ## 8. 升级已有安装
 
-交给 Codex 执行时优先使用[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)：健康路径由 Codex 自行启动独立 PowerShell、运行 updater 和 Doctor，用户只在验证完成后完整重启 Desktop。以下安全边界仍全部适用。
+交给 Codex 执行时优先使用[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)：健康路径由 Codex 启动目标 release 的 `update-windows-with-desktop-restart.ps1`；用户只完全退出 Desktop，前台升级器会独立更新、按原网络模式自动重开并完成 Doctor。以下安全边界仍全部适用。
 
-用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或未跟踪改动时停止；不得 reset、clean、stash 或覆盖。默认更新源为 `origin`；用户指定私有测试 release 时，只能选择名称为 `private`、URL 精确匹配 `ninmon/feishu-codex-bridge-private` 的已有远端，不得替用户重写 `origin`，也不得把 GitHub Token 放进 remote URL。
+用户明确要求升级时，先只读检查安装目录的 `git remote -v`、`git status --short`、当前精确 tag、`status-bridge.ps1` 和 `doctor.ps1`。不创建或修改飞书应用，不重新索取 App Secret。工作树有任何已跟踪或普通未跟踪改动时停止；不得 reset、clean、stash 或覆盖。唯一可交给目标 `-PreflightOnly` 识别的例外，是配置所指 runtime 恰好在 checkout 内且全部未跟踪内容都属于 updater 生成的 `upgrade-backups/`；不得删除这些备份。默认更新源为 `origin`；用户指定私有测试 release 时，只能选择名称为 `private`、URL 精确匹配 `ninmon/feishu-codex-bridge-private` 的已有远端，不得替用户重写 `origin`，也不得把 GitHub Token 放进 remote URL。
 
-使用当前 release 自带升级器和明确 tag：
+需要自动重开 Desktop 的正常路径使用目标 release 自带前台升级器和明确 tag：
+
+```powershell
+.\update-windows-with-desktop-restart.ps1 -Version <目标 release tag>
+```
+
+私有测试 release 使用 `-Remote private`。该脚本会先调用目标 updater 的 `-PreflightOnly`，创建当前用户、Interactive、Limited、无触发器的一次性 Scheduled Task，并在可见 PowerShell 中等待用户退出 Desktop。不得用依附于 Desktop 的后台 job 或临时 `Start-Process` monitor 代替。
+
+以下底层事务入口只用于无需自动重开 Desktop 的维护或由前台升级器内部调用：
 
 ```powershell
 .\update.ps1 -Version <目标 release tag>
 ```
 
-私有测试 release 使用：
+底层私有测试 release 使用：
 
 ```powershell
 .\update.ps1 -Version <目标 private release tag> -Remote private
 ```
 
-如果当前安装的旧升级器尚无 `Remote` 参数，严格使用目标 release note 的认证 Git fetch 与临时目标 updater 引导；先证明 `gh auth status`、私有仓库访问、精确 remote URL 和目标 tag，再从 tag 中读取 updater。不得改用 `main`、公开 raw URL、任意下载脚本或手工 checkout 代替事务升级。
+如果当前安装尚无前台升级器，严格使用目标 release note 的认证 Git fetch，从精确目标 tag 提取 `update-windows-with-desktop-restart.ps1` 到当前用户临时目录，并显式传入当前安装目录、目标 tag 和 remote。先证明 `gh auth status`、私有仓库访问、精确 remote URL 和目标 tag；不得改用 `main`、公开 raw URL、任意下载脚本或手工 checkout 代替。
 
 升级器负责先锁定 Desktop relay 的直连/代理模式，再停止/恢复 Bridge、创建本机恢复备份、切换精确 tag、执行 `npm ci`，并保留本机配置、DPAPI 密文、绑定、成员/个人 Project 状态、Session 设置、队列、账本、附件缓存、投递状态、relay state 与 bootstrap。目标安装器必须跳过 Desktop relay 迁移；失败时回滚且不重启 App Server、不改代理。升级前 Desktop relay 已启用时，`doctor.ps1 -RequireDesktopRelay` 是成功条件。
 

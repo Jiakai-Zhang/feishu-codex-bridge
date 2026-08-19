@@ -2,16 +2,21 @@ param(
     [Parameter(Mandatory)]
     [ValidatePattern('^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$')]
     [string]$Version,
-    [string]$InstallRoot = $PSScriptRoot,
+    [string]$InstallRoot,
     [ValidateSet('origin', 'private')]
     [string]$Remote = 'origin',
     [switch]$StartBridge,
     [string]$Proxy,
     [switch]$NoProxy,
+    [switch]$PreflightOnly,
     [switch]$TestMode
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+    $InstallRoot = Split-Path -Parent ([IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path))
+}
 
 if ($env:OS -ne 'Windows_NT') {
     throw 'This updater supports Windows only.'
@@ -56,7 +61,8 @@ if ($TestMode) {
     $relativeToTemp = $repositoryRoot.Substring($temporaryBase.Length).TrimStart('\', '/')
     $testContainer = ($relativeToTemp -split '[\\/]')[0]
     if ($env:FEISHU_CODEX_BRIDGE_UPDATE_TEST -ne '1' -or
-        $testContainer -notlike 'feishu-bridge-update-*') {
+        ($testContainer -notlike 'feishu-bridge-update-*' -and
+            $testContainer -notlike 'feishu-bridge-foreground-*')) {
         throw 'TestMode is restricted to the updater smoke-test directory.'
     }
 }
@@ -232,6 +238,26 @@ function Restore-RecoveryBackup {
     }
 }
 
+function Get-DirtyState {
+    param([Parameter(Mandatory)][string]$RuntimeDirectory)
+    $dirty = Invoke-Git -Arguments @('status', '--porcelain', '--untracked-files=all') -Capture
+    if ([string]::IsNullOrWhiteSpace($dirty)) { return '' }
+
+    $backupRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeDirectory 'upgrade-backups'))
+    $repositoryPrefix = $repositoryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $backupRoot.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return $dirty
+    }
+    $relativeBackup = $backupRoot.Substring($repositoryPrefix.Length).Replace('\', '/').TrimEnd('/')
+    $remaining = @($dirty -split "`r?`n" | Where-Object {
+        $line = [string]$_
+        if ($line -notmatch '^\?\? (.+)$') { return $true }
+        $path = ([string]$Matches[1]).Trim('"').Replace('\', '/')
+        return $path -ne $relativeBackup -and -not $path.StartsWith("$relativeBackup/", [StringComparison]::OrdinalIgnoreCase)
+    })
+    return ($remaining -join "`n").Trim()
+}
+
 $gitPath = Get-CommandPath -Name 'git.exe'
 if (-not $gitPath) { $gitPath = Get-CommandPath -Name 'git' }
 if (-not $gitPath) { throw 'Git was not found.' }
@@ -244,11 +270,6 @@ if (-not $TestMode -and -not (Test-ApprovedUpdateRemote -Url $updateRemoteUrl)) 
     throw "The selected '$Remote' remote is not an approved Feishu Codex Bridge repository; refusing to update it."
 }
 
-$dirtyState = Invoke-Git -Arguments @('status', '--porcelain', '--untracked-files=normal') -Capture
-if (-not [string]::IsNullOrWhiteSpace($dirtyState)) {
-    throw 'The installation has uncommitted or untracked changes. Preserve them separately before updating; the updater will not reset or clean them.'
-}
-
 $configPath = Join-Path $repositoryRoot 'bridge.config.json'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw 'bridge.config.json is missing; this does not look like a completed installation.'
@@ -258,6 +279,10 @@ if ([string]::IsNullOrWhiteSpace([string]$config.workspace)) {
     throw 'The local configuration does not contain a runtime workspace.'
 }
 $runtimeDirectory = Join-Path ([IO.Path]::GetFullPath([string]$config.workspace)) 'work\feishu-codex-bridge'
+$dirtyState = Get-DirtyState -RuntimeDirectory $runtimeDirectory
+if (-not [string]::IsNullOrWhiteSpace($dirtyState)) {
+    throw 'The installation has uncommitted or untracked changes. Preserve them separately before updating; the updater will not reset or clean them.'
+}
 New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
 $expectedDesktopRelayUrl = [string]$config.sessionRelay.appServerUrl
 $currentDesktopRelayUrl = [Environment]::GetEnvironmentVariable(
@@ -356,6 +381,11 @@ if ($desktopRelayWasEnabled -and $previousCommit -ne $targetCommit -and
 }
 $bridgeWasRunning = Test-BridgeRunning -Config $config -RuntimeDirectory $runtimeDirectory
 $shouldStart = $bridgeWasRunning -or $StartBridge -or $desktopRelayWasEnabled
+
+if ($PreflightOnly) {
+    Write-Output "Update preflight passed for $Version; the checkout and running services are unchanged."
+    exit 0
+}
 
 if ($previousCommit -eq $targetCommit) {
     Write-Output "$Version is already installed."

@@ -191,6 +191,9 @@ test("doctor requires a fresh continuous watchdog heartbeat and owned listener",
   assert.match(source, /heartbeatAgeSeconds[\s\S]*-le 20/);
   assert.match(source, /FeishuCodexBridge-DesktopRelay-Watchdog/);
   assert.match(source, /verified Codex App Server process owns the accepting loopback listener/);
+  assert.match(source, /function ConvertTo-UtcDateTime/);
+  assert.match(source, /DateTimeOffset]::Parse/);
+  assert.doesNotMatch(source, /DateTime]::Parse\(\[string\]\$watchdogStatus\.heartbeatAt\)/);
 });
 
 test("Bridge status exposes the continuous watchdog health", async () => {
@@ -198,6 +201,7 @@ test("Bridge status exposes the continuous watchdog health", async () => {
   assert.match(source, /desktopRelayWatchdog=\$watchdogState/);
   assert.match(source, /desktop-relay-watchdog-status\.json/);
   assert.match(source, /heartbeatAgeSeconds[\s\S]*-le 20/);
+  assert.match(source, /ConvertTo-UtcDateTime -Value \$watchdogStatus\.heartbeatAt/);
 });
 
 test("updater preserves and strictly verifies an enabled Desktop relay", async () => {
