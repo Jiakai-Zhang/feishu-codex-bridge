@@ -104,26 +104,60 @@ export async function assertSafeUpdateContext({
   }
 }
 
-function runFile(executable, args, { cwd = repositoryRoot, capture = false, allowFailure = false, env = process.env } = {}) {
+function safeChildDiagnostic(value, cwd) {
+  const lines = String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let detail = safeError(lines.at(-1) || "");
+  for (const privatePath of [cwd, repositoryRoot, os.homedir()]) {
+    if (privatePath) detail = detail.replaceAll(String(privatePath), "<local-path>");
+  }
+  return detail
+    .replace(/(['"])\/[^'"\r\n]+\1/g, "<local-path>")
+    .replace(/(^|\s)\/[^\s]+/g, "$1<local-path>")
+    .replace(/(?:https?|socks5):\/\/[^\s]+/gi, "<url>")
+    .replace(/\b(?:cli|ou|oc)_[A-Za-z0-9_-]+\b/g, "<private-id>")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27}\b/gi, "<private-id>")
+    .slice(0, 500);
+}
+
+function runFile(executable, args, {
+  cwd = repositoryRoot,
+  capture = false,
+  mirror = false,
+  allowFailure = false,
+  env = process.env,
+} = {}) {
   return new Promise((resolve, reject) => {
+    const piped = capture || mirror;
     const child = spawn(executable, args, {
       cwd,
       env,
-      stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: piped ? ["inherit", "pipe", "pipe"] : "inherit",
     });
     let stdout = "";
     let stderr = "";
-    if (capture) {
+    if (piped) {
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => { if (stdout.length < 4_000_000) stdout += chunk; });
-      child.stderr.on("data", (chunk) => { if (stderr.length < 1_000_000) stderr += chunk; });
+      child.stdout.on("data", (chunk) => {
+        if (mirror) process.stdout.write(chunk);
+        if (stdout.length < 4_000_000) stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        if (mirror) process.stderr.write(chunk);
+        if (stderr.length < 1_000_000) stderr += chunk;
+      });
     }
     child.once("error", reject);
     child.once("close", (code) => {
       const result = { ok: code === 0, code: code ?? 1, stdout, stderr };
       if (result.ok || allowFailure) resolve(result);
-      else reject(new Error(`${path.basename(executable)} ${args[0] || "command"} failed with exit code ${result.code}.`));
+      else {
+        const detail = safeChildDiagnostic(stderr || stdout, cwd);
+        reject(new Error(
+          `${path.basename(executable)} ${args[0] || "command"} failed with exit code ${result.code}.`
+          + (detail ? ` Detail: ${detail}` : ""),
+        ));
+      }
     });
   });
 }
@@ -253,7 +287,23 @@ async function serviceState(config, layout, testMode) {
 async function runRepositoryScript(name, args = []) {
   const filePath = path.join(repositoryRoot, name);
   await fs.access(filePath);
-  return runFile(filePath, args);
+  return runFile(filePath, args, { mirror: true });
+}
+
+async function runInstallerWithRetry() {
+  try {
+    await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
+  } catch (firstFailure) {
+    process.stderr.write("The macOS installer did not complete; retrying the idempotent installation once.\n");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
+    } catch (secondFailure) {
+      throw new Error(
+        `The macOS installer failed twice. First: ${safeError(firstFailure)} Second: ${safeError(secondFailure)}`,
+      );
+    }
+  }
 }
 
 async function runDoctor({ running, relay }) {
@@ -365,7 +415,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
     await git(["checkout", "--quiet", "--detach", targetCommit]);
     checkoutChanged = true;
     await runRepositoryScript("bootstrap.sh");
-    await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
+    await runInstallerWithRetry();
     if (shouldStart) {
       if (state.relayEnabled) await prepareRelayForCrossVersionStart(layout, endpoint, testMode);
       await runRepositoryScript("start-bridge.sh");
@@ -386,7 +436,7 @@ export async function runMacOSUpdate(args = process.argv.slice(2)) {
       if (backupDirectory) await restoreBackup({ backupDirectory, configPath, layout });
       if (checkoutChanged) {
         await runRepositoryScript("bootstrap.sh");
-        await runRepositoryScript("install.sh", ["--skip-dependency-install"]);
+        await runInstallerWithRetry();
       }
       if (shouldStart) {
         if (state.relayEnabled) await prepareRelayForCrossVersionStart(layout, endpoint, testMode);

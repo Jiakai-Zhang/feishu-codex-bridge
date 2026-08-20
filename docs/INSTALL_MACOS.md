@@ -2,7 +2,7 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.7`。它保留 rc.6 的完整多用户与 Session 权限能力，并加入独立可见的前台升级器：用户按 `⌘Q` 后，它会保留原有直连/代理模式、事务升级、自动重开 Desktop 并完成严格 Doctor。Desktop 身份由 Bundle metadata、OpenAI 签名和规范可执行路径共同确认；Keychain、附件与 launchd relay 状态保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.8`。它保留 rc.7 的完整多用户、Session 权限和可见前台升级能力，并修复失败回滚到旧 checkout 后无法按原网络模式重开 Desktop 的兼容问题；安装阶段会进行一次幂等重试并保留安全诊断。Desktop 身份由 Bundle metadata、OpenAI 签名和规范可执行路径共同确认；Keychain、附件与 launchd relay 状态保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
 已有安装可复制[给 Codex 的 macOS 极简升级协议](UPGRADE_MACOS_PROMPT.md)入口；异常安全停点仍按本页更新规则执行。
@@ -222,10 +222,10 @@ git remote get-url private
 
 `--remote` 只接受 `origin` 或 `private`；选中远端必须精确匹配受维护的公开仓库或 `ninmon/feishu-codex-bridge-private`，升级器不会改写 remote。私有仓库访问由已登录的 GitHub CLI/Git credential helper 提供，不得把访问 Token 写进 URL、命令参数或聊天。全新 v0.4 macOS 私有安装的 `origin` 已指向私有仓库，仍可省略 `--remote`。
 
-前台入口会从精确目标 tag 提取目标 runtime，在独立、可见的 Terminal 中先执行严格 Doctor、工作树/tag 和网络模式预检。只有入口明确输出 `Foreground upgrade is ready` 后，用户才按 `⌘Q` 完全退出 Desktop；不要自行重开。升级器等待经 Bundle ID、OpenAI Team ID 与规范可执行路径共同验证的 Desktop 及其内嵌 App Server 自然退出，不按进程名广泛结束应用。完成事务升级和第一轮严格 Doctor 后，仓库启动器会用 `--preserve-network` 读取原持久选择并自动重开 Desktop，再完成包含 attachment 的最终 Doctor。
+前台入口会从精确目标 tag 提取目标 runtime，在独立、可见的 Terminal 中先执行严格 Doctor、工作树/tag 和网络模式预检。只有入口明确输出 `Foreground upgrade is ready` 后，用户才按 `⌘Q` 完全退出 Desktop；不要自行重开。升级器等待经 Bundle ID、OpenAI Team ID 与规范可执行路径共同验证的 Desktop 及其内嵌 App Server 自然退出，不按进程名广泛结束应用。完成事务升级和第一轮严格 Doctor 后，目标 tag 的前台 runtime 会再次验证原持久网络选择、活动 App Server 和 relay，再直接重开已锁定的 Desktop；这个恢复路径不依赖更新成功或回滚后的仓库启动器是否认识新参数，最后再完成包含 attachment 的严格 Doctor。
 
 `./update.sh --version <tag>` 仍是底层事务入口，用于备份、checkout、安装、回滚和同版本自愈；它必须在 Desktop 已完全退出的独立 Terminal 中运行，并拒绝活跃 Codex 任务。正常 Codex 升级不应绕过前台入口直接调用它。公开仓库、上游仓库和受维护的私有发行仓库均使用相同的固定 tag 校验与安全更新流程。
 
 升级器会验证选定 remote 与目标 tag，拒绝任何已跟踪或未跟踪的工作树改动，优雅停止正在运行的 Bridge，并在本机 runtime 中创建权限受限的恢复备份。备份包括配置、绑定请求、Session 设置、临时 Chat、多用户 Session access 状态、队列、输入账本、投递状态、长回答/流式卡状态、附件草稿与入站附件缓存。Keychain Secret 留在原有安全存储中，不会读取或重新索取。
 
-目标版本的依赖安装、安装器或 Doctor 失败时，脚本会切回原提交、恢复备份、重新生成 LaunchAgent，并恢复升级前的 Bridge/relay 运行状态。relay 已启用时，即使 Bridge 在同版本修复前停止，也会恢复 Bridge、relay 与 watchdog。Desktop 已退出后的前台失败还会尝试按原网络模式重开 Desktop。不会执行 `git reset`、`git clean` 或 `git stash`。目标 tag 必须已包含 macOS 前台升级契约；Windows updater 不得在 macOS 上使用。
+目标版本的依赖安装、安装器或 Doctor 失败时，脚本会切回原提交、恢复备份、重新生成 LaunchAgent，并恢复升级前的 Bridge/relay 运行状态。安装器是事务且幂等的；单次失败会自动重试一次，两次都失败才进入回滚，并在可见 Terminal 和私有状态中留下脱敏后的失败类别。relay 已启用时，即使 Bridge 在同版本修复前停止，也会恢复 Bridge、relay 与 watchdog。Desktop 已退出后的前台失败还会尝试按原网络模式重开 Desktop。不会执行 `git reset`、`git clean` 或 `git stash`。目标 tag 必须已包含 macOS 前台升级契约；Windows updater 不得在 macOS 上使用。

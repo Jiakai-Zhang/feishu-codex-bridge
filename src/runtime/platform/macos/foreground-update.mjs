@@ -14,13 +14,17 @@ import {
 import { safeError } from "../../shared/safe-error.mjs";
 import { waitUntil } from "../../shared/wait-until.mjs";
 import {
+  desktopRelayAttachment,
   embeddedDesktopAppServerRunning,
   installedDesktopApplications,
   processProxyEnvironmentMatches,
+  proxyEnvironment,
   relayHeartbeatReady,
   runningDesktopApplications,
+  safeDesktopLaunchArguments,
   safeLoopbackProxyArgument,
 } from "./desktop-runtime.mjs";
+import { RELAY_ENVIRONMENT_VARIABLE } from "./constants.mjs";
 import { directNetworkEnvironment } from "./launch-environment.mjs";
 import { pidIsRunning, readPid } from "./process-inspector.mjs";
 import { readBridgeConfig, runtimeLayout } from "./runtime-layout.mjs";
@@ -193,10 +197,66 @@ async function verifyExactInstallation(repositoryRoot, version) {
   if (dirty) throw new Error("The target release left the installation worktree dirty.");
 }
 
-async function launchDesktop(repositoryRoot) {
-  await runFile(path.join(repositoryRoot, "launch-codex-desktop-with-relay.sh"), ["--preserve-network"], {
-    cwd: repositoryRoot,
+export function foregroundDesktopOpenArguments({ bundlePath, endpoint, proxyUrl }) {
+  if (!path.isAbsolute(String(bundlePath || ""))) {
+    throw new Error("The approved Desktop bundle path is invalid.");
+  }
+  const parsedEndpoint = parseLoopbackAppServerUrl(endpoint);
+  const proxyArgument = proxyUrl ? safeLoopbackProxyArgument(proxyUrl) : undefined;
+  if (proxyUrl && !proxyArgument) {
+    throw new Error("The preserved Desktop proxy is not a safe loopback URL.");
+  }
+  const args = [
+    "--env", `${RELAY_ENVIRONMENT_VARIABLE}=${parsedEndpoint.href}`,
+  ];
+  for (const [name, value] of Object.entries(proxyEnvironment(proxyUrl))) {
+    args.push("--env", `${name}=${value}`);
+  }
+  args.push(bundlePath);
+  const desktopArguments = safeDesktopLaunchArguments(proxyUrl);
+  if (desktopArguments.length > 0) args.push("--args", ...desktopArguments);
+  return args;
+}
+
+async function launchDesktop(repositoryRoot, expectedNetwork, applications) {
+  const network = await readSavedDesktopNetwork(repositoryRoot);
+  if (network.mode !== expectedNetwork?.mode || network.proxyUrl !== expectedNetwork?.proxyUrl) {
+    throw new Error("The preserved Desktop network mode changed during the upgrade.");
+  }
+  const { raw: config } = await readBridgeConfig(repositoryRoot);
+  const endpoint = parseLoopbackAppServerUrl(config.sessionRelay?.appServerUrl);
+  const currentlyApproved = await installedDesktopApplications();
+  const lockedIdentities = new Set((applications || []).map(
+    ({ bundlePath, executable }) => `${bundlePath}\n${executable}`,
+  ));
+  const approvedApplications = lockedIdentities.size > 0
+    ? currentlyApproved.filter(
+      ({ bundlePath, executable }) => lockedIdentities.has(`${bundlePath}\n${executable}`),
+    )
+    : currentlyApproved;
+  if (approvedApplications.length === 0) {
+    throw new Error("The previously approved ChatGPT/Codex Desktop identity could not be reverified.");
+  }
+  if ((await runningDesktopApplications({ applications: currentlyApproved })).length > 0) {
+    throw new Error("ChatGPT/Codex Desktop restarted before the foreground updater could reopen it.");
+  }
+  await execFile("/usr/bin/open", foregroundDesktopOpenArguments({
+    bundlePath: approvedApplications[0].bundlePath,
+    endpoint: endpoint.href,
+    proxyUrl: network.proxyUrl,
+  }), {
+    encoding: "utf8",
+    timeout: 20_000,
+    maxBuffer: 256_000,
   });
+  const attached = await waitUntil(
+    async () => await desktopRelayAttachment(endpoint.href) === "attached",
+    30_000,
+    250,
+  );
+  if (!attached) {
+    throw new Error("Desktop started without inheriting the shared App Server relay environment.");
+  }
 }
 
 function safeFailureText(error, privatePaths) {
@@ -244,6 +304,7 @@ async function invokeWorker(runId) {
   const privatePaths = [repositoryRoot, sourceRoot, stateRoot, os.homedir()];
   let desktopExited = false;
   let network;
+  let desktopApplications;
   try {
     process.stdout.write("\u001b]0;Feishu Codex Bridge upgrade\u0007");
     process.stdout.write("Feishu Codex Bridge foreground upgrade\n");
@@ -256,17 +317,17 @@ async function invokeWorker(runId) {
     const installed = await installedDesktopApplications();
     const running = await runningDesktopApplications({ applications: installed });
     if (running.length === 0) throw new Error("ChatGPT/Codex Desktop is not running from an approved application bundle.");
-    const applications = running.map(({ pids: _pids, commands: _commands, ...application }) => application);
+    desktopApplications = running.map(({ pids: _pids, commands: _commands, ...application }) => application);
 
     await writeStatus(stateRoot, runId, version, "waiting-for-desktop-exit", "Preflight passed; waiting for the user to fully quit Desktop.");
     process.stdout.write("\nPreflight passed.\n");
     process.stdout.write("Now fully quit ChatGPT/Codex Desktop with Command-Q. Do not reopen it yourself.\n");
     process.stdout.write("This Terminal window will update, preserve the network mode, and reopen Desktop automatically.\n");
-    if (!(await waitForDesktopExit(applications))) throw new Error("Desktop was not fully quit within 30 minutes.");
+    if (!(await waitForDesktopExit(desktopApplications))) throw new Error("Desktop was not fully quit within 30 minutes.");
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const [restarted, embedded] = await Promise.all([
-      runningDesktopApplications({ applications }),
-      embeddedDesktopAppServerRunning({ applications }),
+      runningDesktopApplications({ applications: desktopApplications }),
+      embeddedDesktopAppServerRunning({ applications: desktopApplications }),
     ]);
     if (restarted.length > 0 || embedded) throw new Error("Desktop restarted before the foreground updater could begin.");
     desktopExited = true;
@@ -279,7 +340,7 @@ async function invokeWorker(runId) {
 
     await writeStatus(stateRoot, runId, version, "launching-desktop", "The update passed Doctor; relaunching Desktop with the preserved network mode.");
     process.stdout.write("Update and strict Doctor passed. Relaunching Desktop...\n");
-    await launchDesktop(repositoryRoot);
+    await launchDesktop(repositoryRoot, network, desktopApplications);
     await strictDoctor(repositoryRoot, { attached: true });
     await verifyExactInstallation(repositoryRoot, version);
     await writeStatus(stateRoot, runId, version, "completed", "Update, Desktop relaunch, and strict Doctor completed.", true);
@@ -292,13 +353,13 @@ async function invokeWorker(runId) {
         const running = await runningDesktopApplications();
         if (running.length === 0) {
           process.stdout.write("The update did not complete; attempting to reopen Desktop with the preserved network mode.\n");
-          await launchDesktop(repositoryRoot);
+          await launchDesktop(repositoryRoot, network, desktopApplications);
         }
       } catch {
         failure += " Desktop recovery launch also failed.";
       }
     }
-    await writeStatus(stateRoot, runId, version, "failed", "Foreground upgrade failed; see the visible Terminal window.", false);
+    await writeStatus(stateRoot, runId, version, "failed", `Foreground upgrade failed: ${failure}`, false);
     process.stderr.write(`\nForeground upgrade failed: ${failure}\n`);
     process.exitCode = 1;
   } finally {

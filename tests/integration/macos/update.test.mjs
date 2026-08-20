@@ -49,6 +49,11 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await writeExecutable(path.join(source, "install.sh"), [
     "#!/bin/sh",
     "set -eu",
+    "if grep -q retry release.txt && [ ! -f \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_INSTALL_RETRY\" ]; then",
+    "  /usr/bin/touch \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_INSTALL_RETRY\"",
+    "  printf '%s\\n' 'macOS Bridge command failed: synthetic transient install failure' >&2",
+    "  exit 31",
+    "fi",
     "if grep -q broken release.txt; then",
     "  printf '%s\\n' target-only > \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE\"",
     "  printf '%s\\n' target-only > \"$FEISHU_CODEX_BRIDGE_UPDATE_TEST_TEMPORARY_CHAT_STATE\"",
@@ -85,6 +90,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   await commitRelease(source, "one", "release one", "v1.0.0");
   await commitRelease(source, "two", "release two", "v1.1.0");
   await commitRelease(source, "broken", "broken release", "v1.2.0");
+  await commitRelease(source, "retry", "retry release", "v1.3.0");
 
   await git(root, ["clone", "--quiet", source, installation]);
   await git(installation, ["remote", "add", "private", source]);
@@ -119,6 +125,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   const relayMarker = path.join(runtime, "test-relay-configured");
   const doctorArgs = path.join(runtime, "test-doctor-args");
   const targetOnlyState = path.join(runtime, "session-relay-completed.json");
+  const installRetryMarker = path.join(runtime, "test-install-retry");
   await fs.writeFile(runningMarker, "");
   const environment = {
     ...process.env,
@@ -133,6 +140,7 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_NEW_STATE: targetOnlyState,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_TEMPORARY_CHAT_STATE: temporaryChatState,
     FEISHU_CODEX_BRIDGE_UPDATE_TEST_ACCESS_STATE: accessState,
+    FEISHU_CODEX_BRIDGE_UPDATE_TEST_INSTALL_RETRY: installRetryMarker,
   };
 
   const dirtyPath = path.join(installation, "local-user-change.txt");
@@ -175,6 +183,15 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   assert.equal(await exists(runningMarker), true);
   assert.equal((await fs.readFile(doctorArgs, "utf8")).trim(), "--require-running --require-desktop-relay");
 
+  const retried = await execFile(process.execPath, [
+    path.join(installation, "src", "runtime", "platform", "macos", "update.mjs"),
+    "--version", "v1.3.0", "--remote", "private", "--test-mode",
+  ], { cwd: installation, env: environment, encoding: "utf8", timeout: 30_000 });
+  assert.match(retried.stdout, /Upgrade completed successfully: v1\.3\.0/);
+  assert.match(retried.stderr, /retrying the idempotent installation once/);
+  assert.equal(await exists(installRetryMarker), true);
+  assert.equal(await git(installation, ["rev-parse", "HEAD"]), await git(installation, ["rev-parse", "v1.3.0^{commit}"]));
+
   await fs.writeFile(path.join(runtime, "session-relay-settings.json"), '{"keep":"two"}\n', { mode: 0o600 });
   await fs.writeFile(temporaryChatState, '[{"keep":"chat-two"}]\n', { mode: 0o600 });
   await fs.writeFile(accessState, '{"keep":"access-two"}\n', { mode: 0o600 });
@@ -189,8 +206,8 @@ test("macOS updater preserves private state and rolls back a broken fixed tag", 
   assert.ok(failure);
   assert.match(String(failure.stderr), /previous release and local state were restored/);
   assert.equal(String(failure.stderr).includes(root), false);
-  assert.equal(await git(installation, ["rev-parse", "HEAD"]), await git(installation, ["rev-parse", "v1.1.0^{commit}"]));
-  assert.equal((await fs.readFile(path.join(installation, "release.txt"), "utf8")).trim(), "two");
+  assert.equal(await git(installation, ["rev-parse", "HEAD"]), await git(installation, ["rev-parse", "v1.3.0^{commit}"]));
+  assert.equal((await fs.readFile(path.join(installation, "release.txt"), "utf8")).trim(), "retry");
   assert.equal((await fs.readFile(path.join(runtime, "session-relay-settings.json"), "utf8")).trim(), '{"keep":"two"}');
   assert.equal((await fs.readFile(temporaryChatState, "utf8")).trim(), '[{"keep":"chat-two"}]');
   assert.equal((await fs.readFile(accessState, "utf8")).trim(), '{"keep":"access-two"}');
