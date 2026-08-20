@@ -117,6 +117,48 @@ test("does not guess an unassigned session when Project worktree scopes are ambi
   assert.equal(result.sessionsById.has("thread-ambiguous"), false);
 });
 
+test("merges Bridge-created Projects with matching Desktop roots and retains bound unassigned tasks", async () => {
+  const files = new Map([
+    ["global.json", JSON.stringify({
+      "local-projects": {
+        a: { id: "desktop-member", name: "Desktop name", rootPaths: ["C:\\members\\alice\\frontend"] },
+      },
+    })],
+    ["index.jsonl", ""],
+  ]);
+  const catalog = new CodexDesktopCatalog({
+    globalStatePath: "global.json",
+    stateDbPath: "state.db",
+    sessionIndexPath: "index.jsonl",
+    readFile: async (file) => files.get(file),
+    listProjectWorktrees: async (root) => [root],
+    readThreads: () => [
+      { id: "thread-member", title: "Member task", cwd: "C:\\members\\alice\\frontend", updated_at_ms: 20 },
+      { id: "thread-bound-outside", title: "Bound outside", cwd: "C:\\outside", updated_at_ms: 10 },
+    ],
+  });
+  const result = await catalog.load({
+    bridgeProjects: [{
+      id: "bridge-member",
+      name: "frontend",
+      rootPath: "C:\\members\\alice\\frontend",
+      ownerOpenId: "ou_member",
+    }],
+    bindings: [{
+      threadId: "thread-bound-outside",
+      groupChatId: "oc_bound",
+      ownerOpenId: "ou_member",
+    }],
+  });
+
+  assert.equal(result.projects.length, 1);
+  assert.equal(result.projects[0].id, "desktop-member");
+  assert.equal(result.projects[0].bridgeProjectId, "bridge-member");
+  assert.equal(result.projects[0].ownerOpenId, "ou_member");
+  assert.deepEqual(result.projects[0].sessions.map(({ id }) => id), ["thread-member"]);
+  assert.deepEqual(result.independent.map(({ id }) => id), ["thread-bound-outside"]);
+});
+
 test("matches the Desktop task list by excluding archived and subagent threads", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-desktop-catalog-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

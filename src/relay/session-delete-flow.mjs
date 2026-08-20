@@ -49,7 +49,7 @@ export class SessionDeleteFlow {
           "",
           "- 不会删除飞书群",
           "- 不会删除或归档 Codex 任务",
-          "- 会移除当前群的 Agent 标签",
+          "- 当前 OAuth 可见 Agent 标签时会一并移除",
           "- 如有待执行 Prompt，必须先用 `/queue clear` 清空",
           "",
           "请在 5 分钟内发送 `/delete confirm`；发送 `/delete cancel` 可取消。",

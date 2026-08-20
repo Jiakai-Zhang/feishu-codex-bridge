@@ -7,9 +7,17 @@ export class SessionBindingRemoveError extends Error {
 }
 
 export class SessionBindingRemover {
-  constructor({ registry, feedGroupManager, getStatus, getPendingQueueCount, onWarning = () => {} }) {
+  constructor({
+    registry,
+    feedGroupManager,
+    shouldManageFeedGroup = () => true,
+    getStatus,
+    getPendingQueueCount,
+    onWarning = () => {},
+  }) {
     this.registry = registry;
     this.feedGroupManager = feedGroupManager;
+    this.shouldManageFeedGroup = shouldManageFeedGroup;
     this.getStatus = getStatus;
     this.getPendingQueueCount = getPendingQueueCount;
     this.onWarning = onWarning;
@@ -53,15 +61,22 @@ export class SessionBindingRemover {
 
       await this.assertIdle(binding.threadId);
 
-      if (this.feedGroupManager) {
+      const feedGroupPolicy = this.shouldManageFeedGroup(current);
+      let manageFeedGroup = Boolean(this.feedGroupManager && ![false, "skip"].includes(feedGroupPolicy));
+      const feedGroupRequired = feedGroupPolicy === true || feedGroupPolicy === "required";
+      if (manageFeedGroup) {
         try {
           await this.feedGroupManager.removeChat(binding.groupChatId);
         } catch (error) {
-          throw new SessionBindingRemoveError(
-            "binding_tag_remove_failed",
-            "The Agent Feed label could not be removed; the binding was preserved",
-            { cause: error },
-          );
+          if (feedGroupRequired) {
+            throw new SessionBindingRemoveError(
+              "binding_tag_remove_failed",
+              "The Agent Feed label could not be removed; the binding was preserved",
+              { cause: error },
+            );
+          }
+          manageFeedGroup = false;
+          this.onWarning(error);
         }
       }
 
@@ -70,9 +85,9 @@ export class SessionBindingRemover {
         // during label removal cannot silently lose its final delivery.
         await this.assertIdle(binding.threadId);
         const removed = await this.registry.remove(binding);
-        return Object.freeze({ binding: removed, tagRemoved: Boolean(this.feedGroupManager) });
+        return Object.freeze({ binding: removed, tagRemoved: manageFeedGroup });
       } catch (error) {
-        if (this.feedGroupManager) {
+        if (manageFeedGroup) {
           try { await this.feedGroupManager.restoreChat(binding.groupChatId); }
           catch (restoreError) { this.onWarning(restoreError); }
         }

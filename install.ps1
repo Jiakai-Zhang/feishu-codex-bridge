@@ -7,7 +7,8 @@ param(
     [string]$AgentName = 'Codex',
     [switch]$ForceConfig,
     [switch]$SkipDependencyInstall,
-    [switch]$NoUserChanges
+    [switch]$NoUserChanges,
+    [switch]$SkipDesktopRelayMigration
 )
 
 $ErrorActionPreference = 'Stop'
@@ -236,7 +237,8 @@ if (-not $NoUserChanges) {
     $expectedRelayUrl = [string]$effectiveConfig.sessionRelay.appServerUrl
     $currentRelayUrl = [Environment]::GetEnvironmentVariable(
         'CODEX_APP_SERVER_WS_URL', [EnvironmentVariableTarget]::User)
-    if (-not [string]::IsNullOrWhiteSpace($currentRelayUrl) -and $currentRelayUrl -eq $expectedRelayUrl) {
+    if (-not $SkipDesktopRelayMigration -and
+        -not [string]::IsNullOrWhiteSpace($currentRelayUrl) -and $currentRelayUrl -eq $expectedRelayUrl) {
         try {
             & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1')
             Write-Output 'Migrated the existing Desktop relay activation to the continuous fail-open watchdog.'

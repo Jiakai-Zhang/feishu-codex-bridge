@@ -4,7 +4,7 @@
 
 The repository grew from a Windows relay prototype into a Session-oriented bridge with persistent delivery, attachments, cards, Desktop recovery, and an experimental collaboration stack. Stable Session Relay and shared production modules live under domain-oriented `src/` directories, while Project Agent and multi-agent collaboration are physically isolated under `src/experimental/collaboration/`; their tests follow the same boundary under `tests/`. Root `session-relay.mjs`, `request-session-binding.mjs`, and `channel-bridge.mjs` files remain compatibility launchers for installed scripts and Skills.
 
-The stable product is the personal Session Relay. Project Agent and multi-agent collaboration are experimental and are not part of the stable release contract.
+The stable product is the Session Relay. Its optional access layer may register multiple Feishu users on one host, isolate each user's Project directory, and share one bound Session through verified group membership. That remains a single-Codex Session transport and authorization feature; Project Agent, Agent-to-Agent delegation, team routing, and shared knowledge are still experimental and are not part of the stable release contract.
 
 ## Target boundaries
 

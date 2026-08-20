@@ -4,6 +4,8 @@
 
 > 当前仅支持 Windows + Codex Desktop。Bridge 依赖 Codex App Server 的实验性 WebSocket 接口，因此本版本按 Beta 发布，不建议作为无人值守的生产服务。
 
+> 当前私有多用户固定候选版为 `v0.4.0-windows-rc.5`。全新安装使用本机已登录的 GitHub CLI 读取 `ninmon/feishu-codex-bridge-private`；公开 `v0.3.2-windows-rc.4` 继续保留为旧的单用户公开基线。
+
 ## 1. 安装依赖
 
 需要：
@@ -11,6 +13,7 @@
 - Windows 10/11
 - 已安装并登录的 Codex Desktop
 - Git
+- GitHub CLI，已登录且账号可访问私有仓库
 - Node.js 22.13 或更高版本（建议当前 LTS）
 - PowerShell 5.1 或 PowerShell 7
 
@@ -20,6 +23,7 @@
 
 ```powershell
 winget install --id Git.Git -e --source winget
+winget install --id GitHub.cli -e --source winget
 winget install --id OpenJS.NodeJS.LTS -e --source winget
 ```
 
@@ -27,6 +31,7 @@ winget install --id OpenJS.NodeJS.LTS -e --source winget
 
 ```powershell
 git --version
+gh auth status
 node --version
 npm --version
 ```
@@ -36,15 +41,15 @@ npm --version
 在准备长期保留的目录中执行：
 
 ```powershell
-git clone --branch v0.3.2-windows-rc.4 --depth 1 https://github.com/ninmon/feishu-codex-bridge.git
-Set-Location .\feishu-codex-bridge
+gh repo clone ninmon/feishu-codex-bridge-private .\feishu-codex-bridge-private -- --branch v0.4.0-windows-rc.5 --depth 1
+Set-Location .\feishu-codex-bridge-private
 npm ci
 .\lark-cli.ps1 --version
 ```
 
-仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
+克隆前先确认 GitHub CLI 已登录、账号能读取私有仓库、目标 tag 存在并解析到精确提交。不得把 GitHub Token 放入 URL、命令参数、聊天或日志。仓库锁定了兼容版本的飞书 CLI 和 Channel SDK；日常操作使用 `lark-cli.ps1`，无需全局安装飞书 CLI。
 
-当前 Beta release 暂由贡献者 fork 托管，并通过上游草稿 PR 合并到 `Jiakai-Zhang/feishu-codex-bridge`；固定 tag 的内容与该 PR 的已验证提交一致。
+当前 v0.4 多用户 Beta 由维护者私有镜像的固定 tag 托管；公开 fork 的 `v0.3.2-windows-rc.4` 不会自动跟随私有候选版变化。
 
 ## 3. 创建应用并立即保存 Secret
 
@@ -130,7 +135,9 @@ OAuth 命令同样需要将当次 verification URL 原样交给用户，不输�
 
 先让用户完全退出 Desktop，再从仓库目录的独立 PowerShell 运行唯一选定的命令。启动器只将代理应用到 Desktop 和共享 App Server；Bridge、Channel、watchdog 与飞书 CLI 保持直连。它会验证 App Server 拥有权、Scheduled Task watchdog 和同一 activation 的新鲜 heartbeat；失败时撤销 Bridge-owned pointer，不继续打开 Desktop。
 
-隔离的 `-Proxy` 模式需要能找到可直接启动的 Win32 Desktop 可执行文件。如果只安装了 packaged Desktop，启动器会安全停止，不会修改系统或用户全局代理；packaged Desktop 仍可使用默认直连模式。
+隔离的 `-Proxy` 模式需要可验证的 Desktop 可执行文件。Win32 安装直接使用其可执行文件；packaged Desktop 则从 `Get-AppxPackage OpenAI.Codex` 与 `AppxManifest.xml` 动态解析当前包内的真实 `ChatGPT.exe`，并仅向该进程注入 loopback 代理。清单或可执行文件无法验证时安全停止，不修改系统或用户全局代理。
+
+首次激活且尚无本机网络状态时，不带参数表示直连。以后再次运行启动器时，不带参数会沿用已验证保存的直连/代理选择，不会把已有代理静默改回直连；要主动切换必须显式使用 `-NoProxy` 或 `-Proxy <loopback URL>`。
 
 Desktop 打开后运行：
 
@@ -148,6 +155,14 @@ Desktop 打开后运行：
 5. 没有附件草稿时单独发送一张图片，确认图片立即进入 Codex 原生视觉输入。再测试 `/attachments clear`，确认放弃草稿不会启动 Turn。
 6. 最后再运行 `status-bridge.ps1` 与严格 Doctor。
 
+可选多用户部署由 Owner 在主机本地运行：
+
+```powershell
+.\setup-project-root.ps1
+```
+
+脚本交互设置唯一 Project 根目录与 Owner 一级目录，随后重启 Bridge。Owner 再在 Bot 私聊或已绑定群发送一张飞书用户名片并按提示回复目录名，也可使用 `/members add <目录名> @成员`；新成员目录必须为空，应用可用范围也必须包含该成员。发送名片不会自动邀请成员入群。未执行这一步的既有安装保持 Owner-only。
+
 ## 日常命令
 
 ```powershell
@@ -161,15 +176,44 @@ Bridge supervisor 会在进程意外退出后重启 Bridge。启用 Desktop rela
 
 ## 更新
 
-升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，再优雅停止 Bridge，并在本机运行目录备份 `bridge.config.json`、DPAPI 密文、Session 设置、待提交附件草稿、队列、输入账本和投递状态。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交、恢复备份并重新启动原版本；不会执行 `git reset`、`git clean` 或覆盖用户代码。
+交给 Codex 升级私有候选版时，复制[Windows 极简升级协议](UPGRADE_WINDOWS_PROMPT.md)入口。健康路径由 Codex 启动可见前台升级器，用户只需在提示后关闭 Desktop 可见窗口；升级器会安全结束已验证的残留 Desktop 进程、按升级前保存的网络模式自动重开并完成最终 Doctor。以下安全检查与回滚边界不会被省略。
 
-从 `v0.2.0-beta.1` 开始，后续升级使用：
+升级器只接受明确的 release tag。它会先拒绝任何未提交或未跟踪的改动，并在切换 checkout 前证明活动 Desktop relay 的直连/代理选择与 App Server 进程记录一致。随后才优雅停止 Bridge，并备份 `bridge.config.json`、DPAPI 密文、成员/Project 状态、Session 设置、待提交附件与缓存、队列、输入账本、投递状态、Desktop relay 状态和稳定 bootstrap。目标版本的依赖安装、安装脚本或健康检查失败时，会自动切回原提交并恢复备份；不会执行 `git reset`、`git clean`、`stash` 或覆盖用户代码，也不会在回滚中重启 App Server 或改换代理。
+
+需要自动重开 Desktop 的正常升级使用：
+
+```powershell
+.\update-windows-with-desktop-restart.ps1 -Version <目标 release tag>
+.\update-windows-with-desktop-restart.ps1 -Version <目标 private release tag> -Remote private
+```
+
+该入口会创建无触发器的一次性可见 Scheduled Task，先运行目标 updater 的只读预检，再等待用户退出 Desktop。它不依赖发起升级的 Codex 进程继续存活。成功后任务自行注销；失败窗口保持可见，并在可能时用原网络模式恢复 Desktop。
+
+底层事务升级器仍可用于不需要 Desktop 重开编排的维护：
 
 ```powershell
 .\update.ps1 -Version <目标 release tag>
 ```
 
-Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止则保持停止。升级前若 Desktop relay 已启用，`doctor.ps1 -RequireDesktopRelay` 也会成为升级成功条件。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+默认只从 `origin` 获取目标 tag。受维护的私有测试版本可以从一个名为 `private` 的独立远端更新，不需要也不允许升级器改写 `origin`：
+
+```powershell
+git remote get-url private
+.\update.ps1 -Version <目标 private release tag> -Remote private
+```
+
+第一个命令的结果必须精确指向 `ninmon/feishu-codex-bridge-private`。`-Remote` 只接受 `origin` 或 `private`，且两者的 URL 都必须匹配维护清单中的公开上游、公开 fork 或该精确私有镜像；相似仓库名和其他 owner 会在停止服务或切换 checkout 前被拒绝。升级器不会创建、覆盖或重命名 Git remote。私有仓库认证必须使用本机 GitHub CLI/credential helper，不得把 Token 放进 URL、命令参数或聊天。
+
+Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -RequireRunning`；原本停止且 Desktop relay 未启用时保持停止。Desktop relay 已启用时，升级器会启动 Bridge、把已保存的精确网络模式显式交给目标版本，并执行 `doctor.ps1 -RequireDesktopRelay`；目标 `install.ps1` 被要求跳过中继迁移，不能自行落回直连。也可加 `-StartBridge` 要求升级完成后启动。恢复备份会保留在本机运行目录中，确认新版本稳定后再自行归档或删除。
+
+健康的新版本安装通常直接运行不带网络参数的更新命令。只有保存状态不可读/缺失时，升级器才要求显式选择，并且仍会核对当前 App Server 记录：
+
+```powershell
+.\update.ps1 -Version <目标 release tag> -NoProxy
+.\update.ps1 -Version <目标 release tag> -Proxy http://127.0.0.1:7897
+```
+
+如果活动 App Server 记录也无法证明该模式，升级会在 checkout 未变更时停止。先用现有版本的 launcher/Doctor 修复模式；无法安全修复的旧版应按下面的 v0.2 路径先禁用 pointer，再升级并重新激活。
 
 ### 从 v0.2 启动故障恢复并升级
 
@@ -182,7 +226,7 @@ Bridge 若在升级前运行，成功后会自动重启并执行 `doctor.ps1 -Re
 .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 ```
 
-第一条命令先恢复 Desktop 的可启动性。升级后仍要先询问用户直连或本机代理；上例是直连，用户明确选择代理时将第三条改为 `launch-codex-desktop-with-relay.ps1 -Proxy <loopback URL>`。运行启动器前完全退出 Desktop；若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
+第一条命令先恢复 Desktop 的可启动性。因为 v0.2 没有可证明的 App Server 网络记录，禁用后升级是安全迁移边界；升级完成再明确选择直连或代理。上例是直连，用户明确选择代理时将第三条改为 `launch-codex-desktop-with-relay.ps1 -Proxy <loopback URL>`。运行启动器前完全退出 Desktop；若升级器因脏工作树或其他预检停止，pointer 仍保持禁用，用户数据不会被清理或覆盖。
 
 ### 已有自建守护的升级
 
@@ -197,4 +241,4 @@ Invoke-WebRequest "https://raw.githubusercontent.com/ninmon/feishu-codex-bridge/
 & $updater -InstallRoot (Get-Location).Path -Version $version
 ```
 
-升级后运行 `git describe --tags --exact-match`、`.\status-bridge.ps1` 和 `.\doctor.ps1 -RequireRunning` 验证版本与实时连接。此版本无需为 Bridge 代码更新强制重启 Codex Desktop；只有 release notes 明确要求、共享 App Server 地址变化或 Desktop 环境检查失败时才完整重启。
+升级后运行 `git describe --tags --exact-match`、`.\status-bridge.ps1` 和 `.\doctor.ps1 -RequireRunning` 验证版本与实时连接。私有测试版本还应确认 tag 来自选定的 `private` remote。此版本无需为 Bridge 代码更新强制重启 Codex Desktop；只有 release notes 明确要求、共享 App Server 地址变化或 Desktop 环境检查失败时才完整重启。

@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   assertMatchingNames,
   assertRelayMessage,
+  assertSessionGroup,
   assertSoloGroup,
+  isSessionPromptAddressed,
   KeyedSerialQueue,
   planSessionNameSync,
   resolveCompletedTurnRoute,
@@ -55,8 +57,8 @@ test("rejects another human, a bot, another group, and unsupported content", () 
     rawContentType: "text",
     content: "hello",
   };
-  assert.throws(() => assertRelayMessage({ ...message, senderId: "ou_other" }, binding), /bound human owner/);
-  assert.throws(() => assertRelayMessage({ ...message, senderIsBot: true }, binding), /bound human owner/);
+  assert.throws(() => assertRelayMessage({ ...message, senderId: "ou_other" }, binding), /authorized Session participant/);
+  assert.throws(() => assertRelayMessage({ ...message, senderIsBot: true }, binding), /authorized Session participant/);
   assert.throws(() => assertRelayMessage({ ...message, chatId: "oc_other" }, binding), /bound group/);
   assert.throws(() => assertRelayMessage({ ...message, rawContentType: "folder", content: "" }, binding), /text, image, and file/);
 });
@@ -88,6 +90,46 @@ test("requires exactly one owner and exactly the connected Bot", () => {
   assert.throws(() => assertSoloGroup({ ...valid, chatInfo: { ...valid.chatInfo, memberCount: 2 } }), /more than one human/);
   assert.throws(() => assertSoloGroup({ ...valid, bots: [...valid.bots, { id: "ou_other_bot" }] }), /only bot/);
   assert.throws(() => assertSoloGroup({ ...valid, bots: [{ id: "ou_wrong" }] }), /only bot/);
+});
+
+test("authorizes active group members while keeping the Session owner and Bot mandatory", () => {
+  const valid = {
+    chatInfo: { chatType: "group", name: "Task" },
+    members: [{ id: "ou_owner" }, { id: "ou_member" }],
+    bots: [{ id: "ou_bot", isBot: true }],
+    binding,
+    connectedBotOpenId: "ou_bot",
+    activeOpenIds: ["ou_owner", "ou_member"],
+  };
+  assert.deepEqual(assertSessionGroup(valid), {
+    participantOpenIds: ["ou_owner", "ou_member"],
+    humanMemberCount: 2,
+  });
+  assert.doesNotThrow(() => assertRelayMessage({
+    chatId: "oc_bound",
+    chatType: "group",
+    senderId: "ou_member",
+    senderIsBot: false,
+    rawContentType: "text",
+    content: "shared prompt",
+  }, binding, { authorizedOpenIds: ["ou_owner", "ou_member"] }));
+  assert.throws(() => assertSessionGroup({ ...valid, members: [{ id: "ou_member" }] }), /owner/);
+  assert.throws(() => assertSessionGroup({ ...valid, activeOpenIds: ["ou_member"] }), /not an active/);
+  assert.throws(() => assertSessionGroup({
+    ...valid,
+    members: [...valid.members, { id: "ou_unregistered" }],
+  }), /active Bridge user/);
+  assert.throws(() => assertSessionGroup({ ...valid, bots: [{ id: "ou_wrong" }] }), /exactly this Bridge Bot/);
+});
+
+test("requires an explicit Bot address only after a second human joins", () => {
+  assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 1 }), true);
+  assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 2 }), false);
+  assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: true }, { humanMemberCount: 2 }), true);
+  assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, {
+    humanMemberCount: 2,
+    replyToBot: true,
+  }), true);
 });
 
 test("requires the Feishu group and Codex session names to match exactly", () => {

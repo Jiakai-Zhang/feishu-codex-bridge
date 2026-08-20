@@ -8,6 +8,10 @@ function normalize(record) {
     messageId,
     chatId: record.chatId ? String(record.chatId) : undefined,
     threadId: record.threadId ? String(record.threadId) : undefined,
+    ...(record.senderOpenId ? { senderOpenId: String(record.senderOpenId) } : {}),
+    ...(record.sessionThreadId ? { sessionThreadId: String(record.sessionThreadId) } : {}),
+    ...(record.turnId ? { turnId: String(record.turnId) } : {}),
+    ...(record.turnInitiator === true ? { turnInitiator: true } : {}),
     kind: String(record.kind || "prompt"),
     createdAt: Number(record.createdAt) || Date.now(),
   };
@@ -35,6 +39,15 @@ export class SessionInputLedger {
   get(messageId) {
     const record = this.records.get(String(messageId));
     return record ? { ...record } : undefined;
+  }
+
+  findTurnInitiator(sessionThreadId, turnId) {
+    const session = String(sessionThreadId || "");
+    const turn = String(turnId || "");
+    if (!session || !turn) return undefined;
+    return this.list()
+      .filter((record) => record.sessionThreadId === session && record.turnId === turn && record.turnInitiator === true)
+      .sort((left, right) => left.createdAt - right.createdAt)[0];
   }
 
   list() {

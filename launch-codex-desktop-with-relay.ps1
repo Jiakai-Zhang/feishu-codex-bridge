@@ -28,11 +28,24 @@ function ConvertTo-SafeLoopbackProxy {
 }
 
 function Get-RunningDesktopProcesses {
+    param([string[]]$ExecutablePaths = @())
+    $knownPaths = @($ExecutablePaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+        ForEach-Object {
+            try { [IO.Path]::GetFullPath([string]$_) } catch { $null }
+        } | Where-Object { $_ })
     $results = @()
     foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
         $name = [string]$process.Name
         if ($name -notmatch '(?i)(ChatGPT|Codex).*\.exe$') { continue }
         if ([string]$process.CommandLine -match '(?i)\bapp-server\b') { continue }
+        if ($knownPaths.Count -gt 0) {
+            $processPath = [string]$process.ExecutablePath
+            if ([string]::IsNullOrWhiteSpace($processPath)) { continue }
+            try { $processPath = [IO.Path]::GetFullPath($processPath) } catch { continue }
+            if (@($knownPaths | Where-Object {
+                [string]::Equals($_, $processPath, [StringComparison]::OrdinalIgnoreCase)
+            }).Count -eq 0) { continue }
+        }
         $results += $process
     }
     return @($results)
@@ -108,35 +121,107 @@ function Find-PackagedDesktopAppId {
     }
 }
 
+function Find-PackagedDesktopInstallation {
+    $fallbackAppId = Find-PackagedDesktopAppId
+    if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+        foreach ($package in @(Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue)) {
+            $installRoot = [string]$package.InstallLocation
+            if ([string]::IsNullOrWhiteSpace($installRoot) -or
+                -not (Test-Path -LiteralPath $installRoot -PathType Container)) { continue }
+            $manifestPath = Join-Path $installRoot 'AppxManifest.xml'
+            if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
+            try {
+                [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
+                $applications = @($manifest.Package.Applications.Application) | Sort-Object @{
+                    Expression = {
+                        $leaf = [IO.Path]::GetFileName([string]$_.Executable)
+                        if ($leaf -match '(?i)^(ChatGPT|Codex)\.exe$') { 0 } else { 1 }
+                    }
+                }
+                foreach ($application in $applications) {
+                    $relativeExecutable = [string]$application.Executable
+                    if ([string]::IsNullOrWhiteSpace($relativeExecutable) -or
+                        [IO.Path]::GetExtension($relativeExecutable) -ine '.exe') { continue }
+                    $resolvedRoot = [IO.Path]::GetFullPath($installRoot)
+                    $resolvedExecutable = [IO.Path]::GetFullPath((Join-Path $resolvedRoot $relativeExecutable))
+                    $rootPrefix = $resolvedRoot.TrimEnd([char[]]@(
+                        [IO.Path]::DirectorySeparatorChar,
+                        [IO.Path]::AltDirectorySeparatorChar
+                    )) + [IO.Path]::DirectorySeparatorChar
+                    if (-not $resolvedExecutable.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                        -not (Test-Path -LiteralPath $resolvedExecutable -PathType Leaf)) { continue }
+                    $applicationId = [string]$application.Id
+                    $packageFamilyName = [string]$package.PackageFamilyName
+                    $appId = $fallbackAppId
+                    if (-not [string]::IsNullOrWhiteSpace($applicationId) -and
+                        -not [string]::IsNullOrWhiteSpace($packageFamilyName)) {
+                        $appId = "$packageFamilyName!$applicationId"
+                    }
+                    return [pscustomobject]@{
+                        AppId = $appId
+                        ExecutablePath = $resolvedExecutable
+                    }
+                }
+            } catch { }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($fallbackAppId)) {
+        return [pscustomobject]@{ AppId = $fallbackAppId; ExecutablePath = $null }
+    }
+    return $null
+}
+
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw 'bridge.config.json not found. Run install.ps1 first.'
 }
 $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-if (@(Get-RunningDesktopProcesses).Count -gt 0) {
-    throw 'ChatGPT/Codex Desktop is still running. Fully quit it, then run this launcher again.'
-}
 
+$relayUrl = [string]$config.sessionRelay.appServerUrl
+$relayStatePath = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap\desktop-relay-state.json'
 $desktopProxyUrl = $null
 if ($PSBoundParameters.ContainsKey('Proxy')) {
     $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value $Proxy
     if (-not $desktopProxyUrl) { throw '-Proxy requires a loopback URL.' }
+} elseif (-not $NoProxy -and (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) {
+    try {
+        $savedRelayState = Get-Content -Raw -LiteralPath $relayStatePath | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$savedRelayState.expectedUrl) -and
+            [string]$savedRelayState.expectedUrl -ne $relayUrl) {
+            throw 'The saved Desktop relay belongs to a different App Server URL.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$savedRelayState.desktopProxyUrl)) {
+            $desktopProxyUrl = ConvertTo-SafeLoopbackProxy -Value ([string]$savedRelayState.desktopProxyUrl)
+        }
+    } catch {
+        throw 'The saved Desktop network selection is invalid. Re-run with an explicit -Proxy or -NoProxy choice.'
+    }
 }
 
-$relayUrl = [string]$config.sessionRelay.appServerUrl
 $desktopPath = Find-DesktopExecutable -RequestedPath $DesktopExecutable
-$packagedAppId = $null
-if (-not $desktopPath) { $packagedAppId = Find-PackagedDesktopAppId }
+$packagedDesktop = Find-PackagedDesktopInstallation
+$packagedAppId = if ($packagedDesktop) { [string]$packagedDesktop.AppId } else { $null }
+if (-not $desktopPath -and $packagedDesktop -and
+    -not [string]::IsNullOrWhiteSpace([string]$packagedDesktop.ExecutablePath)) {
+    $desktopPath = [string]$packagedDesktop.ExecutablePath
+}
 if (-not $desktopPath -and -not $packagedAppId) {
     throw 'ChatGPT/Codex Desktop could not be found in App Paths, standard locations, Start Menu shortcuts, or packaged apps.'
 }
 if ($desktopProxyUrl -and -not $desktopPath) {
-    throw 'The packaged Desktop launcher cannot receive an isolated proxy. Install the Win32 Desktop build or use its system proxy, then retry without -Proxy.'
+    throw 'The packaged Desktop manifest executable could not be verified for isolated proxy launch. Repair the package, install the Win32 build, or use an explicitly verified system proxy.'
+}
+$knownDesktopPaths = @($desktopPath)
+if ($packagedDesktop -and -not [string]::IsNullOrWhiteSpace([string]$packagedDesktop.ExecutablePath)) {
+    $knownDesktopPaths += [string]$packagedDesktop.ExecutablePath
+}
+if (@(Get-RunningDesktopProcesses -ExecutablePaths $knownDesktopPaths).Count -gt 0) {
+    throw 'ChatGPT/Codex Desktop is still running. Fully quit it, then run this launcher again.'
 }
 
 $configureParameters = @{}
 if ($desktopProxyUrl) { $configureParameters['Proxy'] = $desktopProxyUrl }
-else { $configureParameters['NoProxy'] = $true }
+elseif ($NoProxy -or -not (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) { $configureParameters['NoProxy'] = $true }
 & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1') @configureParameters
 
 $environmentNames = @('CODEX_APP_SERVER_WS_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
@@ -176,7 +261,7 @@ try {
 
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $deadline) {
-    if (@(Get-RunningDesktopProcesses).Count -gt 0) {
+    if (@(Get-RunningDesktopProcesses -ExecutablePaths $knownDesktopPaths).Count -gt 0) {
         $networkMode = if ($desktopProxyUrl) { 'local proxy' } else { 'direct' }
         Write-Output "ChatGPT/Codex Desktop launched with the verified shared App Server relay in $networkMode mode."
         exit 0

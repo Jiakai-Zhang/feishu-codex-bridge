@@ -5,16 +5,31 @@ export const DEFAULT_SESSION_RELAY_SETTINGS = Object.freeze({
   inputMode: "queue",
   publicProgress: true,
   finalMention: true,
+  sandboxMode: "inherit",
 });
 
 export const LEGACY_SESSION_RELAY_SETTINGS = Object.freeze({
   inputMode: "steer",
   publicProgress: false,
   finalMention: true,
+  sandboxMode: "inherit",
 });
+
+export const SESSION_SANDBOX_MODES = Object.freeze([
+  "inherit",
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+]);
+
+const SESSION_SANDBOX_MODE_SET = new Set(SESSION_SANDBOX_MODES);
 
 function normalizeInputMode(value) {
   return value === "queue" ? "queue" : "steer";
+}
+
+function normalizeSandboxMode(value) {
+  return SESSION_SANDBOX_MODE_SET.has(value) ? value : "inherit";
 }
 
 export function normalizeSessionRelaySettings(value = {}) {
@@ -25,6 +40,9 @@ export function normalizeSessionRelaySettings(value = {}) {
     // values intentionally opt in so existing bindings gain the requested
     // final-answer notification without being recreated.
     finalMention: value?.finalMention !== false,
+    // Permission overrides were introduced in schema v4. Existing Sessions
+    // inherit the Bridge host default until their owner explicitly changes it.
+    sandboxMode: normalizeSandboxMode(value?.sandboxMode),
   });
 }
 
@@ -47,6 +65,9 @@ function validatePatch(patch) {
   }
   if (Object.hasOwn(patch, "finalMention") && typeof patch.finalMention !== "boolean") {
     throw new TypeError("Session final mention setting must be boolean");
+  }
+  if (Object.hasOwn(patch, "sandboxMode") && !SESSION_SANDBOX_MODE_SET.has(patch.sandboxMode)) {
+    throw new TypeError("Session sandbox mode is invalid");
   }
 }
 
@@ -140,7 +161,10 @@ export class SessionRelaySettingsStore {
   async reset(threadId) {
     const key = String(threadId || "");
     if (!key) throw new TypeError("Session settings reset requires threadId");
-    this.records.set(key, { threadId: key, ...this.getDefaults() });
+    const { sandboxMode } = this.get(key);
+    // `/settings reset` must never change a security boundary implicitly.
+    // Permission changes are only available through `/permissions`.
+    this.records.set(key, { threadId: key, ...this.getDefaults(), sandboxMode });
     await this.persist();
     return this.get(key);
   }
@@ -159,7 +183,7 @@ export class SessionRelaySettingsStore {
 
   async persist() {
     const snapshot = JSON.stringify({
-      version: 3,
+      version: 4,
       defaults: this.getDefaults(),
       sessionFallback: normalizeSessionRelaySettings(this.sessionFallback),
       sessions: this.list(),

@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { configureSessionAccess } from "../../../app/configure-session-access.mjs";
 import {
   appServerReadyProbe,
   loopbackPortOpen,
@@ -33,6 +35,7 @@ import {
   processProxyEnvironmentMatches,
   proxyEnvironment,
   relayHeartbeatReady,
+  requiredPersistedDesktopProxyUrl,
   runningDesktopApplications,
   safeDesktopLaunchArguments,
 } from "./desktop-runtime.mjs";
@@ -138,6 +141,35 @@ async function verifyFeishuAppCommand(args) {
   const summary = summarizeFeishuBridgeAppVerification(authStatus, eventDryRun);
   process.stdout.write(`${JSON.stringify(summary)}\n`);
   if (!summary.ok) process.exitCode = 1;
+}
+
+async function setupProjectRootCommand(args) {
+  assertMacOS();
+  if (args.length > 0) throw new Error("setup-project-root does not accept arguments.");
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Project root setup requires an interactive local Terminal.");
+  }
+  const prompts = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  let projectRoot;
+  let ownerDirectoryName;
+  try {
+    projectRoot = await prompts.question("Bridge Project root (absolute local directory): ");
+    ownerDirectoryName = await prompts.question("Owner directory name under that root: ");
+  } finally {
+    prompts.close();
+  }
+  if (!projectRoot.trim() || !ownerDirectoryName.trim()) {
+    throw new Error("Both Project root and Owner directory name are required.");
+  }
+  try {
+    await configureSessionAccess({ repositoryDirectory: repositoryRoot, projectRoot, ownerDirectoryName });
+  } catch (error) {
+    const code = String(error?.code || "invalid_configuration").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+    throw new Error(`Project root configuration failed (${code || "invalid_configuration"}); no path was printed.`);
+  }
+  process.stdout.write(
+    "Bridge Project root and Owner directory configured locally. Restart the Bridge before using /members or member-scoped /add.\n",
+  );
 }
 
 async function resumeRelayIfEnabled(layout) {
@@ -273,7 +305,7 @@ async function launchDesktopRelayCommand(args) {
   assertMacOS();
   const { options, positional } = optionMap(args);
   for (const name of options.keys()) {
-    if (!["wait-for-exit", "proxy", "no-proxy"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
+    if (!["wait-for-exit", "proxy", "no-proxy", "preserve-network"].includes(name)) throw new Error(`Unknown Desktop launch option: --${name}`);
   }
   if (positional.length > 0) {
     throw new Error("Unexpected Desktop launch argument. Use --proxy <loopback-url> to enable a proxy.");
@@ -287,6 +319,12 @@ async function launchDesktopRelayCommand(args) {
   if (options.has("proxy") && options.has("no-proxy")) {
     throw new Error("--proxy cannot be combined with --no-proxy.");
   }
+  if (options.has("preserve-network") && (options.has("proxy") || options.has("no-proxy"))) {
+    throw new Error("--preserve-network cannot be combined with --proxy or --no-proxy.");
+  }
+  if (options.has("preserve-network") && options.get("preserve-network") !== true) {
+    throw new Error("--preserve-network does not accept a value.");
+  }
   const status = await statusSnapshot();
   if (!status.listener || !status.appServerProcess || status.pointer !== status.endpoint.href
     || !(await relayHeartbeatReady(status.layout, status.endpoint.href))) {
@@ -296,9 +334,12 @@ async function launchDesktopRelayCommand(args) {
   if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 600) {
     throw new Error("--wait-for-exit must be between 0 and 600 seconds.");
   }
+  const preservedProxyUrl = options.has("preserve-network")
+    ? await requiredPersistedDesktopProxyUrl(status.layout)
+    : undefined;
   const proxySelection = desktopProxySelection({
-    requestedValue: options.get("proxy"),
-    noProxy: options.has("no-proxy"),
+    requestedValue: options.has("preserve-network") ? preservedProxyUrl : options.get("proxy"),
+    noProxy: options.has("preserve-network") ? !preservedProxyUrl : options.has("no-proxy"),
   });
   const proxyUrl = proxySelection.proxyUrl;
   if (proxyUrl) {
@@ -462,6 +503,7 @@ async function main() {
     case "setup-secret": return setupSecretCommand(args);
     case "configure-feishu-app": return configureFeishuAppCommand(args);
     case "verify-feishu-app": return verifyFeishuAppCommand(args);
+    case "setup-project-root": return setupProjectRootCommand(args);
     case "start": return startCommand(args);
     case "stop": return stopCommand(args);
     case "status": return runStatusCommand(args);
@@ -471,7 +513,7 @@ async function main() {
     case "lark-cli": return larkCliCommand(args);
     case "dependencies": return runDependenciesCommand();
     case "update": return (await import("./update.mjs")).runMacOSUpdate(args);
-    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|configure-feishu-app|verify-feishu-app|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
+    default: throw new Error("Usage: admin-cli.mjs dependencies|install|setup-secret|configure-feishu-app|verify-feishu-app|setup-project-root|start|stop|status|doctor|configure-desktop-relay|launch-desktop-relay|lark-cli|update");
   }
 }
 

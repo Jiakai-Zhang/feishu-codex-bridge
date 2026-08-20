@@ -68,6 +68,66 @@ test("walks through Project then existing session selection", async () => {
   assert.deepEqual(provisions, [{ threadId: "thread-project", options: undefined }]);
 });
 
+test("creates and binds another task from a non-empty Project", async () => {
+  const creations = [];
+  const provisions = [];
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => ({
+      projects: [{
+        id: "project-a",
+        name: "Alpha",
+        rootPaths: ["C:\\alpha"],
+        sessions: [projectSession],
+      }],
+      independent: [],
+    }),
+    provision: async (threadId, options) => {
+      provisions.push({ threadId, options });
+      return {
+        alreadyBound: false,
+        groupName: "Alpha/Second task",
+        feedGroupName: "HOST-Codex",
+      };
+    },
+    createIndependent: async () => undefined,
+    createProject: async ({ name, project, actorOpenId }) => {
+      creations.push({ name, projectId: project.id, actorOpenId });
+      return {
+        id: "thread-second",
+        title: name,
+        cwd: project.rootPaths[0],
+        kind: "project",
+        projectId: project.id,
+        projectName: project.name,
+      };
+    },
+    now: () => 10_000,
+  });
+
+  await flow.handle({ conversationId: "chat-create-more", actorOpenId: "ou_member", text: "/add" });
+  const menu = await flow.handle({ conversationId: "chat-create-more", actorOpenId: "ou_member", text: "2" });
+  assert.match(menu.reply, /^`1` Project task（/m);
+  assert.match(menu.reply, /^`2` \*\*新建任务\*\*$/m);
+
+  const namePrompt = await flow.handle({
+    conversationId: "chat-create-more",
+    actorOpenId: "ou_member",
+    text: "2",
+  });
+  const created = await flow.handle({
+    conversationId: "chat-create-more",
+    actorOpenId: "ou_member",
+    text: "Second task",
+  });
+
+  assert.match(namePrompt.reply, /Project \*\*Alpha\*\*/);
+  assert.deepEqual(creations, [{ name: "Second task", projectId: "project-a", actorOpenId: "ou_member" }]);
+  assert.equal(provisions[0].threadId, "thread-second");
+  assert.equal(provisions[0].options.ownerOpenId, "ou_member");
+  assert.equal(provisions[0].options.session.kind, "project");
+  assert.equal(created.restart, true);
+});
+
 test("creates an independent task only after collecting name and absolute cwd", async () => {
   const { flow, provisions } = fixture();
   await flow.handle({ conversationId: "chat-a", text: "/add" });
@@ -234,4 +294,83 @@ test("renders and accepts multi-digit choices without Feishu ordered-list marker
 
   await flow.handle({ conversationId: "chat-many", text: "10" });
   assert.deepEqual(provisions, ["thread-10"]);
+});
+
+test("creates a Project and its first task inside the requesting member's scope", async () => {
+  const calls = [];
+  const memberCatalog = {
+    projects: [],
+    independent: [],
+    canCreateProject: true,
+    independentCreateMode: "member-root",
+  };
+  const flow = new SessionAddFlow({
+    loadCatalog: async (actorOpenId) => {
+      calls.push(["load", actorOpenId]);
+      return memberCatalog;
+    },
+    createWorkspaceProject: async ({ name, actorOpenId }) => {
+      calls.push(["project", name, actorOpenId]);
+      return {
+        id: "bridge-project",
+        name,
+        rootPaths: ["C:\\members\\alice\\frontend"],
+        ownerOpenId: actorOpenId,
+      };
+    },
+    createProject: async ({ name, project, actorOpenId }) => {
+      calls.push(["task", name, project.id, actorOpenId]);
+      return { id: "thread-member", title: name, kind: "project", projectName: project.name };
+    },
+    createIndependent: async () => undefined,
+    provision: async (threadId, options) => {
+      calls.push(["provision", threadId, options.ownerOpenId]);
+      return { alreadyBound: false, groupName: "frontend/First task" };
+    },
+    now: () => 10_000,
+  });
+
+  const menu = await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "/add" });
+  assert.match(menu.reply, /^`2` \*\*新建 Project\*\*$/m);
+  await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "2" });
+  await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "frontend" });
+  const created = await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "First task" });
+
+  assert.equal(created.restart, true);
+  assert.deepEqual(calls, [
+    ["load", "ou_member"],
+    ["project", "frontend", "ou_member"],
+    ["task", "First task", "bridge-project", "ou_member"],
+    ["provision", "thread-member", "ou_member"],
+  ]);
+});
+
+test("creates a member independent task without accepting an arbitrary cwd", async () => {
+  const calls = [];
+  const flow = new SessionAddFlow({
+    loadCatalog: async () => ({
+      projects: [],
+      independent: [],
+      canCreateProject: true,
+      independentCreateMode: "member-root",
+    }),
+    createIndependent: async (input) => {
+      calls.push(input);
+      return { id: "thread-member", title: input.name, kind: "independent" };
+    },
+    createProject: async () => undefined,
+    createWorkspaceProject: async () => undefined,
+    provision: async (_threadId, options) => ({
+      alreadyBound: false,
+      groupName: "独立/Member task",
+      binding: { ownerOpenId: options.ownerOpenId },
+    }),
+    now: () => 10_000,
+  });
+  await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "/add" });
+  await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "1" });
+  await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "1" });
+  const created = await flow.handle({ conversationId: "chat-member", actorOpenId: "ou_member", text: "Member task" });
+  assert.equal(created.restart, true);
+  assert.deepEqual(calls, [{ name: "Member task", actorOpenId: "ou_member" }]);
 });

@@ -1,29 +1,31 @@
 # Session Relay 参考
 
-本文描述当前正式支持的个人 Session Relay：一个飞书群固定绑定一个本机 Codex Session。安装步骤见 [INSTALL.md](INSTALL.md)，飞书权限见 [FEISHU_APP_SETUP.md](FEISHU_APP_SETUP.md)。
+本文描述当前正式支持的 Session Relay：一个飞书群固定绑定一个本机 Codex Session。默认仍是单用户；Owner 可选择在同一台 Bridge 上登记其他飞书用户，为每人划定独立 Project 目录，并通过群成员关系共享某个 Session。安装步骤见 [INSTALL.md](INSTALL.md)，飞书权限见 [FEISHU_APP_SETUP.md](FEISHU_APP_SETUP.md)。
 
 > 当前 `main` 包含固定版 `v0.3.1-beta.1` 之后合并的 Bridge pointer 生命周期、单张持久流式卡片、长回答云文档和完整媒体转发。标有“当前 `main`”的行为在下一个固定 tag 发布前不属于 `v0.3.1-beta.1` 的发布保证。
 
 ## 绑定模型
 
 ```text
-飞书群 A（仅 owner + 当前 Bot） ──固定绑定──> Codex Session A
-飞书群 B（仅 owner + 当前 Bot） ──固定绑定──> Codex Session B
+飞书群 A（Session owner + 已启用成员 + 当前 Bot） ──固定绑定──> Codex Session A
+飞书群 B（Session owner + 已启用成员 + 当前 Bot） ──固定绑定──> Codex Session B
 ```
 
 - 同一个飞书应用 Bot 可以加入多个绑定群。
 - Bridge 按不可变的 `chat_id` 查找绑定，不依赖群名猜测目标。
 - 每个 `chat_id` 与 `threadId` 在同一份配置中都必须唯一。
+- 每个 Session 只有一个 owner 和一个规范绑定群；不能为同一 Session 重复建群。
+- 把另一名已启用 Bridge 用户加入绑定群即共享该 Session；移出群即撤销。共享不授予对方 Project 列表或目录访问权。
 - `nameSync=none` 是默认值：群名仅用于展示，不会反写 Codex Session 名称。
 - Session 可以属于任意 Codex Desktop Project，也可以是 projectless 的“独立”任务。Bridge 不按 cwd 猜测 Project，也不修改 `.codex-global-state.json`。
 
 ## 消息如何进入 Session
 
-owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 去除真实 Bot mention 和飞书内部资源 key 后，把内容作为该 Session 的输入：
+群内只有一名人类用户时，可直接发送文本、图片或附件，无需 `@Bot`。有两名或更多人类用户时，只有 `@Bot`、回复 Bot 的消息和 Bridge 斜杠命令会进入 Session；其他消息按普通群聊忽略。Bridge 去除真实 Bot mention 和飞书内部资源 key 后，把内容作为该 Session 的输入：
 
 - 图片使用 App Server 原生 `localImage` 输入，可与同一条富文本中的说明一起发送；
 - PDF、Office 文档、压缩包、音视频和其他普通文件先流式下载到 Bridge 受控缓存，再按 Codex Desktop 自身持久化文件 Prompt 的格式加入输入：`Files mentioned by the user`、安全文件名、受控缓存绝对路径和 `My request for Codex`。模型因此可以直接读取原文件，Desktop 可按原生文件消息呈现；
-- 纯普通文件消息不会立即启动 Codex，而是成为当前 Session 的附件草稿；可以连续上传多个文件，第一条普通文字 Prompt 会原子地取走全部草稿附件并提交一次；
+- 纯普通文件消息不会立即启动 Codex，而是成为“当前 Session + 当前发送者”的附件草稿；不同协作者的暂存附件不会混合。可以连续上传多个文件，发送者的第一条普通文字 Prompt 会原子地取走自己的全部草稿附件并提交一次；
 - 已有附件草稿时，后续纯图片消息也加入同一草稿；没有草稿时，单独图片仍按原行为立即成为 Prompt；同一条富文本中的文字和图片仍立即一起提交；
 - `/status`、`/model` 等 Bridge 命令不会消费草稿；`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
 - 草稿、排队记录和附件元数据都会持久保存，Bridge 重启后不会丢失或退化成空 Prompt；同一 Session 的入站消息串行处理，避免连续上传与首条文字发生竞态；
@@ -39,6 +41,8 @@ owner 在绑定群发送普通文本、图片或附件，无需 `@Bot`。Bridge 
 
 `/queue <Prompt>` 总是显式创建独立新 Turn，不受当前普通消息模式影响。多条队列不会合并；Bridge 或共享 App Server 重启后仍会恢复，并通过原飞书消息 ID 对账，避免重复启动。
 
+多人群的普通 Prompt 固定按 `queue` 处理，避免不同成员的自然语言互相插入当前回答。需要调整活动回答时使用 `/steer <调整方向>`；只有 Session owner 或当前 Turn 的初始发起者可以执行。这个发起者身份会写入输入账本，Bridge 重启后仍可恢复授权。
+
 Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群的长期绑定保持不变，但 `/chat [首条 Prompt]` 可以在当前群或 Bot 私聊中创建独立临时 Session；`/endchat` 结束后，群内返回原绑定 Session。除了精确识别的 Session、临时 Chat 与绑定管理命令，其他文本（包括未知的 `/xxx`）都按当前 `queue|steer` 设置交给 Codex。
 
 ## 临时 Chat 与 Bot 私聊
@@ -48,7 +52,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 - `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。
 - 绑定群中的临时 Chat 继承原 Session 的 cwd；Bot 私聊使用 Bridge 启动时的 Codex 工作目录。
 - 临时 Chat 状态持久化。Bridge 重启后仍能继续；`/endchat` 不取消已经提交的 Turn，其最终结果仍投递到原飞书会话。
-- Bot 私聊只接受配置中的 owner；私聊最终回答不发送多余的 `@owner`。
+- Bot 私聊接受所有已启用 Bridge 用户；普通成员可用 `/add` 管理自己目录内的 Session。临时 `/chat` 与全局默认设置仍仅限 Bridge Owner；私聊最终回答不发送多余的提醒。
 
 ## 跨客户端同步
 
@@ -68,14 +72,14 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 工具原始输出；
 - 完整命令和敏感本机路径。
 
-新安装默认开启公开进度与最终回答 `@owner` 提醒。公开进度始终不 `@`，最终提醒可通过 `/settings mention off` 关闭。
+新安装默认开启公开进度与最终回答提醒。公开进度始终不 `@`；最终回答默认 `@` 本 Turn 的初始发起者，完全由 Desktop 发起时回退到 Session owner。提醒可由 Session owner 通过 `/settings mention off` 关闭。
 
 当前 `main` 中，一个 Turn 只创建一张可更新卡片：
 
 1. commentary 到达时，在原卡片追加公开进度并刷新“已处理”时长；
 2. Turn 完成后，最终答案原位替换进度；
 3. 卡片底部显示回答完成时间、整轮用时和本轮真实 Token；
-4. 完整最终答案再作为最新消息持久投递，避免原地更新的卡片停留在聊天上方；需要提醒时，该最终消息包含 `@owner`；
+4. 完整最终答案再作为最新消息持久投递，避免原地更新的卡片停留在聊天上方；需要提醒时，该最终消息 `@` 初始发起者；
 5. 卡片更新失败时，仍使用同一套持久最终投递。
 
 本轮 Token 使用 App Server 会话累计 usage 的差值计算，覆盖同一 Turn 中的多次模型调用。断线补发缺少 usage 快照时会显示“暂不可用”，不会按文本长度估算。
@@ -92,9 +96,9 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - `::visualize` 指向的本地 HTML 也作为附件发送。
 - 生产路径不限制媒体条目数；重复路径只投递一次。
 - 超限、空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
-- 飞书消息不会包含本机绝对路径；附件消息也不会额外提醒 owner。
+- 飞书消息不会包含本机绝对路径；附件消息也不会额外 `@` 任何人。
 
-文档能力需要用户 OAuth `docx:document:create` 与 `docx:document:write_only`。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载 owner 消息资源由现有 `im:message` 权限覆盖。
+文档能力需要 Bridge 当前 OAuth 用户的 `docx:document:create` 与 `docx:document:write_only`。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
 
 ## Session 命令
 
@@ -105,6 +109,14 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 ### `/stop`
 
 按当前精确活动 Turn 调用 `turn/interrupt`。若原生 Goal 正在运行，会先暂停 Goal，再中止当前 Turn，防止自动续跑。已有 `/queue` 项目保持不变。
+
+### `/steer`
+
+```text
+/steer <调整方向>
+```
+
+显式调用原生 `turn/steer`；当前没有活动 Turn 时会开始一个新 Turn。在共享群中，只有 Session owner 或当前 Turn 的初始发起者可以调整/中止该 Turn。
 
 ### `/queue`
 
@@ -133,7 +145,7 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 - `/attachments`：查看当前 Session 已暂存的附件数量和安全文件名。
 - `/attachments clear`：放弃尚未提交的全部附件，不影响正在运行的 Turn 或已有 Prompt 队列。
-- 附件消息可以连续上传；发送第一条普通文字 Prompt 后，Bridge 才把整份草稿一次性交给 Codex。
+- 附件消息可以连续上传；发送第一条普通文字 Prompt 后，Bridge 才把该发送者的整份草稿一次性交给 Codex。
 
 ### `/settings`
 
@@ -147,12 +159,34 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 群内命令只修改当前 Session。兼容旧的 `/settings thinking on|off` 写法，但界面会明确称为“公开进度（非隐藏思维链）”。
 
+`/settings reset` 只重置输入、公开进度和最终提醒，不会改变 Session 权限。权限只能通过下面的 `/permissions` 显式修改。
+
 在 Bot 私聊使用相同命令时，修改的是后续新绑定的全局默认快照：
 
 - 新安装默认 `queue + 公开进度开启 + 最终回答提醒开启`；
 - 新绑定在创建时复制当时的默认值；
 - 修改全局默认不会追改已有群；
 - 旧部署中没有设置记录的已有绑定继续保留旧安全默认 `steer + 公开进度关闭`。
+
+### `/permissions`
+
+```text
+/permissions
+/permissions inherit
+/permissions read-only
+/permissions workspace-write
+/permissions danger-full-access
+/permissions confirm
+/permissions cancel
+```
+
+- 仅 Session owner 可用，并且只修改当前绑定 Session；普通成员、当前 Turn 发起者和 Bridge Owner 都不能借此修改不属于自己的 Session。
+- `inherit` 使用 Bridge 主机的 `sandboxMode`；其余三个值形成当前 Session 的持久覆盖。
+- 修改时 Session 必须空闲且没有运行中的 Goal。它不改正在运行的 Turn、其他 Session、Bridge 全局配置或 Desktop 代理。
+- 下一次由 Bridge 调用 `turn/start` 时会显式发送该 Session 的 `sandboxPolicy`；启动或恢复 Goal 前也会先用保存的权限重新恢复 thread。App Server 随后把它作为同一 thread 后续 Turn 的默认值。`turn/steer` 不能修改活动 Turn 的权限。
+- `danger-full-access` 或继承到完全访问时，必须在 5 分钟内另发 `/permissions confirm`。确认请求同时绑定 Session、发送者和飞书会话，不能跨群复用。
+- 完全访问配合 Bridge 的无审批执行策略，可让 Codex 使用当前系统账户可访问的文件与命令，并可能访问 Keychain、DPAPI 等系统凭据存储。共享群中其他已授权成员之后提交的 Prompt 也会获得相同执行边界，只能用于完全可信的环境。
+- `/permissions cancel` 取消当前会话尚未确认的完全访问请求。
 
 ### `/model`
 
@@ -190,40 +224,85 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群，完成后显示“Goal 已完成”。
 
+### 共享群命令权限
+
+- 所有已启用且仍在群内的成员：`/status`、查看/清理自己的 `/attachments`、查看队列、`/queue <Prompt>`。
+- 当前 Turn 初始发起者：额外允许 `/steer` 与 `/stop`。
+- Session owner：允许全部 Session 命令，包括模型、Plan、Goal、设置、权限、队列删除/清空和 `/delete`。
+- `/members` 与 Bot 私聊中的全局 `/settings` 只允许 Bridge Owner。
+
 ### `/delete`
 
 `/delete` 先预览解除绑定的影响。5 分钟内发送 `/delete confirm` 才执行，`/delete cancel` 取消。
 
-解除绑定会移除 Agent 标签并自动重载 Bridge，但不会删除飞书群，也不会删除或归档 Codex Session。Session 正在回答、运行 Goal 或仍有队列时拒绝解除。
+解除绑定会在适用时移除 Agent 标签并自动重载 Bridge，但不会删除飞书群，也不会删除或归档 Codex Session。只有 Session owner 能执行；Session 正在回答、运行 Goal 或仍有队列时拒绝解除。
 
 ## 创建绑定
 
-向 Bot 私聊发送 `/add`，也可以在任一已有绑定群中发送。向导 15 分钟有效：
+向 Bot 私聊发送 `/add`。为避免在共享群泄露个人任务列表，绑定群中的 `/add` 会引导用户回到 Bot 私聊。向导 15 分钟有效：
 
 1. 选择 Codex Desktop Project，或选择“独立”；
 2. 选择未归档且符合原生 Project 归属的 Session；
-3. “独立”下还可创建 projectless Session，并输入名称与本机已存在的绝对工作目录；
-4. Bridge 创建私有群、校验群成员、应用 Feed 标签、复制默认设置、持久化绑定并发送欢迎消息；
-5. supervisor 在成功后自动重载 Bridge。
+3. 选择任意已有 Project 后都可“新建任务”；即使其中已经有其他 Session，也会在该 Project 登记的工作目录中创建并立即绑定新 Session；
+4. 已配置个人目录后还可选择“新建 Project”，Bridge 只在当前用户目录下创建新目录和首个任务；
+5. “独立”下也可创建 projectless Session；普通成员固定使用自己的目录，不能从飞书提交任意绝对 cwd。未启用多用户目录的旧 Owner 流程仍会本地校验输入的绝对 cwd；
+6. Bridge 创建私有群、校验群成员、应用 Feed 标签、复制默认设置、持久化绑定并发送欢迎消息；
+7. supervisor 在成功后自动重载 Bridge。
 
 可随时发送 `/cancel`。已绑定 Session 不会重复建群。新群名称为 `{Project名}/{Session名}` 或 `独立/{Session名}`，名称按飞书限制清理和截断。
 
-绑定持久化采用严格顺序：先确认标签入口，再创建群；只有成员/Bot 校验和标签写入都成功，才记录 `chat_id ↔ threadId`。中途失败的群不会被当成可用绑定。
+Owner 自己的绑定仍要求 Feed 标签成功后才持久化。Feed 标签属于 OAuth 用户的个人视图；普通成员作为群 owner 时，Owner OAuth 可能看不到该群，因此 Bridge 会尽力应用标签但不会让个人标签限制阻塞安全绑定，并在欢迎消息中如实说明。无论标签是否可用，成员/Bot 校验、设置快照与本机绑定写入都必须成功。
 
 也可以在目标 Codex Session 中调用 `$feishu-session-bind`。Skill 只把当前环境提供的 Session 标识交给 Bridge，不接受手填 Session ID，也不会读取或输出 App Secret。
 
+## 多用户目录与成员登记
+
+多用户是显式启用的兼容扩展。旧安装不运行下列设置时继续保持 Owner-only。
+
+macOS：
+
+```bash
+./setup-project-root.sh
+```
+
+Windows：
+
+```powershell
+.\setup-project-root.ps1
+```
+
+该本机交互脚本由 Bridge Owner 设置一个全局 Project 根目录和 Owner 自己的一级目录。绝对路径只经 stdin 进入本机配置器，不出现在飞书命令、进程参数、仓库或 Bot 回复中。已启用的根目录不能通过自动流程改指向别处。
+
+Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送一张飞书用户名片登记成员：Bot 读取名片后会询问一级目录名，Owner 回复一个安全目录名即可完成登记。也可继续使用 mention 命令登记或停用成员：
+
+```text
+/members
+/members add <一级目录名> @成员
+/members remove @成员
+```
+
+- 新成员目录必须不存在或为空；Bridge 不接管非空目录，也不改分配过的目录名。
+- 用户名片流程一次只接受一张名片，等待目录名 15 分钟；可发送 `/cancel` 取消，或发送另一张名片替换目标。该流程仍只有 Owner 可用，不会把用户标识、Project 根目录或成员路径回显到飞书。
+- 在实际绑定群中登记很实用：Owner 先把新人加入群，再发送 `/members add ... @成员`。登记成功后 Bot 会主动私聊新成员，提示其在该私聊发送 `/add`；Bridge 自动重载后，该成员才获得这个 Session 的使用权。
+- 也可以在 Bot 私聊中发送目标用户的名片先完成登记；发送名片和登记成员都不会自动把该用户邀请进任何 Session 群。
+- 主动私聊失败不会回滚已经持久化的成员与目录；Owner 回复会提示核对应用可用范围，并让成员手动搜索 Bot 后发送 `/add`。
+- 群内存在未登记或已停用的人时，所有 Session 内容收发 fail closed；Owner 仍可执行成员登记命令完成恢复。
+- 停用成员不删除文件。成员仍拥有绑定 Session 时拒绝停用；应先解除这些绑定。停用后也应把成员移出共享群。
+- Owner `/add` 只看到 Owner 目录内的任务，以及不属于任何成员目录的旧 Project/独立任务；普通成员只看到自己目录内的任务。共享别人的 Session 不会让它出现在自己的 `/add` Project 列表中。
+- 飞书应用的可用范围必须包含新成员；否则其消息不会到达 Bot。
+
 ## 安全门禁
 
-- 入站 Prompt 先验证不可变 `chat_id` 与精确 owner `sender_id`。
+- 入站 Prompt 先验证不可变 `chat_id`，发送者必须是当前群内已启用 Bridge 用户。
 - 任何可能包含任务信息的出站消息，在发送前都用 Bot 身份重新读取完整群成员。
-- 群成员必须严格等于“绑定 owner 一人 + 当前 Bot 一个”。
-- 加入第三个人、第三方 Bot、Session 被归档或成员无法完整核验时，敏感出站内容全部 fail closed。
+- Session owner 必须仍在群内且处于启用状态；所有其他人类成员也必须已启用。群内只能有当前 Bridge Bot，不能加入第三方 Bot。
+- 未登记/已停用成员、Session 被归档或成员无法完整核验时，敏感入站和出站内容全部 fail closed。
 - `im.message.receive_v1` 与 `im:message.group_msg` 都必须发布；只有群内 `@Bot` 权限时，平台不会投递普通未 @ 消息。
-- 默认沙盒是 `workspace-write`。`danger-full-access` 会扩大远程消息可触发的本机写入范围，只应在完全可信的个人环境中使用。
+- 默认沙盒是 `workspace-write`。Session owner 可通过 `/permissions` 为自己的 Session 设置持久覆盖；`danger-full-access` 会扩大所有该群已授权 Prompt 可触发的本机访问范围，只应在完全可信的个人环境中使用。
 
 ## 持久状态与投递
 
-- 每个 Session 的设置、待提交附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
+- 用户目录/成员状态、每个 Session 的设置与权限覆盖、按发送者隔离的附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
 - 所有最终答案先写入持久发件箱，再调用飞书发送。
 - 最终答案使用按 Turn 派生的确定性投递 ID；网络重试不会重复运行 Codex。
 - 主动发送最终结果前仍会重新校验群成员。
@@ -298,4 +377,4 @@ macOS 使用：
 }
 ```
 
-`bindings: []` 是合法的首次启动状态；未绑定群会被拒绝，但 owner 仍可在 Bot 私聊发送 `/add` 完成第一个绑定。完整示例与超时、重试和长度参数见 [`bridge.config.example.json`](../bridge.config.example.json)。
+`bindings: []` 是合法的首次启动状态；未绑定群会被拒绝，但 owner 仍可在 Bot 私聊发送 `/add` 完成第一个绑定。可选的多用户根目录、成员和 Bridge 创建的 Project 保存在运行目录的私有 `session-relay-access.json`，不写入仓库或 `bridge.config.json`。完整示例与超时、重试和长度参数见 [`bridge.config.example.json`](../bridge.config.example.json)。

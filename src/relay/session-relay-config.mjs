@@ -57,9 +57,6 @@ function normalizeBinding(binding, index, defaultOwnerOpenId) {
   if (!CHAT_ID.test(groupChatId)) throw new TypeError(`Invalid ${field}.groupChatId`);
   if (!THREAD_ID.test(threadId)) throw new TypeError(`Invalid ${field}.threadId`);
   if (!OPEN_ID.test(ownerOpenId)) throw new TypeError(`Invalid ${field}.ownerOpenId`);
-  if (ownerOpenId !== defaultOwnerOpenId) {
-    throw new TypeError(`${field}.ownerOpenId must match agent.ownerOpenId`);
-  }
   return Object.freeze({ groupChatId, threadId, ownerOpenId });
 }
 

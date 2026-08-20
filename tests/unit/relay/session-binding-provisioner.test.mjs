@@ -21,8 +21,8 @@ function fixture({ bindings = [] } = {}) {
     catalog: { load: async () => ({ sessionsById: new Map([[session.id, session]]) }) },
     registry,
     chatManager: {
-      createSoloGroup: async ({ name }) => {
-        calls.push(["create", name]);
+      createSessionGroup: async ({ name, ownerOpenId }) => {
+        calls.push(["create", name, ownerOpenId]);
         return { chatId: "oc_created", name };
       },
     },
@@ -41,6 +41,7 @@ function fixture({ bindings = [] } = {}) {
       remove: async (threadId) => { calls.push(["settings-remove", threadId]); },
     },
     sendWelcome: async ({ chatId, settings }) => { calls.push(["welcome", chatId, settings]); },
+    onWarning: (error) => calls.push(["warning", error.message]),
   });
   return { provisioner, calls };
 }
@@ -55,6 +56,7 @@ test("creates, verifies, labels, persists, and welcomes a session group in order
   assert.deepEqual(calls.map(([name]) => name), [
     "label-ready", "create", "verify", "label", "settings", "persist", "welcome",
   ]);
+  assert.equal(calls.find(([name]) => name === "create")[2], "ou_owner");
   assert.deepEqual(calls.at(-1)[2], { inputMode: "queue", publicProgress: true, finalMention: true });
 });
 
@@ -78,6 +80,32 @@ test("does not persist a group whose Feed label could not be applied", async () 
     (error) => error?.code === "created_group_tag_failed",
   );
   assert.equal(calls.some(([name]) => name === "persist"), false);
+});
+
+test("creates a member-owned group and treats the owner's personal Feed label as best effort", async () => {
+  const { provisioner, calls } = fixture();
+  provisioner.feedGroupManager.ensureChat = async () => { throw new Error("not visible to owner OAuth"); };
+
+  const result = await provisioner.provision("thread-a", {
+    session,
+    ownerOpenId: "ou_member",
+  });
+
+  assert.equal(result.binding.ownerOpenId, "ou_member");
+  assert.equal(result.feedGroupName, undefined);
+  assert.equal(calls.find(([name]) => name === "create")[2], "ou_member");
+  assert.equal(calls.some(([name]) => name === "persist"), true);
+  assert.equal(calls.some(([name]) => name === "warning"), true);
+});
+
+test("does not let a second user claim an already-owned task", async () => {
+  const binding = { threadId: "thread-a", groupChatId: "oc_existing", ownerOpenId: "ou_owner" };
+  const { provisioner, calls } = fixture({ bindings: [binding] });
+  await assert.rejects(
+    provisioner.provision("thread-a", { session, ownerOpenId: "ou_member" }),
+    (error) => error?.code === "session_owned_by_another",
+  );
+  assert.deepEqual(calls, []);
 });
 
 test("does not persist a binding when its inherited defaults cannot be saved", async () => {
