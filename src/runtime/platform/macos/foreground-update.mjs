@@ -176,9 +176,20 @@ export async function readSavedDesktopNetwork(repositoryRoot) {
   return Object.freeze({ mode: proxyUrl ? "proxy" : "direct", proxyUrl });
 }
 
+export function pinForegroundNodeEnvironment(environment, nodeExecutable) {
+  const value = String(nodeExecutable || "").trim();
+  if (!path.isAbsolute(value)) {
+    throw new Error("The foreground updater Node executable must be an absolute path.");
+  }
+  const resolved = path.resolve(value);
+  environment.FEISHU_CODEX_BRIDGE_NODE = resolved;
+  return resolved;
+}
+
 async function runTargetUpdater(repositoryRoot, runId, version, remote, preflightOnly = false) {
   process.env.FEISHU_CODEX_BRIDGE_FOREGROUND_UPDATE = "1";
   process.env.FEISHU_CODEX_BRIDGE_FOREGROUND_INSTALL_ROOT = repositoryRoot;
+  pinForegroundNodeEnvironment(process.env, process.execPath);
   delete process.env.CODEX_THREAD_ID;
   delete process.env.CODEX_SESSION_ID;
   const target = await import(`./update.mjs?foreground=${runId}`);

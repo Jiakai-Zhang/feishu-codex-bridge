@@ -17,7 +17,10 @@ import {
   safeDesktopLaunchArguments,
   safeLoopbackProxyArgument,
 } from "../../../src/runtime/platform/macos/desktop-runtime.mjs";
-import { foregroundDesktopOpenArguments } from "../../../src/runtime/platform/macos/foreground-update.mjs";
+import {
+  foregroundDesktopOpenArguments,
+  pinForegroundNodeEnvironment,
+} from "../../../src/runtime/platform/macos/foreground-update.mjs";
 
 const execFile = promisify(nodeExecFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -234,15 +237,15 @@ test("macOS install prompt names the Feishu app after the Codex Mac, not the CLI
   assert.match(prompt, /CLI 原样输出的该 URL 作为可点击的备用链接/);
   assert.match(prompt, /临时本机 loopback 备用 URL/);
   assert.match(prompt, /https:\/\/github\.com\/ninmon\/feishu-codex-bridge-private\.git/);
-  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.8/);
+  assert.match(prompt, /tag：v0\.4\.0-macos-rc\.9/);
   assert.match(prompt, /setup-project-root\.sh/);
   assert.match(prompt, /没有明确要求“同机多用户”[^\n]*不要额外询问/);
   assert.match(prompt, /成功后 Bot 主动私聊成员并提示发送 `\/add`/);
   assert.match(prompt, /发送一张飞书用户名片，并按 Bot 提示回复一级目录名/);
   assert.match(prompt, /已有非空 Project 中继续新建并绑定 Session/);
   assert.match(prompt, /Session owner 从飞书安全调整自己 Session 的权限/);
-  assert.match(index, /tag：v0\.4\.0-macos-rc\.8[\s\S]*文件：docs\/INSTALL_MACOS_PROMPT\.md/);
-  assert.match(index, /tag：v0\.4\.0-macos-rc\.8[\s\S]*文件：docs\/UPGRADE_MACOS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.9[\s\S]*文件：docs\/INSTALL_MACOS_PROMPT\.md/);
+  assert.match(index, /tag：v0\.4\.0-macos-rc\.9[\s\S]*文件：docs\/UPGRADE_MACOS_PROMPT\.md/);
   assert.match(upgrade, /update-with-desktop-restart\.sh/);
   assert.match(upgrade, /不得要求我复制、粘贴或运行命令/);
   assert.match(upgrade, /重开逻辑不得依赖成功或回滚后的仓库启动器认识新参数/);
@@ -346,6 +349,17 @@ test("macOS foreground updater can relaunch Desktop independently of the checked
   }), /safe loopback URL/);
 });
 
+test("macOS foreground updater pins its verified Node for the whole transaction", () => {
+  const environment = {};
+  const nodeExecutable = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node";
+  assert.equal(pinForegroundNodeEnvironment(environment, nodeExecutable), nodeExecutable);
+  assert.equal(environment.FEISHU_CODEX_BRIDGE_NODE, nodeExecutable);
+  assert.throws(
+    () => pinForegroundNodeEnvironment(environment, "relative/node"),
+    /absolute path/,
+  );
+});
+
 test("macOS preserved Desktop network mode fails closed on unreadable or unsafe state", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-preserved-network-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -436,6 +450,7 @@ test("macOS foreground updater uses a visible Terminal, target-tag runtime, pres
   assert.match(coordinator, /strictDoctor\(repositoryRoot, \{ attached: true \}\)[\s\S]*runTargetUpdater[\s\S]*strictDoctor\(repositoryRoot\)[\s\S]*launchDesktop[\s\S]*strictDoctor\(repositoryRoot, \{ attached: true \}\)/);
   assert.match(coordinator, /foregroundDesktopOpenArguments/);
   assert.match(coordinator, /desktopRelayAttachment/);
+  assert.match(coordinator, /pinForegroundNodeEnvironment\(process\.env, process\.execPath\)/);
   assert.doesNotMatch(coordinator, /launch-codex-desktop-with-relay\.sh/);
   assert.match(updater, /preflight-only/);
   assert.match(updater, /state\.bridgeRunning \|\| startRequested \|\| state\.relayEnabled/);

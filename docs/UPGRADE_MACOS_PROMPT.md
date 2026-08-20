@@ -1,8 +1,8 @@
 # 给 Codex 的 macOS 极简升级协议
 
-本协议把一台已安装 Feishu Codex Bridge 的 Mac 安全升级到私有固定版本 `v0.4.0-macos-rc.8`。健康路径中，用户只在前台升级器明确准备完成后按一次 `⌘Q` 完全退出 ChatGPT/Codex Desktop；独立 Terminal 会保留原有直连/代理模式，事务升级、自动重开 Desktop 并完成最终 Doctor。不得让用户复制或运行更新命令，也不得要求用户手工重开 Desktop。
+本协议把一台已安装 Feishu Codex Bridge 的 Mac 安全升级到私有固定版本 `v0.4.0-macos-rc.9`。健康路径中，用户只在前台升级器明确准备完成后按一次 `⌘Q` 完全退出 ChatGPT/Codex Desktop；独立 Terminal 会保留原有直连/代理模式，事务升级、自动重开 Desktop 并完成最终 Doctor。不得让用户复制或运行更新命令，也不得要求用户手工重开 Desktop。
 
-本文锁定到 `v0.4.0-macos-rc.8`。后续版本不得沿用本文件中的 tag，必须重新发布并验证协议。
+本文锁定到 `v0.4.0-macos-rc.9`。后续版本不得沿用本文件中的 tag，必须重新发布并验证协议。
 
 ## 通过本链接调用升级代理
 
@@ -17,11 +17,11 @@
 ## 可复制 Prompt
 
 ```text
-请把这台 Mac 上已有的 Feishu Codex Bridge 安全升级到私有固定 tag v0.4.0-macos-rc.8，并完整验收。
+请把这台 Mac 上已有的 Feishu Codex Bridge 安全升级到私有固定 tag v0.4.0-macos-rc.9，并完整验收。
 
 固定目标：
 - 仓库：ninmon/feishu-codex-bridge-private
-- tag：v0.4.0-macos-rc.8
+- tag：v0.4.0-macos-rc.9
 - 平台：macOS only
 
 健康路径中，我只负责在你明确提示后按 ⌘Q 完全退出 ChatGPT/Codex Desktop。独立可见 Terminal 必须自行完成升级、保留原网络模式、重开 Desktop 和最终 Doctor；不得要求我复制、粘贴或运行命令，也不得要求我手工重开 Desktop。
@@ -45,7 +45,7 @@
 3. 在改变 checkout 或停止服务前，使用本机已登录的 GitHub CLI/Git 凭据确认目标 tag 已发布并解析到精确提交，然后完整读取该 tag 中的：
    - AGENTS.md；
    - docs/INSTALL_MACOS.md 的“更新固定版本”章节；
-   - docs/releases/v0.4.0-macos-rc.8.md；
+   - docs/releases/v0.4.0-macos-rc.9.md；
    - src/runtime/platform/macos/update-with-desktop-restart.sh。
 
    不得使用 main、其他 tag、公开 raw 文件或未认证的临时下载代替。
@@ -56,10 +56,11 @@
 
 6. 保留现有 bridge.config.json、Keychain Secret、绑定、成员/Project 状态、Session 设置与权限、临时 Chat、队列、输入账本、附件草稿与缓存、投递状态、relay state、bootstrap 和原有代理模式。不得重新索取 App Secret、重新配置飞书应用、重新 OAuth，或再次询问直连/代理。
 
-7. 预检全部通过后，从已认证的 private 精确 tag 提取目标版本的 src/runtime/platform/macos/update-with-desktop-restart.sh 到当前用户的安全临时目录。在现有安装仓库作为工作目录，以目标 tag v0.4.0-macos-rc.8 和 Remote private 启动这个目标版本入口。不得改用当前旧版本脚本、手工 checkout、后台 job、公开 raw URL 或自行拼装 Terminal 命令。
+7. 预检全部通过后，从已认证的 private 精确 tag 提取目标版本的 src/runtime/platform/macos/update-with-desktop-restart.sh 到当前用户的安全临时目录。在现有安装仓库作为工作目录，以目标 tag v0.4.0-macos-rc.9 和 Remote private 启动这个目标版本入口。不得改用当前旧版本脚本、手工 checkout、后台 job、公开 raw URL 或自行拼装 Terminal 命令。
 
    该入口必须自行：
    - 从同一目标 tag 提取目标 runtime；
+   - 将入口已验证并实际运行前台 worker 的 Node 绝对路径固定到事务环境，使 bootstrap、安装和回滚不依赖 Desktop 退出后的 Terminal PATH 或再次扫描应用 Bundle；
    - 创建独立、可见的 Terminal 更新任务；
    - 在 Desktop 仍运行时执行严格 Doctor、精确 tag/工作树预检和代理一致性检查；
    - 解析并锁定经过 OpenAI Bundle ID、签名身份和规范可执行路径共同验证的 Desktop；
@@ -73,7 +74,7 @@
 9. 前台升级器必须调用目标版本的底层 update.mjs/update.sh 事务：保留私有状态、失败自动回滚；安装阶段首次失败时只允许进行一次幂等重试，两次失败则保留脱敏诊断并回滚；relay 已启用时即使 Bridge 当时停止，也要恢复 Bridge、relay 和 watchdog。更新后先执行严格 Doctor，再由目标 tag 的前台 runtime 重新验证保存的网络选择、活动 App Server 和 relay，并直接重开升级前已锁定的 Desktop，最后执行包含 Desktop attachment 的严格 Doctor。重开逻辑不得依赖成功或回滚后的仓库启动器认识新参数。失败且 Desktop 已退出时，必须使用同一独立恢复路径尝试按保存的网络模式打开 Desktop，并让 Terminal 保持可见。
 
 10. Desktop 自动重开并回到本任务后，自主核对：
-   - git describe --tags --exact-match 精确为 v0.4.0-macos-rc.8；
+   - git describe --tags --exact-match 精确为 v0.4.0-macos-rc.9；
    - HEAD 与远端该 tag 的提交一致；
    - 工作树干净；
    - ./status-bridge.sh 正常；

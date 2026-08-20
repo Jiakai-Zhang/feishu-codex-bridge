@@ -2,7 +2,7 @@
 
 本移植把一个飞书群固定绑定到一个本机 Codex 任务，并让飞书与 ChatGPT/Codex Desktop 复用同一个 Codex App Server。macOS 运行层使用 Keychain 保存 Channel Secret，使用当前用户的 `launchd` LaunchAgent 启动 Bridge、App Server 和 Desktop relay watchdog。
 
-> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.8`。它保留 rc.7 的完整多用户、Session 权限和可见前台升级能力，并修复失败回滚到旧 checkout 后无法按原网络模式重开 Desktop 的兼容问题；安装阶段会进行一次幂等重试并保留安全诊断。Desktop 身份由 Bundle metadata、OpenAI 签名和规范可执行路径共同确认；Keychain、附件与 launchd relay 状态保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
+> 当前 macOS 私有固定候选版为 `v0.4.0-macos-rc.9`。它保留 rc.8 的完整多用户、Session 权限、跨版本恢复和安全诊断，并把目标 tag 入口已验证的 Node 显式传给 bootstrap、安装和回滚，避免 Desktop 退出后独立 Terminal 重新发现运行时失败。Desktop 身份由 Bundle metadata、OpenAI 签名和规范可执行路径共同确认；Keychain、附件与 launchd relay 状态保持不变。macOS 平台实现位于 `src/runtime/platform/macos/`，共享业务代码与 Windows 使用同一领域目录。Codex App Server 的 WebSocket listener 仍是实验性能力，不建议当作无人值守的生产服务。
 
 如果要把全新 Mac 的部署交给已登录的 Codex Desktop 执行，直接复制[给 Codex 的 macOS 全新安装 Prompt](INSTALL_MACOS_PROMPT.md)。
 已有安装可复制[给 Codex 的 macOS 极简升级协议](UPGRADE_MACOS_PROMPT.md)入口；异常安全停点仍按本页更新规则执行。
@@ -222,7 +222,7 @@ git remote get-url private
 
 `--remote` 只接受 `origin` 或 `private`；选中远端必须精确匹配受维护的公开仓库或 `ninmon/feishu-codex-bridge-private`，升级器不会改写 remote。私有仓库访问由已登录的 GitHub CLI/Git credential helper 提供，不得把访问 Token 写进 URL、命令参数或聊天。全新 v0.4 macOS 私有安装的 `origin` 已指向私有仓库，仍可省略 `--remote`。
 
-前台入口会从精确目标 tag 提取目标 runtime，在独立、可见的 Terminal 中先执行严格 Doctor、工作树/tag 和网络模式预检。只有入口明确输出 `Foreground upgrade is ready` 后，用户才按 `⌘Q` 完全退出 Desktop；不要自行重开。升级器等待经 Bundle ID、OpenAI Team ID 与规范可执行路径共同验证的 Desktop 及其内嵌 App Server 自然退出，不按进程名广泛结束应用。完成事务升级和第一轮严格 Doctor 后，目标 tag 的前台 runtime 会再次验证原持久网络选择、活动 App Server 和 relay，再直接重开已锁定的 Desktop；这个恢复路径不依赖更新成功或回滚后的仓库启动器是否认识新参数，最后再完成包含 attachment 的严格 Doctor。
+前台入口会从精确目标 tag 提取目标 runtime，在独立、可见的 Terminal 中先执行严格 Doctor、工作树/tag 和网络模式预检。入口选择并验证 Node 后，会把这个绝对可执行路径固定到整个事务环境；后续 `bootstrap.sh`、安装器和回滚不依赖 Desktop 退出后的 Terminal PATH 或再次扫描应用 Bundle。只有入口明确输出 `Foreground upgrade is ready` 后，用户才按 `⌘Q` 完全退出 Desktop；不要自行重开。升级器等待经 Bundle ID、OpenAI Team ID 与规范可执行路径共同验证的 Desktop 及其内嵌 App Server 自然退出，不按进程名广泛结束应用。完成事务升级和第一轮严格 Doctor 后，目标 tag 的前台 runtime 会再次验证原持久网络选择、活动 App Server 和 relay，再直接重开已锁定的 Desktop；这个恢复路径不依赖更新成功或回滚后的仓库启动器是否认识新参数，最后再完成包含 attachment 的严格 Doctor。
 
 `./update.sh --version <tag>` 仍是底层事务入口，用于备份、checkout、安装、回滚和同版本自愈；它必须在 Desktop 已完全退出的独立 Terminal 中运行，并拒绝活跃 Codex 任务。正常 Codex 升级不应绕过前台入口直接调用它。公开仓库、上游仓库和受维护的私有发行仓库均使用相同的固定 tag 校验与安全更新流程。
 

@@ -7,7 +7,7 @@
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.8
+tag：v0.4.0-macos-rc.9
 文件：docs/INSTALL_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
@@ -31,7 +31,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 ```text
 请使用本机已登录且有仓库访问权的 GitHub CLI，完整读取并执行以下私有固定版本协议：
 仓库：ninmon/feishu-codex-bridge-private
-tag：v0.4.0-macos-rc.8
+tag：v0.4.0-macos-rc.9
 文件：docs/UPGRADE_MACOS_PROMPT.md
 将文件中“可复制 Prompt”部分视为我的完整执行指令，不得改用 main、其他版本或仅做摘要。
 GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输出访问 Token。
