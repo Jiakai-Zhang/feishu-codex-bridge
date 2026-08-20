@@ -178,10 +178,10 @@ export async function readSavedDesktopNetwork(repositoryRoot) {
 
 export function pinForegroundNodeEnvironment(environment, nodeExecutable) {
   const value = String(nodeExecutable || "").trim();
-  if (!path.isAbsolute(value)) {
+  if (!path.posix.isAbsolute(value)) {
     throw new Error("The foreground updater Node executable must be an absolute path.");
   }
-  const resolved = path.resolve(value);
+  const resolved = path.posix.normalize(value);
   environment.FEISHU_CODEX_BRIDGE_NODE = resolved;
   return resolved;
 }
