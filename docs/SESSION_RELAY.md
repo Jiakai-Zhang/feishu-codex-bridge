@@ -312,6 +312,8 @@ Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送�
 
 Session Relay 和 Codex Desktop 必须连接同一个本机 App Server。独立 App Server 对 Session 实行单 writer 锁；两个 App Server 进程不能分别接续同一 Session。
 
+共享 App Server 启动时会预置一个禁用的 `codex_app` stdio transport。Codex Desktop 创建线程时只发送 `mcp_servers.codex_app.enabled_tools` 等增量配置；这个预置项保证增量合并后仍是有效 MCP 配置，同时不会自行启动额外进程。
+
 首次启用：
 
 1. `start-bridge.sh`/`.ps1` 启动或复用经过 PID、可执行文件和 loopback 健康检查验证的 App Server，再启动 Bridge supervisor；macOS 使用 `/readyz`，不把“端口可连接”误判为服务就绪；
@@ -321,6 +323,8 @@ Session Relay 和 Codex Desktop 必须连接同一个本机 App Server。独立 
 5. 完全退出并重新打开 Codex Desktop，让新进程读取环境变量。
 
 watchdog 默认每 3 秒检查监听器。监听器消失或健康检查失败时先移除 Bridge 拥有的 pointer，再尝试恢复 App Server；只有进程、命令行与健康状态重新验证后才恢复 pointer。它会检测但不会停止或删除用户自建 guardian、计划任务或服务。
+
+Windows watchdog 的周期验证还会跟随 Codex Desktop 管理目录中的升级。发现更新且完整的 `codex.exe` 与 `codex-code-mode-host.exe` 后，Bridge 会先验证新 CLI 的 WebSocket App Server 能力，只替换由本安装 PID 记录持有的旧 App Server；新监听器验证成功后再原子更新 `bridge.config.json`，并通过 supervisor handshake 重载 Session Relay。未完成安装、无效候选或无法证明所有权的监听器不会被替换。
 
 当前 `main` 中，Bridge 启动时只有在连接成功后才设置 pointer；正常停止或 supervisor 最终退出时暂停 watchdog 并移除 pointer。停止 Bridge 不会立即结束仍供 Desktop 使用的共享 App Server。
 

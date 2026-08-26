@@ -182,6 +182,25 @@ test("standalone App Server startup is serialized and verifies ownership", async
   assert.match(source, /Port .* is already in use by an unverified process/);
   assert.match(source, /Find-VerifiedAppServerProcess/);
   assert.match(source, /AbsolutePath -ne '\/rpc'/);
+  assert.match(source, /mcp_servers\.codex_app=\{command='',enabled=false\}/);
+  assert.match(
+    source,
+    /'-c', \$desktopCodexAppTransportOverride,[\s\S]*'app-server', '--listen'/,
+  );
+});
+
+test("standalone App Server follows managed Codex Desktop upgrades", async () => {
+  const source = await readScript("start-app-server.ps1");
+  assert.match(source, /Resolve-ManagedCodexExecutable/);
+  assert.match(source, /Sort-Object LastWriteTimeUtc -Descending/);
+  assert.match(source, /codex-code-mode-host\.exe/);
+  assert.match(source, /Test-CodexAppServerCapability/);
+  assert.match(source, /previousAppServerProcess[\s\S]*managed Codex upgrade/);
+  assert.match(source, /Stop-VerifiedAppServerProcessTree/);
+  assert.match(source, /taskkill\.exe[\s\S]*\/T[\s\S]*\/F/);
+  assert.match(source, /Update-ConfiguredCodexExecutable/);
+  assert.match(source, /Request-BridgeReloadForCodexSwitch/);
+  assert.match(source, /restart\.request[\s\S]*stop\.request/);
 });
 
 test("doctor requires a fresh continuous watchdog heartbeat and owned listener", async () => {
