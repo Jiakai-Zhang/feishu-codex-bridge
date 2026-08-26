@@ -38,16 +38,16 @@ The classifications mean:
 
 ## Production module ledger
 
-The following lists account for all 54 root production modules exactly once.
+The following lists account for all 55 root production modules exactly once.
 
-### Stable Session Relay — 26 modules
+### Stable Session Relay — 27 modules
 
 | Target area | Current files |
 | --- | --- |
 | `src/app/` | `session-relay.mjs`, `request-session-binding.mjs` |
 | `src/codex/` | `codex-answer-media.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs` |
 | `src/feishu/` | `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-stream-card.mjs` |
-| `src/relay/` | `session-add-flow.mjs`, `session-binding-provisioner.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs` |
+| `src/relay/` | `session-add-flow.mjs`, `session-binding-provisioner.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-permission-command.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs` |
 | `src/persistence/` | `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-registry.mjs`, `session-input-ledger.mjs`, `session-prompt-queue.mjs`, `session-relay-settings.mjs` |
 
 `session-stream-card.mjs` is Feishu presentation code even though its current name
@@ -96,8 +96,8 @@ wrappers.
 | --- | --- | --- |
 | Stable startup/process control | `bridge-supervisor.ps1`, `start-app-server.ps1`, `start-at-login.ps1`, `start-bridge.ps1`, `status-bridge.ps1`, `stop-bridge.ps1` | Called by install/update scripts, scheduled startup, or each other; root names are public operations entry points |
 | Stable Desktop relay lifecycle | `configure-codex-desktop-relay.ps1`, `desktop-relay-bootstrap.ps1`, `desktop-relay-pointer.ps1`, `launch-codex-desktop-with-relay.ps1` | Pointer ownership, explicit direct/proxy selection and fail-open behavior are compatibility surfaces verified by Windows operational integration tests and doctor checks |
-| Stable install/update/auth | `configure-feishu-app.ps1`, `doctor.ps1`, `install.ps1`, `setup-channel-secret.ps1`, `update.ps1`, `verify-feishu-app.ps1` | Public installation contract; must preserve DPAPI, config, runtime state, safe Feishu template/verification output, rollback, and command-line parameters |
-| Stable adapters and validation | `lark-cli.ps1`, `install-smoke.ps1`, `update-smoke.ps1` | `lark-cli.ps1` is selected dynamically through configuration/docs; smoke scripts are direct validation entry points, and update smoke is invoked by `update-script.test.mjs` |
+| Stable install/update/auth | `configure-feishu-app.ps1`, `doctor.ps1`, `install.ps1`, `setup-channel-secret.ps1`, `update.ps1`, `update-windows-with-desktop-restart.ps1`, `verify-feishu-app.ps1` | Public installation contract; must preserve DPAPI, config, runtime state, safe Feishu template/verification output, rollback, command-line parameters, and Desktop-independent foreground upgrade lifecycle |
+| Stable adapters and validation | `lark-cli.ps1`, `install-smoke.ps1`, `update-smoke.ps1`, `tests/integration/windows-foreground-update-smoke.ps1` | `lark-cli.ps1` is selected dynamically through configuration/docs; smoke scripts are direct validation entry points, with Node integration tests invoking both transactional and foreground update smoke flows |
 | Resolved removal candidate | None | `restart-after-current-turn.ps1` was removed after confirming that released tags, current install/update scripts, Windows scheduled tasks, and Windows services never invoked it. Session binding reloads use the Supervisor-owned `restart.request` handshake instead. |
 
 Post-inventory Windows onboarding additions keep the root PowerShell compatibility
@@ -220,7 +220,8 @@ packages are omitted.
 | `session-delete-flow.mjs` | Stable | — |
 | `session-input-ledger.mjs` | Stable | — |
 | `session-prompt-queue.mjs` | Stable | `feishu-inbound-attachment.mjs` |
-| `session-relay.mjs` | Stable entry | `codex-answer-media.mjs`, `codex-app-server.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs`, `delivery-outbox.mjs`, `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-add-flow.mjs`, `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-provisioner.mjs`, `session-binding-registry.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-input-ledger.mjs`, `session-prompt-queue.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs`, `session-relay-settings.mjs`, `session-stream-card.mjs`, `thread-work-queue.mjs` |
+| `session-relay.mjs` | Stable entry | `codex-answer-media.mjs`, `codex-app-server.mjs`, `codex-desktop-catalog.mjs`, `codex-session-controller.mjs`, `codex-session-observer.mjs`, `codex-session-store.mjs`, `delivery-outbox.mjs`, `feishu-feed-group.mjs`, `feishu-inbound-attachment.mjs`, `feishu-long-answer-document.mjs`, `feishu-native-attachment.mjs`, `feishu-session-chat.mjs`, `session-add-flow.mjs`, `session-attachment-drafts.mjs`, `session-binding-inbox.mjs`, `session-binding-provisioner.mjs`, `session-binding-registry.mjs`, `session-binding-remover.mjs`, `session-delete-flow.mjs`, `session-input-ledger.mjs`, `session-permission-command.mjs`, `session-prompt-queue.mjs`, `session-relay-commands.mjs`, `session-relay-config.mjs`, `session-relay-core.mjs`, `session-relay-settings.mjs`, `session-stream-card.mjs`, `thread-work-queue.mjs` |
+| `session-permission-command.mjs` | Stable | `session-relay-settings.mjs` |
 | `session-relay-commands.mjs` | Stable | — |
 | `session-relay-config.mjs` | Stable | `feishu-inbound-attachment.mjs` |
 | `session-relay-core.mjs` | Stable | — |

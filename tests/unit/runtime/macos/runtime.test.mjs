@@ -27,7 +27,10 @@ import {
 } from "../../../../src/runtime/platform/macos/launch-environment.mjs";
 import { openPrivateFeishuUrl } from "../../../../src/runtime/platform/macos/private-browser-redirect.mjs";
 import { runtimeLayout } from "../../../../src/runtime/platform/macos/runtime-layout.mjs";
-import { assertSafeUpdateContext } from "../../../../src/runtime/platform/macos/update.mjs";
+import {
+  approvedMacOSUpdateOrigin,
+  assertSafeUpdateContext,
+} from "../../../../src/runtime/platform/macos/update.mjs";
 
 const execFile = promisify(nodeExecFile);
 
@@ -161,6 +164,21 @@ test("macOS updater refuses active Codex and Desktop contexts before changing se
     listDesktopApplications: async () => [{ bundlePath: "/Applications/ChatGPT.app" }],
     isEmbeddedDesktopAppServerRunning: async () => true,
   }));
+});
+
+test("macOS updater accepts only the maintained public and private repositories", () => {
+  for (const origin of [
+    "https://github.com/ninmon/feishu-codex-bridge.git",
+    "https://github.com/ninmon/feishu-codex-bridge-private.git",
+    "git@github.com:Jiakai-Zhang/feishu-codex-bridge.git",
+    "ssh://git@github.com/ninmon/feishu-codex-bridge-private.git",
+  ]) assert.equal(approvedMacOSUpdateOrigin(origin), true, origin);
+
+  for (const origin of [
+    "https://github.com/example/feishu-codex-bridge.git",
+    "https://github.com/ninmon/feishu-codex-bridge-fake.git",
+    "https://example.com/ninmon/feishu-codex-bridge.git",
+  ]) assert.equal(approvedMacOSUpdateOrigin(origin), false, origin);
 });
 
 test("App Server readiness probe requires a successful /readyz response", async (t) => {

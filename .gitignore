@@ -23,6 +23,7 @@ session-relay-prompt-queue.json
 session-relay-settings.json
 session-relay-attachment-drafts.json
 session-relay-inbound-attachments/
+upgrade-backups/
 session-binding-requests/
 selected-thread.json
 selected-thread.*.json

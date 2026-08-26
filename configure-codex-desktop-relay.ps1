@@ -328,9 +328,21 @@ try {
 } catch { }
 $networkReconfigurationRequired = $proxySelectionChanged -or -not $networkRecordMatches
 $statusLines = & (Join-Path $PSScriptRoot 'status-bridge.ps1') 2>&1
+$statusCommandSucceeded = $?
 $statusText = ($statusLines | ForEach-Object { [string]$_ }) -join ' '
-if ($LASTEXITCODE -ne 0 -or $statusText -notmatch 'connected=True') {
+if (-not $statusCommandSucceeded -or $statusText -notmatch 'connected=True') {
     throw 'Start the Bridge and wait for its authenticated Channel connection before enabling Desktop relay.'
+}
+
+function ConvertTo-UtcDateTime {
+    param([Parameter(Mandatory)][object]$Value)
+    if ($Value -is [DateTime]) {
+        return ([DateTime]$Value).ToUniversalTime()
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
 }
 $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
 if ($current -and $current -ne $url.AbsoluteUri -and -not $Force) {
@@ -458,7 +470,7 @@ try {
             if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
                 try {
                     $watchdogStatus = Get-Content -Raw -LiteralPath $statusPath | ConvertFrom-Json
-                    $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+                    $heartbeatAt = ConvertTo-UtcDateTime -Value $watchdogStatus.heartbeatAt
                     $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
                     if ([string]$watchdogStatus.activationId -eq $activationId -and
                         [string]$watchdogStatus.state -eq 'ready' -and
@@ -473,7 +485,7 @@ try {
         if ($watchdogReady) {
             Start-Sleep -Milliseconds 500
             $taskAfterReady = Get-RelayTask -Name $taskName
-            if (-not $taskAfterReady -or [string]$taskAfterReady.State -ne 'Running') {
+            if (-not $taskAfterReady -or [string]$taskAfterReady.State -eq 'Disabled') {
                 $watchdogReady = $false
             }
         }

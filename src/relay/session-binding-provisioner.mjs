@@ -26,7 +26,7 @@ export class SessionBindingProvisioner {
     this.registry = registry;
     this.chatManager = chatManager;
     this.feedGroupManager = feedGroupManager;
-    this.ownerOpenId = ownerOpenId;
+    this.defaultOwnerOpenId = ownerOpenId;
     this.verifyGroup = verifyGroup;
     this.sendWelcome = sendWelcome;
     this.settingsStore = settingsStore;
@@ -34,11 +34,18 @@ export class SessionBindingProvisioner {
     this.tail = Promise.resolve();
   }
 
-  provision(threadId, { session: suppliedSession } = {}) {
+  provision(threadId, { session: suppliedSession, ownerOpenId } = {}) {
     const work = async () => {
+      const bindingOwnerOpenId = String(ownerOpenId || this.defaultOwnerOpenId || "");
+      if (!/^ou_[A-Za-z0-9_-]+$/.test(bindingOwnerOpenId)) {
+        throw new SessionBindingProvisionError("binding_owner_invalid", "A valid Session owner is required");
+      }
       const bindings = await this.registry.list();
       const existing = bindings.find((binding) => binding.threadId === threadId);
       if (existing) {
+        if (existing.ownerOpenId !== bindingOwnerOpenId) {
+          throw new SessionBindingProvisionError("session_owned_by_another", "The task is already owned by another Bridge user");
+        }
         return Object.freeze({
           alreadyBound: true,
           binding: Object.freeze({ ...existing }),
@@ -59,10 +66,17 @@ export class SessionBindingProvisioner {
       const projectName = session.kind === "project" ? session.projectName : "独立";
       const groupName = buildSessionGroupName(projectName, session.title);
 
-      await this.feedGroupManager.findOrCreateGroup();
+      let feedGroupReady = false;
+      try {
+        await this.feedGroupManager.findOrCreateGroup();
+        feedGroupReady = true;
+      } catch (error) {
+        if (bindingOwnerOpenId === this.defaultOwnerOpenId) throw error;
+        this.onWarning(error);
+      }
       let chat;
       try {
-        chat = await this.chatManager.createSoloGroup({ name: groupName });
+        chat = await this.chatManager.createSessionGroup({ name: groupName, ownerOpenId: bindingOwnerOpenId });
       } catch (error) {
         throw new SessionBindingProvisionError(error?.code || "chat_create_failed", error?.message || "Group creation failed", {
           cause: error,
@@ -73,7 +87,7 @@ export class SessionBindingProvisioner {
       const candidateBinding = Object.freeze({
         groupChatId: chat.chatId,
         threadId,
-        ownerOpenId: this.ownerOpenId,
+        ownerOpenId: bindingOwnerOpenId,
       });
       try {
         await this.verifyGroup({ binding: candidateBinding, groupName });
@@ -84,14 +98,21 @@ export class SessionBindingProvisioner {
           { cause: error },
         );
       }
-      try {
-        await this.feedGroupManager.ensureChat(chat.chatId);
-      } catch (error) {
-        throw new SessionBindingProvisionError(
-          "created_group_tag_failed",
-          "The new group was created but the agent Feed label could not be applied",
-          { cause: error, missingScopes: error?.missingScopes },
-        );
+      let feedGroupApplied = false;
+      if (feedGroupReady) {
+        try {
+          await this.feedGroupManager.ensureChat(chat.chatId);
+          feedGroupApplied = true;
+        } catch (error) {
+          if (bindingOwnerOpenId === this.defaultOwnerOpenId) {
+            throw new SessionBindingProvisionError(
+              "created_group_tag_failed",
+              "The new group was created but the agent Feed label could not be applied",
+              { cause: error, missingScopes: error?.missingScopes },
+            );
+          }
+          this.onWarning(error);
+        }
       }
 
       let initializedSettings;
@@ -129,7 +150,7 @@ export class SessionBindingProvisioner {
           session,
           binding,
           settings: initializedSettings?.settings,
-          feedGroupName: this.feedGroupManager.groupName,
+          feedGroupName: feedGroupApplied ? this.feedGroupManager.groupName : undefined,
         });
       } catch (error) {
         this.onWarning(error);
@@ -138,7 +159,7 @@ export class SessionBindingProvisioner {
         alreadyBound: false,
         binding,
         groupName,
-        feedGroupName: this.feedGroupManager.groupName,
+        feedGroupName: feedGroupApplied ? this.feedGroupManager.groupName : undefined,
         session: Object.freeze({ ...session }),
         settings: initializedSettings?.settings,
       });

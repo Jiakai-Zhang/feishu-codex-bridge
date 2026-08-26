@@ -2,7 +2,7 @@
 
 本 Prompt 适用于一台已安装并登录 ChatGPT/Codex Desktop 的全新 Windows 电脑。安装开始前先把当前 Codex 对话设为“完全访问（Full access）”；“替我审批（Approve for me）”只处理审批请求，不会解除沙盒边界。新流程在飞书 CLI 创建专用应用后立即用 Windows DPAPI 安全保存 Channel App Secret，再由仓库脚本打开飞书官方应用模板，一次性声明 Bridge 所需权限和消息事件。Lark CLI 认证始终提供可点击 verification URL，应用模板脚本会在尝试打开浏览器前输出不含 App ID 的临时本机备用 URL。用户不再需要逐页重复启用默认已有的机器人、长连接和消息事件。
 
-本文为 `v0.3.2-windows-rc.4` 的固定安装协议；只能在该 tag 已公开发布并能解析到精确提交后使用。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
+本文为私有多用户候选版 `v0.4.0-windows-rc.5` 的固定安装协议；只能在该 tag 已发布、本机 GitHub CLI 已登录且当前账号能读取私有仓库时使用。它包含成员主动私聊、用户名片登记、非空 Project 新建 Session、owner 远程调整 Session 权限，以及独立于 Desktop 的前台升级入口。后续 RC 不会自动改变本文中的安装目标；使用其他版本时必须先更新并重新验证整份协议。
 
 ## 通过本链接调用安装代理
 
@@ -25,8 +25,8 @@
 请在这台全新 Windows 电脑上安装并完整验收 Feishu Codex Bridge。
 
 固定安装目标：
-- 仓库：https://github.com/ninmon/feishu-codex-bridge.git
-- tag：v0.3.2-windows-rc.4
+- 仓库：https://github.com/ninmon/feishu-codex-bridge-private.git
+- tag：v0.4.0-windows-rc.5
 
 已知条件：
 - 这是一台独立的新 Windows 电脑，不迁移、复用或停止其他机器上的 Bridge。
@@ -47,15 +47,17 @@
 1. 先做只读预检，确认：
    - Windows 10 或 11；
    - Git 可用；
+   - GitHub CLI 可用、已登录，且当前账号能只读访问 ninmon/feishu-codex-bridge-private；
    - Node.js >= 22.13.0 且 npm 可用；
    - PowerShell 5.1 或 PowerShell 7 可用；
    - ChatGPT/Codex Desktop 已安装，Codex 可执行文件支持 App Server listener；
    - 使用 [Environment]::MachineName 只读取得当前 Windows 计算机名，并在本次安装中保留其精确大小写和字符；
    - 可访问 GitHub、npm 和飞书开放平台。
 
-   如果缺少 Git 或 Node.js，先说明将安装哪个软件并取得用户批准，再使用 winget 的官方包。如果计算机名为空，先让用户在 Windows 设置中修复，不得自行生成应用名。
+   如果缺少 Git、GitHub CLI 或 Node.js，先说明将安装哪个软件并取得用户批准，再使用 winget 的官方包。如果计算机名为空，先让用户在 Windows 设置中修复，不得自行生成应用名。
 
-2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。然后克隆仓库并检出精确 tag v0.3.2-windows-rc.4。
+2. 让用户确认仓库的最终存放位置；如果用户没有特殊要求，建议使用 %LOCALAPPDATA%\FeishuCodexBridge\app。确认本机 GitHub CLI 已登录且当前账号有私有仓库访问权，然后克隆仓库并检出精确 tag v0.4.0-windows-rc.5。
+   - 使用 GitHub CLI/Git credential helper 的已登录凭据访问私有仓库；不得把 GitHub Token 放入 URL、命令参数、聊天或日志；
    - 先确认远程 tag 存在并解析到一个精确提交；tag 不存在时立即停止，不得退回分支或其他版本；
    - 目标目录已存在或包含文件时停下，不得覆盖；
    - 不得使用 git reset、git clean 或 git stash；
@@ -140,13 +142,21 @@
     - 不得手工编辑 bridge.config.json；
     - 不得输出本机配置、身份标识或本机任务路径。
 
-11. 启动 Bridge 并执行启动前 Doctor：
+11. 多用户 Project 目录是可选能力，不要为单用户安装增加不必要的配置：
+    - 如果用户在当前部署请求中没有明确要求“同机多用户”，不要额外询问，不运行设置脚本；Bridge 保持 Owner-only；
+    - 如果用户已明确要求同机多用户，在本机可见的独立 PowerShell 中让 Bridge Owner 亲自运行：
+      .\setup-project-root.ps1
+    - 脚本会交互询问绝对 Project 根目录和 Owner 的一级目录名；不得在聊天、命令参数、日志或文档中代输、捕获或回显该路径；
+    - 新成员以后由 Owner 在 Bot 私聊或已有绑定群发送一张飞书用户名片，再按提示回复一级目录名；也可使用 `/members add <一级目录名> @成员`；登记成功后 Bot 主动私聊成员并提示发送 `/add`；
+    - 发送名片不会自动邀请成员入群，不替用户推断成员、目录或自动邀请任何人加入群。
+
+12. 启动 Bridge 并执行启动前 Doctor：
     - .\start-bridge.ps1
     - .\doctor.ps1 -RequireRunning
 
     如果检查失败，先诊断具体检查项。不得通过删除配置、凭据或重建应用绕过问题。
 
-12. 在给出 Desktop 启动命令前，必须明确询问并等待用户回答：
+13. 在给出 Desktop 启动命令前，必须明确询问并等待用户回答：
 
     “这台 Windows 电脑上 Codex 访问服务是直连，还是需要本机代理？不需要代理请回复‘直连’；需要代理请提供一个无认证、带明确端口的 loopback URL，例如 http://127.0.0.1:7897。不要提供用户名、密码或远程代理地址。”
 
@@ -157,37 +167,39 @@
       .\launch-codex-desktop-with-relay.ps1 -Proxy <用户确认的本机代理 URL>
     - 不带 -Proxy 默认为直连；-NoProxy 只是兼容别名；
     - 代理只应用于 Desktop 与共享 Codex App Server；飞书 Bridge、Channel、watchdog 与飞书 CLI 校验保持直连；
-    - 若只发现 Windows packaged Desktop 且用户选择代理，启动器必须安全停止；不得为了继续而修改系统或用户全局代理。只有能找到可直接启动的 Win32 Desktop 可执行文件时才支持隔离的 -Proxy 模式；
+- Windows packaged Desktop 选择代理时，启动器必须通过 `Get-AppxPackage OpenAI.Codex` 和当前 `AppxManifest.xml` 验证包内真实 Desktop 可执行文件，再仅向该进程注入 loopback 代理；清单、包内路径或可执行文件无法验证时安全停止，不得修改系统或用户全局代理；
     - 启动器必须保存选择、必要时重启本安装拥有的共享 App Server、重新注册 Scheduled Task watchdog，并等待同一 activation 的新鲜 ready heartbeat；失败时必须移除 Bridge-owned pointer，不得继续打开 Desktop。
 
-13. 最终启动 Desktop 前：
+14. 最终启动 Desktop 前：
     - 在当前仓库目录为用户打开一个独立 PowerShell；
-    - 只给出第 12 步选定的那一条启动命令；
+    - 只给出第 13 步选定的那一条启动命令；
     - 要求用户完全退出 ChatGPT/Codex Desktop，确认应用进程结束；
     - 停止当前回合，等待用户从独立 PowerShell 运行命令并重新打开 Desktop。
 
     不得从正在使用共享 App Server 的 Codex 任务中强制退出、杀死或自行重启 Desktop。
 
-14. Desktop 重新打开、用户回到当前任务后，运行：
+15. Desktop 重新打开、用户回到当前任务后，运行：
     - .\status-bridge.ps1
     - .\doctor.ps1 -RequireRunning -RequireDesktopRelay
 
     只有全部 Doctor 检查通过，且 Bridge Channel、共享 App Server、选定的网络模式、watchdog 和 Desktop relay 都健康时，才能进入真实验收。
 
-15. 使用安装后的 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书绑定群。
+16. 使用安装后的 $feishu-session-bind 为当前 Codex 任务创建或复用专属飞书绑定群。
     - 初次绑定以该 skill 成功返回的群为准；
     - 不要要求用户先搜索 Bot、创建 Bot 私聊或发送 /add；
     - /add 仅是用户以后在已经存在的 Bot 私聊或已绑定群中的可选手工入口，不是本安装的前置条件；
     - 不得在聊天中输出 user/bot open ID、chat ID、Codex task ID 或任务路径。
 
-16. 在绑定群完成真实验收：
+17. 在绑定群完成真实验收：
     - 从飞书向 Codex 发送一条文本，确认进入同一任务并返回最终回答；
     - 从 Desktop 的同一任务发送一条文本，确认结果返回绑定群；
     - 从飞书发送一张小图和一个普通小文件，确认 Codex 可以读取；
     - 让 Codex 的最终回答引用一个本地文件，确认飞书收到原生附件；
     - 再运行 .\status-bridge.ps1 和严格 Doctor。
 
-17. 安全与完成标准：
+    如果第 11 步启用了多用户，还必须先把一名测试成员加入应用可用范围并完成必要的发布/审批，再由 Owner 用飞书用户名片登记该成员。实测 Bot 主动私聊与 `/add` 指引、Owner 与成员的 Project/Session 列表隔离、成员目录内新建 Project/任务、在非空 Project 中继续新建并绑定 Session、把成员加入绑定群后的共享、多成员 queue/`/steer` 规则、按发送者隔离的附件草稿，以及 Session owner 使用 `/permissions` 查看和调整自己 Session 权限；完全访问必须二次确认，忙碌 Session 必须拒绝切换。
+
+18. 安全与完成标准：
     - 除人工认证停点中 Lark CLI 原样生成的一次性 verification URL，以及应用模板脚本生成的临时本机 loopback URL 外，不得在聊天、日志、命令参数、文档或 Git 中输出 App Secret、OAuth token、App ID、device code、user/bot open ID、chat ID、Codex task ID、本机配置或任务路径；
     - 不得修改 Codex 全局状态来伪造 Project 归属；
     - 不得删除或覆盖用户文件；
@@ -202,6 +214,7 @@
 - 当前 Codex 对话在任何命令前切换为“完全访问”；“替我审批”不能替代该权限，避免 Windows 子进程或 relay 连接被沙盒拦截。
 - `configure-feishu-app.ps1` 把 11 项权限和消息事件合并到飞书官方的一次确认页；默认已有的 Bot、长连接与消息事件不再重复逐页设置。
 - `setup-channel-secret.ps1` 现在可以在生成 Bridge 配置前运行，因此 Secret 输入紧跟应用创建。
+- `setup-project-root.ps1` 只在用户明确要求同机多用户时运行；单用户新安装不会被额外询问。
 - Lark CLI 认证始终向用户提供当次 verification URL；应用模板脚本提供不含 App ID 的临时本机备用 URL。
 - 直连或代理是用户必须明确回答的安装选项；不带 `-Proxy` 默认直连。
 - 初次绑定直接使用 `$feishu-session-bind`；Bot 私聊中的 `/add` 不再是验收前置条件。

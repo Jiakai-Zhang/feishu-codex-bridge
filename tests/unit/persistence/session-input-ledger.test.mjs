@@ -10,15 +10,29 @@ test("persists accepted input independently from final-answer delivery", async (
   const file = path.join(directory, "ledger.json");
   try {
     const ledger = await SessionInputLedger.open(file);
-    await ledger.put({ messageId: "om_prompt", chatId: "oc_group", threadId: "omt_topic", kind: "started" });
+    await ledger.put({
+      messageId: "om_prompt",
+      chatId: "oc_group",
+      threadId: "omt_topic",
+      senderOpenId: "ou_member",
+      sessionThreadId: "codex-thread",
+      turnId: "turn-a",
+      turnInitiator: true,
+      kind: "started",
+    });
     assert.equal(ledger.has("om_prompt"), true);
     assert.deepEqual((await SessionInputLedger.open(file)).get("om_prompt"), {
       messageId: "om_prompt",
       chatId: "oc_group",
       threadId: "omt_topic",
+      senderOpenId: "ou_member",
+      sessionThreadId: "codex-thread",
+      turnId: "turn-a",
+      turnInitiator: true,
       kind: "started",
       createdAt: ledger.get("om_prompt").createdAt,
     });
+    assert.equal(ledger.findTurnInitiator("codex-thread", "turn-a").senderOpenId, "ou_member");
     await ledger.remove("om_prompt");
     assert.equal((await SessionInputLedger.open(file)).has("om_prompt"), false);
   } finally {

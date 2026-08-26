@@ -1,4 +1,17 @@
-const COMMANDS = new Set(["status", "stop", "model", "plan", "goal", "queue", "settings", "attachments"]);
+import { sessionSandboxModeLabel } from "./session-permission-command.mjs";
+
+const COMMANDS = new Set([
+  "status",
+  "stop",
+  "model",
+  "plan",
+  "goal",
+  "queue",
+  "steer",
+  "settings",
+  "attachments",
+  "permissions",
+]);
 
 export class SessionCommandError extends Error {
   constructor(code, message) {
@@ -37,6 +50,12 @@ export function parseQueueAction(value) {
     usage("用法：`/queue`、`/queue <Prompt>`、`/queue remove <序号>` 或 `/queue clear`");
   }
   return Object.freeze({ action: "enqueue", text });
+}
+
+export function parseSteerAction(value) {
+  const text = String(value || "").trim();
+  if (!text) usage("用法：`/steer <调整方向>`");
+  return Object.freeze({ text });
 }
 
 export function parseAttachmentsAction(value) {
@@ -161,13 +180,13 @@ export function formatSessionSettings(settings, { changed = false } = {}) {
     "",
     `- 普通消息：${inputModeLabel(value.inputMode)}`,
     `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
-    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@你）"}`,
+    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
     "",
     "命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off`、`/settings reset`",
     "",
-    "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session。",
+    "> `/settings reset` 会复制当前“新绑定默认设置”到本 Session，但不会修改 `/permissions` 权限。",
     "",
-    "> 最终回答提醒只在 Turn 的最终消息中 @你；公开进度始终不会 @。",
+    "> 最终回答提醒只在 Turn 的最终消息中 @本轮发起者；公开进度始终不会 @。",
     "",
     "> “公开进度（非隐藏思维链）”只转发 Codex 标记为 commentary 的阶段说明；不会转发隐藏思维链、raw reasoning 或工具原始输出。",
   ].join("\n");
@@ -180,13 +199,13 @@ export function formatGlobalSessionSettings(settings, { changed = false } = {}) 
     "",
     `- 普通消息：${inputModeLabel(value.inputMode)}`,
     `- 公开进度：${value.publicProgress ? "开启" : "关闭"}`,
-    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@你）"}`,
+    `- 最终回答提醒：${value.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
     "",
     "私聊命令：`/settings input steer|queue`、`/settings progress on|off`、`/settings mention on|off`、`/settings reset`",
     "",
     "> 只在此后成功创建绑定时复制给新 Session；已有绑定群不会随全局默认变化。群内 `/settings` 仍只修改该 Session。",
     "",
-    "> 最终回答提醒只在 Turn 的最终消息中 @你；公开进度始终不会 @。",
+    "> 最终回答提醒只在 Turn 的最终消息中 @本轮发起者；公开进度始终不会 @。",
     "",
     "> “公开进度（非隐藏思维链）”不会转发隐藏思维链、raw reasoning 或工具原始输出。",
   ].join("\n");
@@ -256,8 +275,11 @@ export function formatSessionStatus(status, { queueEntries = [], attachmentDraft
     `- 模式：${statusModeLabel(status)}`,
     `- 普通消息：${inputModeLabel(relaySettings?.inputMode)}`,
     `- 公开进度：${relaySettings?.publicProgress ? "开启" : "关闭"}`,
-    `- 最终回答提醒：${relaySettings?.finalMention === false ? "关闭" : "开启（@你）"}`,
+    `- 最终回答提醒：${relaySettings?.finalMention === false ? "关闭" : "开启（@本轮发起者）"}`,
   );
+  if (status?.sandboxMode) {
+    lines.push(`- Session 权限：${sessionSandboxModeLabel(status.sandboxMode)}（\`${status.sandboxMode}\`）`);
+  }
   if (usage) {
     lines.push(`- 上下文累计：${Number(usage.totalTokens || 0).toLocaleString("zh-CN")} tokens`);
   }
@@ -282,8 +304,9 @@ async function executeAttachments(command, context) {
   const { attachmentDraftStore, threadId } = context;
   if (!attachmentDraftStore) throw new TypeError("Attachment command execution requires a draft store");
   const request = parseAttachmentsAction(command.args);
-  if (request.action === "status") return formatAttachmentDraft(attachmentDraftStore.list(threadId));
-  const removed = await attachmentDraftStore.clear(threadId);
+  const senderOptions = context.senderOpenId ? { senderOpenId: context.senderOpenId } : undefined;
+  if (request.action === "status") return formatAttachmentDraft(attachmentDraftStore.list(threadId, senderOptions));
+  const removed = await attachmentDraftStore.clear(threadId, senderOptions);
   const count = removed.reduce((sum, record) => sum + (record.attachments?.length || 0), 0);
   return count > 0
     ? `### 暂存附件已清空\n\n已放弃 ${count} 个附件；当前 Turn 和下一轮队列不受影响。`
@@ -487,7 +510,10 @@ export async function executeSessionCommand(command, context) {
     if (command.args) usage("用法：`/status`");
     return formatSessionStatus(await controller.getStatus(threadId), {
       queueEntries: context.promptQueue?.list(threadId) || [],
-      attachmentDraftEntries: context.attachmentDraftStore?.list(threadId) || [],
+      attachmentDraftEntries: context.attachmentDraftStore?.list(
+        threadId,
+        context.senderOpenId ? { senderOpenId: context.senderOpenId } : undefined,
+      ) || [],
       relaySettings: context.settingsStore?.get(threadId),
     });
   }
@@ -507,8 +533,20 @@ export async function executeSessionCommand(command, context) {
   if (command.name === "model") return executeModel(command, context);
   if (command.name === "plan") return executePlan(command, context);
   if (command.name === "queue") return executeQueue(command, context);
+  if (command.name === "steer") {
+    const request = parseSteerAction(command.args);
+    if (typeof context.steerPrompt !== "function") throw new TypeError("Steer command requires a prompt handler");
+    const result = await context.steerPrompt(request.text);
+    return result.kind === "steered"
+      ? "### 已调整方向\n\n这条消息已加入当前回答。"
+      : "### 已开始新 Turn\n\n当前没有活动回答，这条消息已作为新的 Prompt 开始处理。";
+  }
   if (command.name === "attachments") return executeAttachments(command, context);
   if (command.name === "settings") return executeSettings(command, context);
+  if (command.name === "permissions") {
+    if (!context.permissionFlow) throw new TypeError("Permissions command execution requires a permission flow");
+    return context.permissionFlow.execute(command, context);
+  }
   return executeGoal(command, context);
 }
 

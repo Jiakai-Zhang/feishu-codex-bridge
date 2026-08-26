@@ -282,6 +282,62 @@ function controller(server, options = {}) {
   });
 }
 
+test("resolves a Session sandbox on resume and on every Bridge-started Turn", async () => {
+  const server = fakeControllerServer();
+  let sandboxMode = "read-only";
+  const client = controller(server, {
+    sandboxModeForThread: () => sandboxMode,
+  });
+  await client.start();
+
+  const resume = server.requests.find(({ method }) => method === "thread/resume");
+  assert.equal(resume.params.sandbox, "read-only");
+  assert.equal((await client.getStatus(threadId, { refresh: false })).sandboxMode, "read-only");
+
+  await client.submitPrompt({ threadId, text: "read-only turn", clientUserMessageId: "om_readonly" });
+  const readOnlyStart = server.requests.find(({ method }) => method === "turn/start");
+  assert.deepEqual(readOnlyStart.params.sandboxPolicy, { type: "readOnly", networkAccess: false });
+  server.completeActive("done");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  sandboxMode = "workspace-write";
+  await client.submitPrompt({ threadId, text: "workspace turn", clientUserMessageId: "om_workspace" });
+  const workspaceStart = server.requests.filter(({ method }) => method === "turn/start").at(-1);
+  assert.deepEqual(workspaceStart.params.sandboxPolicy, {
+    type: "workspaceWrite",
+    writableRoots: [repoCwd],
+    networkAccess: false,
+  });
+
+  server.completeActive("done");
+  await new Promise((resolve) => setImmediate(resolve));
+  sandboxMode = "danger-full-access";
+  await client.submitPrompt({ threadId, text: "full turn", clientUserMessageId: "om_full" });
+  const fullStart = server.requests.filter(({ method }) => method === "turn/start").at(-1);
+  assert.deepEqual(fullStart.params.sandboxPolicy, { type: "dangerFullAccess" });
+  assert.equal((await client.getStatus(threadId, { refresh: false })).sandboxMode, "danger-full-access");
+  await client.stop();
+});
+
+test("refreshes the persisted Session sandbox before activating a native Goal", async () => {
+  const server = fakeControllerServer();
+  let sandboxMode = "workspace-write";
+  const client = controller(server, { sandboxModeForThread: () => sandboxMode });
+  await client.start();
+  const baseline = server.requests.length;
+
+  sandboxMode = "danger-full-access";
+  await client.startGoal(threadId, "run under the updated boundary");
+
+  const requests = server.requests.slice(baseline);
+  const resumeIndex = requests.findIndex(({ method }) => method === "thread/resume");
+  const goalIndex = requests.findIndex(({ method }) => method === "thread/goal/set");
+  assert.ok(resumeIndex >= 0);
+  assert.ok(goalIndex > resumeIndex);
+  assert.equal(requests[resumeIndex].params.sandbox, "danger-full-access");
+  await client.stop();
+});
+
 test("adds a newly created temporary Chat without reconnecting existing Sessions", async () => {
   const server = fakeControllerServer();
   const client = controller(server);

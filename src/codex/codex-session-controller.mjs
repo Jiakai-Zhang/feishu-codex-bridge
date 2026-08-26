@@ -5,6 +5,24 @@ import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
 const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
 const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
   "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
+const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+
+function turnSandboxPolicy(mode, cwd) {
+  switch (mode) {
+    case "read-only":
+      return Object.freeze({ type: "readOnly", networkAccess: false });
+    case "workspace-write":
+      return Object.freeze({
+        type: "workspaceWrite",
+        writableRoots: Object.freeze([cwd]),
+        networkAccess: false,
+      });
+    case "danger-full-access":
+      return Object.freeze({ type: "dangerFullAccess" });
+    default:
+      throw new TypeError("Unsupported Codex Session sandbox mode");
+  }
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -140,6 +158,7 @@ export class CodexSessionController {
     appServerUrl,
     targets,
     sandboxMode,
+    sandboxModeForThread,
     onTurnCompleted,
     onTurnProgress,
     WebSocketImpl = globalThis.WebSocket,
@@ -153,6 +172,7 @@ export class CodexSessionController {
     this.appServerUrl = appServerUrl;
     this.targets = new Map((targets || []).map((target) => [target.threadId, Object.freeze({ ...target })]));
     this.sandboxMode = sandboxMode;
+    this.sandboxModeForThread = sandboxModeForThread;
     this.onTurnCompleted = onTurnCompleted;
     this.onTurnProgress = onTurnProgress;
     this.WebSocketImpl = WebSocketImpl;
@@ -244,6 +264,39 @@ export class CodexSessionController {
     const state = this.states.get(threadId);
     if (!state) throw new TypeError("The Codex task is not bound to this controller");
     return state;
+  }
+
+  #resolvedSandboxMode(threadId) {
+    const resolved = typeof this.sandboxModeForThread === "function"
+      ? this.sandboxModeForThread(threadId)
+      : this.sandboxMode;
+    if (!SANDBOX_MODES.has(resolved)) {
+      throw new TypeError("Session sandbox resolver returned an unsupported mode");
+    }
+    return resolved;
+  }
+
+  #sandboxResumeParams(state) {
+    return {
+      threadId: state.target.threadId,
+      cwd: state.target.cwd,
+      approvalPolicy: "never",
+      sandbox: this.#resolvedSandboxMode(state.target.threadId),
+    };
+  }
+
+  async #applyResolvedSandboxMode(state) {
+    let result;
+    try {
+      result = await this.#request("thread/resume", this.#sandboxResumeParams(state));
+    } catch (error) {
+      if (isActiveWriterResumeError(error)) throw sessionWriterConflict(error);
+      throw error;
+    }
+    if (result?.thread?.id !== state.target.threadId) {
+      throw new Error("Codex session controller resumed a different task than its binding");
+    }
+    this.#applyResume(state, result);
   }
 
   #enqueue(threadId, work) {
@@ -377,12 +430,7 @@ export class CodexSessionController {
   }
 
   async #hydrateStateOnce(connection, state, { catchUpAfterMs } = {}) {
-    const result = await connection.request("thread/resume", {
-      threadId: state.target.threadId,
-      cwd: state.target.cwd,
-      approvalPolicy: "never",
-      sandbox: this.sandboxMode,
-    });
+    const result = await connection.request("thread/resume", this.#sandboxResumeParams(state));
     if (result?.thread?.id !== state.target.threadId) {
       throw new Error("Codex session controller resumed a different task than its binding");
     }
@@ -679,10 +727,12 @@ export class CodexSessionController {
   }
 
   async #startTurn(state, prompt, client) {
+    const sandboxMode = this.#resolvedSandboxMode(state.target.threadId);
     const result = await this.#requestPrompt("turn/start", {
       threadId: state.target.threadId,
       cwd: state.target.cwd,
       approvalPolicy: "never",
+      sandboxPolicy: turnSandboxPolicy(sandboxMode, state.target.cwd),
       ...client,
     }, prompt);
     const turnId = result?.turn?.id;
@@ -729,6 +779,7 @@ export class CodexSessionController {
       goal: clone(state.goal),
       lastTurn: clone(state.lastTurn),
       collaborationModeKnown: state.collaborationModeKnown,
+      sandboxMode: this.#resolvedSandboxMode(threadId),
     });
   }
 
@@ -751,6 +802,7 @@ export class CodexSessionController {
       }
       const state = this.#state(threadId);
       await this.#setPlanUnlocked(threadId, false);
+      await this.#applyResolvedSandboxMode(state);
       const params = { threadId, objective: text, status: "active" };
       if (tokenBudget !== undefined) params.tokenBudget = tokenBudget;
       const result = await this.#request("thread/goal/set", params);
@@ -784,6 +836,7 @@ export class CodexSessionController {
         throw controllerError("session_busy", "The current turn is still stopping; resume the Goal after it becomes idle");
       }
       await this.#setPlanUnlocked(threadId, false);
+      await this.#applyResolvedSandboxMode(state);
       const result = await this.#request("thread/goal/set", { threadId, status: "active" });
       state.goal = clone(result?.goal || { ...goal, status: "active" });
       return clone(state.goal);
@@ -805,6 +858,7 @@ export class CodexSessionController {
       if (turnId) await this.#request("turn/interrupt", { threadId, turnId });
       if (turnId) await this.#waitForIdle(threadId);
       await this.#setPlanUnlocked(threadId, false);
+      await this.#applyResolvedSandboxMode(state);
       const result = await this.#request("thread/goal/set", {
         threadId,
         objective: text,

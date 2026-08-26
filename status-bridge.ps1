@@ -1,3 +1,14 @@
+function ConvertTo-UtcDateTime {
+    param([Parameter(Mandatory)][object]$Value)
+    if ($Value -is [DateTime]) {
+        return ([DateTime]$Value).ToUniversalTime()
+    }
+    return [DateTimeOffset]::Parse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+}
+
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     Write-Output 'Bridge status: not configured (bridge.config.json is missing)'
@@ -29,7 +40,7 @@ if ($mode -eq 'session-relay') {
                 'local-proxy'
             }
             $watchdogStatus = Get-Content -Raw -LiteralPath $watchdogStatusPath | ConvertFrom-Json
-            $heartbeatAt = [DateTime]::Parse([string]$watchdogStatus.heartbeatAt).ToUniversalTime()
+            $heartbeatAt = ConvertTo-UtcDateTime -Value $watchdogStatus.heartbeatAt
             $heartbeatAgeSeconds = ([DateTime]::UtcNow - $heartbeatAt).TotalSeconds
             if ([bool]$relayState.enabled -and
                 [string]$watchdogStatus.activationId -eq [string]$relayState.activationId -and
