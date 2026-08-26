@@ -23,11 +23,120 @@ $appServerEnvironmentPath = Join-Path $runtimeDir 'codex-app-server-environment.
 $appServerStdoutPath = Join-Path $runtimeDir 'codex-app-server.stdout.log'
 $appServerStderrPath = Join-Path $runtimeDir 'codex-app-server.stderr.log'
 $relayStatePath = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap\desktop-relay-state.json'
-$codexExecutable = [IO.Path]::GetFullPath([string]$config.codexExecutable)
+$configuredCodexExecutable = [IO.Path]::GetFullPath([string]$config.codexExecutable)
 $appServerUrlText = [string]$config.sessionRelay.appServerUrl
+
+function Test-PathWithinDirectory {
+    param([string]$Path, [string]$Directory)
+    try {
+        $fullPath = [IO.Path]::GetFullPath($Path)
+        $fullDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        return $fullPath.StartsWith($fullDirectory, [StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
+function Test-CodexAppServerCapability {
+    param([string]$Executable)
+    try {
+        $help = (& $Executable app-server --help 2>&1 | Out-String)
+        return $LASTEXITCODE -eq 0 -and $help -match '(?m)^\s*--listen\s+<URL>'
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-ManagedCodexExecutable {
+    param([string]$ConfiguredExecutable)
+
+    $managedRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'
+    if (-not (Test-PathWithinDirectory -Path $ConfiguredExecutable -Directory $managedRoot) -or
+        -not (Test-Path -LiteralPath $managedRoot -PathType Container)) {
+        return $ConfiguredExecutable
+    }
+
+    $candidates = Get-ChildItem -LiteralPath $managedRoot -Filter codex.exe -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending
+    foreach ($candidate in $candidates) {
+        $candidatePath = [IO.Path]::GetFullPath($candidate.FullName)
+        $codeModeHostPath = Join-Path $candidate.DirectoryName 'codex-code-mode-host.exe'
+        if (-not (Test-Path -LiteralPath $codeModeHostPath -PathType Leaf)) { continue }
+        if ($candidatePath -ieq $ConfiguredExecutable) { return $candidatePath }
+        if (Test-CodexAppServerCapability -Executable $candidatePath) { return $candidatePath }
+    }
+    return $ConfiguredExecutable
+}
+
+function Update-ConfiguredCodexExecutable {
+    param([string]$PreviousExecutable, [string]$Executable)
+
+    $rawConfig = [IO.File]::ReadAllText($configPath)
+    $currentConfig = $rawConfig | ConvertFrom-Json
+    $currentExecutable = [IO.Path]::GetFullPath([string]$currentConfig.codexExecutable)
+    if ($currentExecutable -ieq $Executable) { return }
+    if ($currentExecutable -ine $PreviousExecutable) {
+        throw 'bridge.config.json changed during Codex executable selection; refusing to overwrite it.'
+    }
+
+    $propertyPattern = [regex]::new('(?m)("codexExecutable"\s*:\s*)"(?:\\.|[^"\\])*"')
+    $propertyMatch = $propertyPattern.Match($rawConfig)
+    if (-not $propertyMatch.Success) {
+        throw 'bridge.config.json has no replaceable codexExecutable property.'
+    }
+    $jsonExecutable = ConvertTo-Json -InputObject $Executable -Compress
+    $updatedConfig = $rawConfig.Substring(0, $propertyMatch.Index) +
+        $propertyMatch.Groups[1].Value + $jsonExecutable +
+        $rawConfig.Substring($propertyMatch.Index + $propertyMatch.Length)
+    $temporaryPath = "$configPath.$PID.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporaryPath, $updatedConfig, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporaryPath -Destination $configPath -Force
+    } finally {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Request-BridgeReloadForCodexSwitch {
+    $bridgePidPath = Join-Path $runtimeDir 'bridge.pid'
+    $supervisorPidPath = Join-Path $runtimeDir 'bridge-supervisor.pid'
+    $supervisorStopPath = Join-Path $runtimeDir 'supervisor-stop.request'
+    if ((Test-Path -LiteralPath $supervisorStopPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $bridgePidPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf)) {
+        return
+    }
+
+    $bridgeProcessId = 0
+    $supervisorProcessId = 0
+    if (-not [int]::TryParse((Get-Content -Raw -LiteralPath $bridgePidPath).Trim(), [ref]$bridgeProcessId) -or
+        -not [int]::TryParse((Get-Content -Raw -LiteralPath $supervisorPidPath).Trim(), [ref]$supervisorProcessId)) {
+        return
+    }
+    $bridgeProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$bridgeProcessId" -ErrorAction SilentlyContinue
+    $supervisorProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$supervisorProcessId" -ErrorAction SilentlyContinue
+    $expectedBridge = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'session-relay.mjs'))
+    $expectedSupervisor = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bridge-supervisor.ps1'))
+    if (-not $bridgeProcess -or $bridgeProcess.Name -ne 'node.exe' -or
+        [string]$bridgeProcess.CommandLine -notlike "*$expectedBridge*" -or
+        -not $supervisorProcess -or $supervisorProcess.Name -ne 'powershell.exe' -or
+        [string]$supervisorProcess.CommandLine -notlike "*$expectedSupervisor*") {
+        return
+    }
+
+    [IO.File]::WriteAllText((Join-Path $runtimeDir 'restart.request'), "codex-executable-switch`n")
+    [IO.File]::WriteAllText((Join-Path $runtimeDir 'stop.request'), "codex-executable-switch`n")
+}
+
+$codexExecutable = Resolve-ManagedCodexExecutable -ConfiguredExecutable $configuredCodexExecutable
+$codexExecutableChanged = $codexExecutable -ine $configuredCodexExecutable
 
 if (-not (Test-Path -LiteralPath $codexExecutable -PathType Leaf)) {
     throw 'The configured Codex executable does not exist.'
+}
+if ((Test-PathWithinDirectory -Path $codexExecutable -Directory (Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin')) -and
+    -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $codexExecutable) 'codex-code-mode-host.exe') -PathType Leaf)) {
+    throw 'No complete managed Codex installation is available yet.'
 }
 if ([string]::IsNullOrWhiteSpace($appServerUrlText)) {
     throw 'sessionRelay.appServerUrl is required.'
@@ -109,6 +218,27 @@ function Get-VerifiedAppServerProcess {
     return Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
 }
 
+function Stop-VerifiedAppServerProcessTree {
+    param([Diagnostics.Process]$Process, [string]$Reason)
+
+    $Process.Refresh()
+    if ($Process.HasExited) { return }
+    $taskkillPath = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    $taskkill = Start-Process -FilePath $taskkillPath `
+        -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    $taskkillExitCode = $taskkill.ExitCode
+    $Process.Refresh()
+    if ($taskkillExitCode -ne 0 -and -not $Process.HasExited) {
+        throw "Failed to stop the verified shared App Server process tree for $Reason."
+    }
+    if (-not $Process.WaitForExit(15000)) {
+        throw "The verified shared App Server process tree did not stop for $Reason."
+    }
+}
+
 function Find-VerifiedAppServerProcess {
     param([string]$Executable, [int]$Port)
     $leafName = [IO.Path]::GetFileName($Executable).Replace("'", "''")
@@ -162,6 +292,9 @@ function Write-AppServerEnvironmentState {
 
 function Start-AppServerWithNetworkEnvironment {
     param([string]$ListenUrl, [AllowNull()][string]$ProxyUrl)
+    # Desktop supplies codex_app tool selections as dotted per-thread overrides.
+    # Seed a disabled transport so those overrides merge into a valid MCP table.
+    $desktopCodexAppTransportOverride = "mcp_servers.codex_app={command='',enabled=false}"
     $savedEnvironment = @{}
     try {
         foreach ($name in $proxyEnvironmentNames) {
@@ -176,7 +309,10 @@ function Start-AppServerWithNetworkEnvironment {
             Set-Item -LiteralPath 'Env:NO_PROXY' -Value '127.0.0.1,localhost,::1'
         }
         return Start-Process -FilePath $codexExecutable `
-            -ArgumentList @('app-server', '--listen', $ListenUrl) `
+            -ArgumentList @(
+                '-c', $desktopCodexAppTransportOverride,
+                'app-server', '--listen', $ListenUrl
+            ) `
             -WorkingDirectory $projectRoot `
             -WindowStyle Hidden `
             -RedirectStandardOutput $appServerStdoutPath `
@@ -211,6 +347,23 @@ try {
         if ([int]::TryParse($pidText, [ref]$savedAppServerPid)) {
             $appServerProcess = Get-VerifiedAppServerProcess -ProcessId $savedAppServerPid `
                 -Executable $codexExecutable -Port $appServerUri.Port
+            if (-not $appServerProcess -and $codexExecutableChanged) {
+                $previousAppServerProcess = Get-VerifiedAppServerProcess -ProcessId $savedAppServerPid `
+                    -Executable $configuredCodexExecutable -Port $appServerUri.Port
+                if ($previousAppServerProcess) {
+                    Stop-VerifiedAppServerProcessTree -Process $previousAppServerProcess `
+                        -Reason 'a managed Codex upgrade'
+                    $portDeadline = [DateTime]::UtcNow.AddSeconds(5)
+                    while ([DateTime]::UtcNow -lt $portDeadline -and
+                        (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port)) {
+                        Start-Sleep -Milliseconds 200
+                    }
+                    if (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port) {
+                        throw 'The previous shared App Server listener remained active after a managed Codex upgrade.'
+                    }
+                    Remove-Item -LiteralPath $appServerEnvironmentPath -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
         if (-not $appServerProcess) {
             Remove-Item -LiteralPath $appServerPidPath -Force
@@ -223,10 +376,7 @@ try {
         if ($savedAppServerPid -ne $appServerProcess.Id) {
             throw 'The running shared App Server was not started by this installation; refusing to restart it for a proxy change.'
         }
-        Stop-Process -Id $appServerProcess.Id -ErrorAction Stop
-        if (-not $appServerProcess.WaitForExit(15000)) {
-            throw 'The previous shared App Server did not stop for proxy reconfiguration.'
-        }
+        Stop-VerifiedAppServerProcessTree -Process $appServerProcess -Reason 'proxy reconfiguration'
         $portDeadline = [DateTime]::UtcNow.AddSeconds(5)
         while ([DateTime]::UtcNow -lt $portDeadline -and
             (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port)) {
@@ -277,6 +427,11 @@ try {
     [IO.File]::WriteAllText($appServerPidPath, [string]$appServerProcess.Id)
     if ($started) {
         Write-AppServerEnvironmentState -ProcessId $appServerProcess.Id -ProxyUrl $desktopProxyUrl
+    }
+    if ($codexExecutableChanged) {
+        Update-ConfiguredCodexExecutable -PreviousExecutable $configuredCodexExecutable `
+            -Executable $codexExecutable
+        Request-BridgeReloadForCodexSwitch
     }
     if ($PassThru) {
         [pscustomobject]@{
