@@ -88,7 +88,7 @@ Lark CLI 输出 verification URL 后，无论浏览器是否自动打开，都�
 若飞书要求可用范围、版本发布或管理员审批，可用范围只加入当前安装用户，由用户本人提交，并等待状态明确生效。然后完成 OAuth 与安全校验：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
 .\verify-feishu-app.ps1
 ```
 

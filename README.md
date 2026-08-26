@@ -177,6 +177,9 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 | `im:resource` | 把 Codex 输出中的图片、视频和其他文件上传回飞书 |
 | `docx:document:create` | 创建长回答云文档（当前 `main`） |
 | `docx:document:write_only` | 写入长回答 Markdown（当前 `main`） |
+| `docx:document:readonly` | 定位每群持续摘要文档中的受控摘要区块 |
+| `im:chat.tabs:read` | 查重并恢复每群摘要文档标签页 |
+| `im:chat.tabs:write_only` | 添加或移除每群摘要文档标签页 |
 
 事件订阅必须使用长连接，并包含 `im.message.receive_v1`。
 
@@ -184,8 +187,11 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 - `im:feed_group_v1:read`
 - `im:feed_group_v1:write`
+- `im:chat.tabs:read`
+- `im:chat.tabs:write_only`
 - `docx:document:create`（当前 `main`）
 - `docx:document:write_only`（当前 `main`）
+- `docx:document:readonly`（当前 `main`）
 
 `auth status --json --verify` 的完整结果含身份信息，不要粘贴到聊天、Issue 或日志。App Secret 只允许在本机可见的 `setup-channel-secret.sh`/`.ps1` 交互提示中输入，并由 macOS Keychain 或 Windows DPAPI 保存。
 
@@ -233,6 +239,9 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 | `/queue <Prompt>` | 把 Prompt 作为独立新 Turn 持久排队 |
 | `/queue` / `remove` / `clear` | 查看、删除或清空待执行 Prompt |
 | `/attachments` / `clear` | 查看或放弃当前 Session 暂存的待提交附件 |
+| `/doc` | 查看当前群的独立持续摘要文档和待同步状态 |
+| `/doc create` / `bind <URL>` | 新建独立摘要文档，或关联已有飞书 Docx/Wiki 文档 |
+| `/doc summarize` / `unbind` | 立即处理新增回合，或解除关联但保留文档 |
 | `/settings` | 查看当前 Session 的输入、公开进度和最终提醒设置 |
 | `/settings input steer\|queue` | 设置普通消息是调整当前 Turn，还是排队新 Turn |
 | `/settings progress on\|off` | 开关公开 commentary 进度 |
@@ -270,6 +279,7 @@ Session owner 可在自己的绑定群运行 `/permissions`，为该 Session 单
 - 公开进度始终不 `@`；最终回答可按 Session 设置 `@` 初始 Turn 发起者，Desktop-only Turn 回退到 Session owner，私聊临时 Chat 不额外 `@`。
 - 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送，且不暴露本机绝对路径。
 - 当前 `main` 中，最终文本超过 `maxReplyChars` 时会写入当前用户的飞书云文档；创建失败则回退到普通文本投递。
+- 每个固定绑定群可关联一份独立持续摘要文档，并自动固定为群顶部的“持续摘要”标签页。默认等待 60 秒合并相邻回合，由后台 ephemeral Luna（`gpt-5.6-luna`，low effort）处理；每次模型输入只有“上次摘要 + 尚未处理的新回合”，不重读完整聊天历史或整份文档，也不改变群聊主任务的模型设置。
 - Bridge 启动时不会补发历史答案；若启动时绑定 Session 正在运行，会接管活动 Turn，并补齐断线期间刚完成的结果。
 - 最终回答和附件先写入持久发件箱，使用确定性投递 ID 重试；发送失败不会重复运行 Codex。
 

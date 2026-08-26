@@ -15,7 +15,10 @@ export const FEISHU_BRIDGE_TENANT_SCOPES = Object.freeze([
 export const FEISHU_BRIDGE_USER_SCOPES = Object.freeze([
   "im:feed_group_v1:read",
   "im:feed_group_v1:write",
+  "im:chat.tabs:read",
+  "im:chat.tabs:write_only",
   "docx:document:create",
+  "docx:document:readonly",
   "docx:document:write_only",
 ]);
 

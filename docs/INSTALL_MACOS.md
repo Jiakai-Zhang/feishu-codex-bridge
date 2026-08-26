@@ -79,11 +79,11 @@ Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `
 再完成当前用户 OAuth：
 
 ```bash
-./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
 ./verify-feishu-app.sh
 ```
 
-浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。所有 macOS 飞书 CLI 入口都会从子进程环境中移除 Desktop 的 HTTP/HTTPS/ALL proxy 变量，确保身份和事件校验继续走飞书直连，不会因为当前 Codex 任务继承了 Desktop 代理而产生假阴性。只有 `ok=true`，且应用、Bot、用户身份、四项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
+浏览器授权由用户本人确认。`verify-feishu-app.sh` 只输出安全状态摘要，不输出 App ID、open ID 或原始 CLI 数据。所有 macOS 飞书 CLI 入口都会从子进程环境中移除 Desktop 的 HTTP/HTTPS/ALL proxy 变量，确保身份和事件校验继续走飞书直连，不会因为当前 Codex 任务继承了 Desktop 代理而产生假阴性。只有 `ok=true`，且应用、Bot、用户身份、七项用户 scope、消息事件发布状态和事件所需权限全部通过，才能继续。若校验失败，只修复摘要指出的项目；不要把 `auth status --json --verify` 或 event dry-run 的完整 JSON 粘贴到聊天、Issue 或日志。
 
 OAuth 命令同样会输出 verification URL。自动打开失败时，使用 CLI 当次输出的原样 URL，不输出 device code 或原始 JSON，不重新发起授权使原 URL 失效。
 

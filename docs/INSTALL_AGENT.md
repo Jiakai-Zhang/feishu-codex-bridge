@@ -89,7 +89,7 @@ Lark CLI 创建的新应用通常已默认启用 Bot、长连接和 `im.message.
 然后完成当前用户 OAuth 与安全验证：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,docx:document:create,docx:document:write_only"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
 .\verify-feishu-app.ps1
 ```
 

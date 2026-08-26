@@ -30,7 +30,7 @@ test("Feishu app template carries the exact Bridge scopes and message event", ()
     },
   });
   assert.equal(new Set(addons.scopes.tenant).size, 7);
-  assert.equal(new Set(addons.scopes.user).size, 4);
+  assert.equal(new Set(addons.scopes.user).size, 7);
   assert.deepEqual(addons.events.items.tenant, ["im.message.receive_v1"]);
 });
 

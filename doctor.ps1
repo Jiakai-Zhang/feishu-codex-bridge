@@ -328,11 +328,17 @@ if ($config) {
         Add-Check -Name 'Feishu Feed label OAuth scopes' -Passed $feedReady `
             -Detail $(if ($feedReady) { 'read and write scopes granted' } else { "missing: $($missingFeedScopes -join ', ')" })
 
-        $requiredDocumentScopes = @('docx:document:create', 'docx:document:write_only')
+        $requiredDocumentScopes = @('docx:document:create', 'docx:document:readonly', 'docx:document:write_only')
         $missingDocumentScopes = @($requiredDocumentScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
         $documentsReady = $missingDocumentScopes.Count -eq 0
         Add-Check -Name 'Feishu long-answer document OAuth scopes' -Passed $documentsReady `
             -Detail $(if ($documentsReady) { 'create and write scopes granted' } else { "missing: $($missingDocumentScopes -join ', ')" })
+
+        $requiredChatTabScopes = @('im:chat.tabs:read', 'im:chat.tabs:write_only')
+        $missingChatTabScopes = @($requiredChatTabScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
+        $chatTabsReady = $missingChatTabScopes.Count -eq 0
+        Add-Check -Name 'Feishu chat tab OAuth scopes' -Passed $chatTabsReady `
+            -Detail $(if ($chatTabsReady) { 'read and write scopes granted' } else { "missing: $($missingChatTabScopes -join ', ')" })
 
         $eventDryRun = Invoke-LarkJson -NodePath $nodePath -EntryPath $larkCliEntry `
             -Arguments @('event', 'consume', 'im.message.receive_v1', '--as', 'bot', '--dry-run')

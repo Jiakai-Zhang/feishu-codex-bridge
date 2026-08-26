@@ -7,6 +7,7 @@ import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
 import { CodexDesktopCatalog } from "../codex/codex-desktop-catalog.mjs";
+import { CodexIncrementalSummarizer } from "../codex/codex-incremental-summarizer.mjs";
 import { CodexSessionController, isFeishuMessageClientId } from "../codex/codex-session-controller.mjs";
 import { CodexSessionStore } from "../codex/codex-session-store.mjs";
 import {
@@ -39,6 +40,9 @@ import {
   LongAnswerDocumentStore,
   shouldCreateLongAnswerDocument,
 } from "../feishu/feishu-long-answer-document.mjs";
+import { FeishuChannelConnectivity } from "../feishu/feishu-channel-connectivity.mjs";
+import { FeishuSummaryDocumentManager } from "../feishu/feishu-summary-document.mjs";
+import { FeishuChatTabManager } from "../feishu/feishu-chat-tab.mjs";
 import { FeishuSessionChatManager } from "../feishu/feishu-session-chat.mjs";
 import { sendFeishuMemberOnboarding } from "../feishu/feishu-member-onboarding.mjs";
 import {
@@ -73,9 +77,11 @@ import {
   SessionRelayError,
 } from "../relay/session-relay-core.mjs";
 import { SessionPromptQueue } from "../persistence/session-prompt-queue.mjs";
+import { SessionSummaryDocumentStore } from "../persistence/session-summary-document-store.mjs";
 import { TemporaryChatStore } from "../persistence/temporary-chat-store.mjs";
 import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
+import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
 import { parseTemporaryChatCommand } from "../relay/temporary-chat-command.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
 import {
@@ -112,6 +118,7 @@ const inputLedgerPath = path.join(runtimeDir, "session-relay-input-ledger.json")
 const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json");
 const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
 const longAnswerDocumentsPath = path.join(runtimeDir, "session-relay-long-answer-documents.json");
+const summaryDocumentsPath = path.join(runtimeDir, "session-relay-summary-documents.json");
 const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json");
 const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
 const attachmentDraftsPath = path.join(runtimeDir, "session-relay-attachment-drafts.json");
@@ -129,6 +136,7 @@ const supportedPromptImageExtensions = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".ico", ".tif", ".tiff", ".heic",
 ]);
 const maxFinalAnswerMediaItems = Number.MAX_SAFE_INTEGER;
+const STREAM_CARD_CLOCK_REFRESH_MS = 3_000;
 
 const appSecret = process.env.LARK_APP_SECRET;
 delete process.env.LARK_APP_SECRET;
@@ -157,6 +165,42 @@ const longAnswerDocumentManager = config.larkCliEntry
       cwd: repositoryRoot,
     })
   : undefined;
+const summaryDocuments = await SessionSummaryDocumentStore.open(summaryDocumentsPath);
+const summaryDocumentManager = config.larkCliEntry
+  ? new FeishuSummaryDocumentManager({
+      nodeExecutable: config.nodeExecutable,
+      larkCliEntry: config.larkCliEntry,
+      cwd: repositoryRoot,
+    })
+  : undefined;
+const summaryChatTabManager = config.larkCliEntry
+  ? new FeishuChatTabManager({
+      nodeExecutable: config.nodeExecutable,
+      larkCliEntry: config.larkCliEntry,
+      cwd: repositoryRoot,
+    })
+  : undefined;
+const incrementalSummarizer = summaryDocumentManager
+  ? new CodexIncrementalSummarizer({
+      appServerUrl: config.sessionRelay.appServerUrl,
+      cwd: config.workspace,
+      maxSummaryChars: config.sessionRelay.rollingSummary.maxSummaryChars,
+      log,
+    })
+  : undefined;
+const summaryCoordinator = summaryDocumentManager && incrementalSummarizer
+  ? new SessionSummaryCoordinator({
+      store: summaryDocuments,
+      documentManager: summaryDocumentManager,
+      tabManager: summaryChatTabManager,
+      summarizer: incrementalSummarizer,
+      debounceMs: config.sessionRelay.rollingSummary.debounceMs,
+      retryMs: config.deliveryRetryMs,
+      maxBatchChars: config.sessionRelay.rollingSummary.maxBatchChars,
+      log,
+    })
+  : undefined;
+summaryCoordinator?.start();
 const streamCards = await SessionStreamCardStore.open(streamCardsPath);
 const queuedWriterConflictNotices = new Set();
 const inboundAttachmentStore = new FeishuInboundAttachmentStore(
@@ -255,10 +299,12 @@ try {
 }
 const writeCompleted = createSerializedFileWriter(completedPath);
 let connectedBotOpenId = config.agent.botOpenId;
-let channelConnected = false;
+const channelConnectivity = new FeishuChannelConnectivity();
 let deliveryRetryInFlight = false;
 const inFlightMessageIds = new Set();
 const turnOutputTails = new Map();
+const streamCardClockRefreshes = new Set();
+const streamCardClockFailures = new Set();
 const inboundWorkQueue = new ThreadWorkQueue();
 
 function log(message) {
@@ -293,6 +339,29 @@ function safeError(error) {
   }
   if (message) return message;
   return error instanceof Error ? error.name : "unknown";
+}
+
+let channelRecoveryTail = Promise.resolve();
+function scheduleChannelRecovery(reason) {
+  log(`Channel SDK connectivity restored (${reason})`);
+  channelRecoveryTail = channelRecoveryTail
+    .catch(() => {})
+    .then(async () => {
+      dispatchAllQueuedPrompts();
+      await retryPendingDeliveries();
+    })
+    .catch((error) => log(`Channel SDK recovery work deferred: ${safeError(error)}`));
+}
+
+function recoverChannelFromInbound() {
+  if (channelConnectivity.observeInbound()) scheduleChannelRecovery("inbound event");
+}
+
+function recoverChannelFromTransportState() {
+  const state = channel.getConnectionStatus?.()?.state;
+  if (channelConnectivity.observeTransportState(state)) {
+    scheduleChannelRecovery("transport state");
+  }
 }
 
 function temporaryBinding(record) {
@@ -354,7 +423,13 @@ function createSessionController(targets) {
       if (initiatorOpenId) activeTurnActors.delete(record.threadId);
       dispatchQueuedPrompts(record.threadId);
       await enqueueTurnOutput(record.threadId, async () => {
-        await processCompletedTurn(Object.freeze({ ...record, initiatorOpenId }));
+        const completedRecord = Object.freeze({ ...record, initiatorOpenId });
+        await processCompletedTurn(completedRecord);
+        try {
+          await summaryCoordinator?.recordTurn(completedRecord);
+        } catch (error) {
+          log(`rolling summary turn could not be queued: ${safeError(error)}`);
+        }
         await retireEndedTemporaryChat(record.threadId);
       });
     },
@@ -415,6 +490,48 @@ function enqueueTurnOutput(threadId, work) {
   });
   turnOutputTails.set(key, tail);
   return running;
+}
+
+function streamCardClockKey(record) {
+  return `${record.threadId}:${record.turnId}`;
+}
+
+function scheduleStreamCardClockRefresh(record) {
+  const key = streamCardClockKey(record);
+  if (streamCardClockRefreshes.has(key)) return;
+  streamCardClockRefreshes.add(key);
+  void enqueueTurnOutput(record.threadId, async () => {
+    try {
+      if (!channelConnectivity.connected || !sessionController) return;
+      const current = streamCards.get(record.threadId, record.turnId);
+      if (!current || current.messageId !== record.messageId) return;
+      if (!relaySettings.get(current.threadId).publicProgress) return;
+      if (!resolveRelayBinding(current.chatId, current.threadId)) return;
+      const status = await sessionController.getStatus(current.threadId, { refresh: false })
+        .catch(() => undefined);
+      if (status?.activeTurnId !== current.turnId) return;
+      await channel.updateCard(current.messageId, buildSessionStreamCard({
+        progress: current.progress,
+        startedAtMs: current.createdAt,
+        nowMs: Date.now(),
+      }));
+      streamCardClockFailures.delete(key);
+    } catch (error) {
+      if (!streamCardClockFailures.has(key)) {
+        streamCardClockFailures.add(key);
+        log(`stream card clock refresh deferred: ${safeError(error)}`);
+      }
+    } finally {
+      streamCardClockRefreshes.delete(key);
+    }
+  });
+}
+
+function refreshActiveStreamCardClocks() {
+  for (const record of streamCards.list()) {
+    if (record.turnId.startsWith("queued:")) continue;
+    scheduleStreamCardClockRefresh(record);
+  }
 }
 
 async function persistCompleted(messageId) {
@@ -506,7 +623,7 @@ async function deliverPendingRecord(record) {
 }
 
 async function retryPendingDeliveries() {
-  if (!channelConnected || deliveryRetryInFlight) return;
+  if (!channelConnectivity.connected || deliveryRetryInFlight) return;
   deliveryRetryInFlight = true;
   try {
     for (const record of deliveryOutbox.list({ dueAt: Date.now() })) {
@@ -789,7 +906,7 @@ function publicBindingFailure(error) {
 }
 
 async function syncConfiguredFeedGroups() {
-  if (!feedGroupManager || !channelConnected) return;
+  if (!feedGroupManager || !channelConnectivity.connected) return;
   try {
     const bindings = await bindingRegistry.list();
     await feedGroupManager.ensureChats(bindings
@@ -873,7 +990,7 @@ async function queueDeliveryBundle(records, successLog) {
     .filter((record) => record?.deliveryId && !completed.has(record.deliveryId));
   if (pendingRecords.length === 0) return;
   await deliveryOutbox.putMany(pendingRecords);
-  if (!channelConnected) return;
+  if (!channelConnectivity.connected) return;
   let deliveredAll = true;
   for (const record of pendingRecords) {
     if (record.dependsOn && deliveryOutbox.has(record.dependsOn)) {
@@ -901,7 +1018,7 @@ async function queueDelivery(record, successLog) {
 
 async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
   if (!threadId || !turnId || !chatId) return undefined;
-  if (!relaySettings.get(threadId).publicProgress || !channelConnected) return undefined;
+  if (!relaySettings.get(threadId).publicProgress || !channelConnectivity.connected) return undefined;
   const existing = streamCards.get(threadId, turnId);
   if (existing) return existing;
   const binding = resolveRelayBinding(chatId, threadId);
@@ -935,7 +1052,7 @@ async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
 }
 
 async function showQueuedWriterConflict(error, queued) {
-  if (!queued?.messageId || !channelConnected) return;
+  if (!queued?.messageId || !channelConnectivity.connected) return;
   if (queuedWriterConflictNotices.has(queued.messageId)) return;
   queuedWriterConflictNotices.add(queued.messageId);
   try {
@@ -969,7 +1086,7 @@ async function tryEnsureTurnStreamCard(record) {
 
 async function tryFinalizeTurnStreamCard(record, answerSegments) {
   const current = streamCards.get(record.threadId, record.turnId);
-  if (!current || !channelConnected) return false;
+  if (!current || !channelConnectivity.connected) return false;
   try {
     await channel.updateCard(current.messageId, buildSessionStreamCard({
       answer: record.answer,
@@ -1249,6 +1366,8 @@ async function processCommandMessage(msg, binding, command) {
       await persistCompleted(msg.messageId);
       return;
     }
+    const summaryBinding = binding.temporary ? binding.baseBinding : binding;
+    const summarySession = summaryBinding ? await sessionStore.get(summaryBinding.threadId) : undefined;
     let markdown;
     let queueAction;
     let draftClaim;
@@ -1272,6 +1391,10 @@ async function processCommandMessage(msg, binding, command) {
         conversationId: msg.chatId,
         humanMemberCount: inspection?.humanMemberCount,
         senderOpenId: msg.senderId,
+        summaryCoordinator,
+        summaryBinding,
+        summaryTitle: summarySession?.title || "Codex 群聊",
+        timeZone: config.sessionRelay.displayTimeZone,
         enqueuePrompt: async (text) => {
           const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
           draftAccepted = true;
@@ -1749,7 +1872,7 @@ async function finishLongAnswerDocumentDelivery(record, media) {
 
 async function processTurnProgress(record) {
   if (!relaySettings.get(record.threadId).publicProgress) return;
-  if (!channelConnected) {
+  if (!channelConnectivity.connected) {
     log("public progress skipped while Feishu channel is disconnected");
     return;
   }
@@ -1975,7 +2098,7 @@ const channel = createLarkChannel({
   keepalive: {
     enabled: true,
     onUnrecoverable: (error) => {
-      channelConnected = false;
+      channelConnectivity.markDisconnected();
       log(`Channel SDK keepalive could not reconnect: ${safeError(error)}`);
     },
   },
@@ -2038,7 +2161,16 @@ const bindingRemover = new SessionBindingRemover({
   onWarning: (error) => log(`binding removal consistency warning: ${safeError(error)}`),
 });
 const sessionDeleteFlow = new SessionDeleteFlow({
-  remove: async (binding) => bindingRemover.remove(binding),
+  remove: async (binding) => {
+    const result = await bindingRemover.remove(binding);
+    try {
+      if (summaryCoordinator) await summaryCoordinator.discard(binding.groupChatId);
+      else await summaryDocuments.unlink(binding.groupChatId);
+    } catch (error) {
+      log(`summary document association cleanup deferred: ${safeError(error)}`);
+    }
+    return result;
+  },
 });
 
 const sessionBindingInbox = await new SessionBindingInbox({
@@ -2119,7 +2251,7 @@ async function processBindingSetupMessage(msg, content, binding) {
 }
 
 async function pollSessionBindingInbox() {
-  if (!channelConnected || restartScheduled) return;
+  if (!channelConnectivity.connected || restartScheduled) return;
   try {
     const completedRequests = await sessionBindingInbox.poll();
     if (completedRequests.some(({ response }) => response?.ok && response?.result?.restart)) {
@@ -2223,6 +2355,7 @@ async function processInboundMessage(msg, baseBinding) {
 }
 
 channel.on("message", async (msg) => {
+  recoverChannelFromInbound();
   const binding = bindingsByChat.get(msg.chatId);
   if (msg.senderIsBot !== false || !sessionAccess.isActive(msg.senderId)) return;
   if (
@@ -2248,14 +2381,13 @@ channel.on("message", async (msg) => {
 channel.on("reject", (event) => log(`rejected message ${event.messageId}: ${event.reason}`));
 channel.on("error", (error) => log(`channel error: ${safeError(error)}`));
 channel.on("reconnecting", () => {
-  channelConnected = false;
+  channelConnectivity.markDisconnected();
   log("Channel SDK reconnecting");
 });
 channel.on("reconnected", () => {
-  channelConnected = true;
+  const recovered = channelConnectivity.markConnected();
   log("Channel SDK reconnected");
-  void retryPendingDeliveries();
-  dispatchAllQueuedPrompts();
+  if (recovered) scheduleChannelRecovery("reconnected event");
 });
 
 let stopResolve;
@@ -2279,10 +2411,12 @@ const deliveryRetryTimer = setInterval(() => void retryPendingDeliveries(), conf
 const feedGroupRetryTimer = setInterval(() => void syncConfiguredFeedGroups(), config.deliveryRetryMs);
 const bindingInboxTimer = setInterval(() => void pollSessionBindingInbox(), 500);
 const promptQueueTimer = setInterval(dispatchAllQueuedPrompts, 1_000);
+const channelConnectivityTimer = setInterval(recoverChannelFromTransportState, 1_000);
+const streamCardClockTimer = setInterval(refreshActiveStreamCardClocks, STREAM_CARD_CLOCK_REFRESH_MS);
 
 try {
   await channel.connect();
-  channelConnected = true;
+  channelConnectivity.markConnected();
   const identity = channel.getBotIdentity();
   if (config.agent.botOpenId && identity.openId !== config.agent.botOpenId) {
     throw new Error("Configured bot open_id does not match the connected Channel identity");
@@ -2343,12 +2477,15 @@ try {
   await stopPromise;
 } finally {
   const normalStop = stopping;
-  channelConnected = false;
+  channelConnectivity.markDisconnected();
   clearInterval(stopWatcher);
   clearInterval(deliveryRetryTimer);
   clearInterval(feedGroupRetryTimer);
   clearInterval(bindingInboxTimer);
   clearInterval(promptQueueTimer);
+  clearInterval(channelConnectivityTimer);
+  clearInterval(streamCardClockTimer);
+  summaryCoordinator?.stop();
   await sessionController?.stop().catch(() => {});
   await channel.disconnect().catch(() => {});
   await fs.rm(readyPath, { force: true });

@@ -1,3 +1,4 @@
+import { executeSessionDocumentCommand } from "./session-document-command.mjs";
 import { sessionSandboxModeLabel } from "./session-permission-command.mjs";
 
 const COMMANDS = new Set([
@@ -11,6 +12,7 @@ const COMMANDS = new Set([
   "settings",
   "attachments",
   "permissions",
+  "doc",
 ]);
 
 export class SessionCommandError extends Error {
@@ -547,6 +549,7 @@ export async function executeSessionCommand(command, context) {
     if (!context.permissionFlow) throw new TypeError("Permissions command execution requires a permission flow");
     return context.permissionFlow.execute(command, context);
   }
+  if (command.name === "doc") return executeSessionDocumentCommand(command, context);
   return executeGoal(command, context);
 }
 
@@ -570,6 +573,23 @@ export function publicCommandFailure(error) {
     case "attachment_draft_busy": return "暂存附件正在提交，请稍后重试。";
     case "attachment_draft_conflict": return "这条飞书附件消息已关联到另一份暂存记录，没有重复加入。";
     case "codex_app_server_unavailable": return "本机共享 Codex 服务当前未连接，请稍后重试。";
+    case "summary_document_fixed_group_required": return "持续摘要文档只能关联到固定 Session 群；Bot 私聊或无固定绑定的临时 Chat 不支持。";
+    case "summary_document_not_linked": return "当前群尚未关联持续摘要文档。请先发送 `/doc create` 或 `/doc bind <飞书文档URL>`。";
+    case "summary_document_already_linked": return "当前群已经关联持续摘要文档。请先发送 `/doc` 查看；如需更换，先 `/doc unbind`。";
+    case "summary_document_url_invalid": return "这不是有效的飞书 Docx/Wiki 文档链接。请发送完整的 HTTPS 文档 URL。";
+    case "summary_document_invalid_response": return "飞书已经处理文档请求，但没有返回可验证的文档链接；当前群尚未建立关联。";
+    case "summary_document_auth_required": return "当前飞书用户授权缺少文档读取或写入权限。请完成文档权限增量授权后重试。";
+    case "summary_document_api_error": return "飞书文档暂时无法访问或更新。请确认你对文档有编辑权限后重试。";
+    case "summary_tab_auth_required": return "当前飞书用户授权缺少群标签页读写权限。请完成权限增量授权后重试。";
+    case "summary_tab_permission_denied": return "当前用户不能管理这个群的标签页，或没有文档协作权限。请确认群设置允许你管理标签页。";
+    case "summary_tab_limit_reached": return "当前群已经达到 20 个自定义标签页上限，请先在飞书中移除一个标签页。";
+    case "summary_tab_chat_invalid":
+    case "summary_tab_invalid_response":
+    case "summary_tab_api_error": return "飞书群标签页暂时无法更新；文档关联仍保留，Bridge 会在后台自动重试。";
+    case "summary_section_missing":
+    case "summary_section_invalid": return "文档中的“持续摘要”受控区块已被删除或改坏。请解除关联后重新绑定。";
+    case "summary_turn_failed":
+    case "summary_turn_timeout": return "增量摘要本次没有完成，新内容仍保留在待处理队列中，稍后会自动重试。";
     default: return "命令执行失败。请查看 `/status` 后重试。";
   }
 }
