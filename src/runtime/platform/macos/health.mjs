@@ -163,7 +163,10 @@ export async function runDoctorCommand(args) {
       "im:feed_group_v1:read",
       "im:feed_group_v1:write",
       "docx:document:create",
+      "docx:document:readonly",
       "docx:document:write_only",
+      "im:chat.tabs:read",
+      "im:chat.tabs:write_only",
     ];
     const missingScopes = requiredScopes.filter((scope) => !scopeSet.has(scope));
     add(

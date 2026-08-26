@@ -38,6 +38,11 @@ test("defaults Session Relay naming to binding-only without renaming Codex tasks
     maxCacheBytes: 1024 * 1024 * 1024,
   });
   assert.deepEqual(config.sessionRelay.feedGroup, { enabled: false, agentName: "Codex" });
+  assert.deepEqual(config.sessionRelay.rollingSummary, {
+    debounceMs: 60_000,
+    maxSummaryChars: 4_000,
+    maxBatchChars: 24_000,
+  });
   assert.deepEqual(config.sessionRelay.bindings[0], {
     groupChatId: "oc_group_a",
     threadId: threadA,
@@ -68,6 +73,25 @@ test("normalizes configurable inbound attachment limits", () => {
     maxTotalBytes: 8_000_000,
     retentionMs: 24 * 60 * 60 * 1000,
     maxCacheBytes: 20_000_000,
+  });
+});
+
+test("normalizes low-token rolling summary limits", () => {
+  const config = normalizeSessionRelayConfig(base({
+    sessionRelay: {
+      appServerUrl: "ws://127.0.0.1:47321/rpc",
+      rollingSummary: {
+        debounceSeconds: 120,
+        maxSummaryChars: 2_000,
+        maxBatchChars: 12_000,
+      },
+      bindings: [{ groupChatId: "oc_group_a", threadId: threadA }],
+    },
+  }), { configDir: "C:/bridge" });
+  assert.deepEqual(config.sessionRelay.rollingSummary, {
+    debounceMs: 120_000,
+    maxSummaryChars: 2_000,
+    maxBatchChars: 12_000,
   });
 });
 

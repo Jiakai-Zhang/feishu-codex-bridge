@@ -98,7 +98,7 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 超限、空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
 - 飞书消息不会包含本机绝对路径；附件消息也不会额外 `@` 任何人。
 
-文档能力需要 Bridge 当前 OAuth 用户的 `docx:document:create` 与 `docx:document:write_only`。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
+文档能力需要用户 OAuth `docx:document:create`、`docx:document:readonly` 与 `docx:document:write_only`；自动固定到群顶部还需要 `im:chat.tabs:read` 与 `im:chat.tabs:write_only`。只读文档权限用于局部定位持续摘要受控区块，不会把整份文档提交给模型。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
 
 ## Session 命令
 
@@ -133,6 +133,22 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - Prompt 恰好以 `status`、`clear` 或 `remove` 开头时，使用 `/queue -- <Prompt>`。
 - `/queue remove <序号>`：删除一条。
 - `/queue clear`：清空所有待执行项，不中止当前 Turn。
+
+### `/doc`
+
+```text
+/doc
+/doc create
+/doc bind <飞书文档URL>
+/doc summarize
+/doc unbind
+```
+
+每个固定绑定群最多关联一份独立 Docx/Wiki 文档。`/doc create` 新建文档，`/doc bind` 会在已有文档末尾创建一个由 Bridge 管理的“持续摘要”区块；随后按文档 URL 查重并自动添加到群顶部的“持续摘要”标签页。其他手写内容不会被覆盖。Bridge 会保存 `tab_id` 并在重启后补齐缺失标签页；`/doc unbind` 只移除 Bridge 管理的标签页、本地关联与待处理增量，不删除飞书文档。
+
+每个完成 Turn 以 `threadId + turnId` 幂等写入本地待处理队列。默认等待 60 秒，把相邻新回合合并为一次摘要请求；请求只包含上次滚动摘要和未处理的新回合，不读取完整 Session 历史。摘要在后台 ephemeral App Server 线程中固定使用 Luna（`gpt-5.6-luna`，`low` effort），不会出现在 Codex Desktop 任务列表，也不会改变群聊主 Session 的模型设置。文档更新前只按标识局部读取受控区块并执行 `block_replace`。模型或飞书文档暂时不可用时，新回合保持待处理并按投递重试周期自动重试；`/doc summarize` 可立即触发。
+
+低 Token 默认值位于 `sessionRelay.rollingSummary`：`debounceSeconds=60`、`maxSummaryChars=4000`、`maxBatchChars=24000`。更长的等待时间可以进一步合并相邻回合，降低摘要调用次数。
 
 若当前 Session 有暂存附件，`/queue <Prompt>` 会把这些附件和该 Prompt 一起排入同一个独立新 Turn；单独的 `/queue`、`remove` 或 `clear` 不消费附件草稿。
 

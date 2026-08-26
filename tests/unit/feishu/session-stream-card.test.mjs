@@ -134,3 +134,14 @@ test("routes public progress and completion through the persistent card only in 
   assert.match(completionBody, /tryCompleteTurnStreamCard/);
   assert.match(source, /onAccepted:[\s\S]*tryEnsureTurnStreamCard/);
 });
+
+test("refreshes the active stream-card clock every three seconds without racing turn output", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /const STREAM_CARD_CLOCK_REFRESH_MS = 3_000;/);
+  assert.match(source, /setInterval\(refreshActiveStreamCardClocks, STREAM_CARD_CLOCK_REFRESH_MS\)/);
+  assert.match(source, /enqueueTurnOutput\(record\.threadId,[\s\S]*status\?\.activeTurnId !== current\.turnId/);
+  assert.match(source, /progress: current\.progress,[\s\S]*startedAtMs: current\.createdAt,[\s\S]*nowMs: Date\.now\(\)/);
+  assert.match(source, /record\.turnId\.startsWith\("queued:"\)/);
+  assert.match(source, /clearInterval\(streamCardClockTimer\)/);
+});

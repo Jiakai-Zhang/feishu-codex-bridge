@@ -147,6 +147,21 @@ export function normalizeSessionRelayConfig(raw, { configDir = process.cwd() } =
     raw.sessionRelay?.feedGroup?.agentName || "Codex",
     "sessionRelay.feedGroup.agentName",
   );
+  const rollingSummaryDebounceSeconds = positiveNumber(
+    raw.sessionRelay?.rollingSummary?.debounceSeconds,
+    60,
+    { min: 0, max: 3_600 },
+  );
+  const rollingSummaryMaxSummaryChars = Math.trunc(positiveNumber(
+    raw.sessionRelay?.rollingSummary?.maxSummaryChars,
+    4_000,
+    { min: 500, max: 20_000 },
+  ));
+  const rollingSummaryMaxBatchChars = Math.trunc(positiveNumber(
+    raw.sessionRelay?.rollingSummary?.maxBatchChars,
+    24_000,
+    { min: 2_000, max: 100_000 },
+  ));
   const larkCliEntry = raw.larkCliEntry == null || String(raw.larkCliEntry).trim() === ""
     ? undefined
     : path.resolve(configDir, requiredString(raw.larkCliEntry, "larkCliEntry"));
@@ -186,6 +201,11 @@ export function normalizeSessionRelayConfig(raw, { configDir = process.cwd() } =
       feedGroup: Object.freeze({
         enabled: feedGroupEnabled,
         agentName: feedGroupAgentName,
+      }),
+      rollingSummary: Object.freeze({
+        debounceMs: rollingSummaryDebounceSeconds * 1_000,
+        maxSummaryChars: rollingSummaryMaxSummaryChars,
+        maxBatchChars: rollingSummaryMaxBatchChars,
       }),
       bindings: Object.freeze(bindings),
     }),

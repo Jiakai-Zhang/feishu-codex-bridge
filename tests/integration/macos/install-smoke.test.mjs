@@ -38,7 +38,7 @@ test("macOS installer creates a valid private config and launchd package without
     'if (args[0] === "auth") console.log(JSON.stringify({',
     '  appId: "cli_smoke_test",',
     '  identities: {',
-    '    user: { available: true, verified: true, openId: "ou_smoke_owner", scope: "im:feed_group_v1:read im:feed_group_v1:write docx:document:create docx:document:write_only" },',
+    '    user: { available: true, verified: true, openId: "ou_smoke_owner", scope: "im:feed_group_v1:read im:feed_group_v1:write im:chat.tabs:read im:chat.tabs:write_only docx:document:create docx:document:readonly docx:document:write_only" },',
     '    bot: { available: true, verified: true, openId: "ou_smoke_bot" },',
     '  },',
     '}));',

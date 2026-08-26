@@ -44,6 +44,7 @@ test("recognizes only Bridge-owned slash commands and leaves unknown slash text 
   assert.deepEqual(parseQueueAction("remove 2"), { action: "remove", position: 2 });
   assert.deepEqual(parseAttachmentsAction("clear"), { action: "clear" });
   assert.deepEqual(parseSessionCommand("/attachments"), { name: "attachments", args: "", raw: "/attachments" });
+  assert.deepEqual(parseSessionCommand("/doc create"), { name: "doc", args: "create", raw: "/doc create" });
   assert.deepEqual(parseQueueAction("-- clear the cache"), { action: "enqueue", text: "clear the cache" });
   assert.deepEqual(parseSettingsAction("input queue"), { action: "input", value: "queue" });
   assert.deepEqual(parseSettingsAction("thinking on"), { action: "progress", value: true });

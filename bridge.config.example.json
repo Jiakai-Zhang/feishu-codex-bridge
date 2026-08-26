@@ -23,6 +23,11 @@
       "enabled": true,
       "agentName": "Codex"
     },
+    "rollingSummary": {
+      "debounceSeconds": 60,
+      "maxSummaryChars": 4000,
+      "maxBatchChars": 24000
+    },
     "bindings": []
   },
   "nodeExecutable": "C:\\Program Files\\nodejs\\node.exe",

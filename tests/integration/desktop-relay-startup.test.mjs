@@ -203,6 +203,18 @@ test("standalone App Server follows managed Codex Desktop upgrades", async () =>
   assert.match(source, /restart\.request[\s\S]*stop\.request/);
 });
 
+test("standalone App Server follows managed Codex Desktop upgrades", async () => {
+  const source = await readScript("start-app-server.ps1");
+  assert.match(source, /Resolve-ManagedCodexExecutable/);
+  assert.match(source, /Sort-Object LastWriteTimeUtc -Descending/);
+  assert.match(source, /codex-code-mode-host\.exe/);
+  assert.match(source, /Test-CodexAppServerCapability/);
+  assert.match(source, /previousAppServerProcess[\s\S]*managed Codex upgrade/);
+  assert.match(source, /Update-ConfiguredCodexExecutable/);
+  assert.match(source, /Request-BridgeReloadForCodexSwitch/);
+  assert.match(source, /restart\.request[\s\S]*stop\.request/);
+});
+
 test("doctor requires a fresh continuous watchdog heartbeat and owned listener", async () => {
   const source = await readScript("doctor.ps1");
   assert.match(source, /Desktop relay continuous watchdog/);
