@@ -2163,8 +2163,12 @@ const bindingRemover = new SessionBindingRemover({
 const sessionDeleteFlow = new SessionDeleteFlow({
   remove: async (binding) => {
     const result = await bindingRemover.remove(binding);
-    try { await summaryDocuments.unlink(binding.groupChatId); }
-    catch (error) { log(`summary document association cleanup deferred: ${safeError(error)}`); }
+    try {
+      if (summaryCoordinator) await summaryCoordinator.discard(binding.groupChatId);
+      else await summaryDocuments.unlink(binding.groupChatId);
+    } catch (error) {
+      log(`summary document association cleanup deferred: ${safeError(error)}`);
+    }
     return result;
   },
 });

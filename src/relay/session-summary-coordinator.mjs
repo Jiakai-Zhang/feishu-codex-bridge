@@ -118,7 +118,7 @@ export class SessionSummaryCoordinator {
 
   async unbind(groupChatId) {
     const key = String(groupChatId || "");
-    try { await this.tabInFlight.get(key); } catch {}
+    await this.#settleActiveWork(key);
     const existing = this.store.get(key);
     if (existing && this.tabManager) {
       await this.tabManager.remove({
@@ -129,13 +129,45 @@ export class SessionSummaryCoordinator {
     }
     const removed = await this.store.unlink(key);
     if (!removed) throw summaryError("summary_document_not_linked", "The group has no summary document");
-    const timer = this.timers.get(String(groupChatId || ""));
-    if (timer) clearTimeout(timer);
-    this.timers.delete(String(groupChatId || ""));
-    const tabTimer = this.tabTimers.get(String(groupChatId || ""));
-    if (tabTimer) clearTimeout(tabTimer);
-    this.tabTimers.delete(String(groupChatId || ""));
+    this.#clearScheduledWork(key);
     return removed;
+  }
+
+  async discard(groupChatId) {
+    const key = String(groupChatId || "");
+    await this.#settleActiveWork(key);
+    const existing = this.store.get(key);
+    if (!existing) return undefined;
+    if (this.tabManager) {
+      try {
+        await this.tabManager.remove({
+          chatId: existing.groupChatId,
+          documentUrl: existing.documentUrl,
+          tabId: existing.tabId,
+        });
+      } catch (error) {
+        this.log(`summary document tab cleanup skipped during Session deletion: ${String(error?.code || error?.name || "unknown")}`);
+      }
+    }
+    const removed = await this.store.unlink(key);
+    this.#clearScheduledWork(key);
+    return removed;
+  }
+
+  #clearScheduledWork(key) {
+    const timer = this.timers.get(key);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(key);
+    const tabTimer = this.tabTimers.get(key);
+    if (tabTimer) clearTimeout(tabTimer);
+    this.tabTimers.delete(key);
+  }
+
+  async #settleActiveWork(key) {
+    this.#clearScheduledWork(key);
+    try { await this.inFlight.get(key); } catch {}
+    try { await this.tabInFlight.get(key); } catch {}
+    this.#clearScheduledWork(key);
   }
 
   async #ensureTabAfterLink(groupChatId) {

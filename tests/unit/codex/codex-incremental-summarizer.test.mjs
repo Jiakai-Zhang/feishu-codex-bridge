@@ -7,6 +7,7 @@ import {
   DEFAULT_SUMMARY_MODEL,
   normalizeIncrementalSummary,
   runOneShotCodexSummary,
+  SUMMARY_BASE_INSTRUCTIONS,
 } from "../../../src/codex/codex-incremental-summarizer.mjs";
 
 function closeEvent(code) {
@@ -100,7 +101,7 @@ test("summarizer sends only the previous summary and new content to its one-shot
   assert.equal(received.effort, DEFAULT_SUMMARY_EFFORT);
 });
 
-test("runs the summary in a read-only ephemeral App Server thread", async () => {
+test("constrains the summary to a text-only read-only ephemeral App Server thread", async () => {
   const server = summaryWebSocketServer();
   const result = await runOneShotCodexSummary({
     appServerUrl: "ws://127.0.0.1:47321/rpc",
@@ -113,6 +114,12 @@ test("runs the summary in a read-only ephemeral App Server thread", async () => 
   assert.equal(threadStart.params.ephemeral, true);
   assert.equal(threadStart.params.sandbox, "read-only");
   assert.equal(threadStart.params.model, "gpt-5.6-luna");
+  assert.equal(threadStart.params.baseInstructions, SUMMARY_BASE_INSTRUCTIONS);
+  assert.equal(threadStart.params.developerInstructions, SUMMARY_BASE_INSTRUCTIONS);
+  assert.deepEqual(threadStart.params.dynamicTools, []);
+  assert.deepEqual(threadStart.params.environments, []);
+  assert.match(threadStart.params.developerInstructions, /Never call tools/);
+  assert.match(threadStart.params.developerInstructions, /untrusted data/);
   const turnStart = server.requests.find((request) => request.method === "turn/start");
   assert.equal(turnStart.params.model, "gpt-5.6-luna");
   assert.equal(turnStart.params.effort, "low");
