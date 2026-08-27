@@ -1,10 +1,14 @@
 param(
     [Parameter(Mandatory)]
     [string]$Url,
-    [switch]$Disable
+    [switch]$Disable,
+    [switch]$Preparing
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Disable -and $Preparing) {
+    throw '-Disable and -Preparing cannot be combined.'
+}
 $variableName = 'CODEX_APP_SERVER_WS_URL'
 $taskName = 'FeishuCodexBridge-DesktopRelay-Watchdog'
 $bootstrapRoot = Join-Path $env:LOCALAPPDATA 'FeishuCodexBridge\bootstrap'
@@ -73,6 +77,17 @@ function Write-BridgeState {
 $expected = $relayUrl.AbsoluteUri
 $current = [Environment]::GetEnvironmentVariable($variableName, [EnvironmentVariableTarget]::User)
 $relayState = Read-OwnedRelayState
+if ($Preparing) {
+    if ($relayState) { Write-BridgeState -State $relayState -BridgeEnabled $true }
+    if ($current -eq $expected) {
+        [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+        Send-EnvironmentChanged
+    } elseif (-not [string]::IsNullOrWhiteSpace($current)) {
+        Write-Warning 'The Desktop relay pointer belongs to another configuration and was left unchanged.'
+    }
+    Write-Output 'Codex Desktop relay pointer paused while Bridge recovery remains enabled.'
+    exit 0
+}
 if ($Disable) {
     if ($relayState) { Write-BridgeState -State $relayState -BridgeEnabled $false }
     if ($current -eq $expected) {
