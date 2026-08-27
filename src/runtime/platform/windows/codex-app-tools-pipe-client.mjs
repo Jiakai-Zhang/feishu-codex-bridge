@@ -171,7 +171,7 @@ export function validateWindowsCodexAppToolsPipe(pipePath, {
 } = {}) {
   return new Promise((resolve) => {
     const powershell = env.SystemRoot
-      ? path.join(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      ? path.win32.join(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
       : "powershell.exe";
     execFileImpl(
       powershell,
