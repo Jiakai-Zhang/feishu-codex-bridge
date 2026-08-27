@@ -100,6 +100,7 @@ import {
   SessionStreamCardStore,
 } from "../feishu/session-stream-card.mjs";
 import { ThreadWorkQueue } from "../runtime/thread-work-queue.mjs";
+import { createCodexAppToolRequestHandler } from "../runtime/codex-app-tools-host.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../..");
@@ -417,6 +418,7 @@ function createSessionController(targets) {
       relaySettings.get(threadId).sandboxMode,
       config.sandboxMode,
     ),
+    dynamicToolRequestHandler: createCodexAppToolRequestHandler({ log }),
     onTurnCompleted: async (record) => {
       const actor = activeTurnActors.get(record.threadId);
       const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;

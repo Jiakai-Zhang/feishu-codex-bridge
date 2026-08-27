@@ -328,6 +328,8 @@ Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送�
 
 Session Relay 和 Codex Desktop 必须连接同一个本机 App Server。独立 App Server 对 Session 实行单 writer 锁；两个 App Server 进程不能分别接续同一 Session。
 
+Session 中由 Desktop 注册的动态工具会随 `thread/resume` 恢复。Windows 上模型触发这类工具时，共享 App Server 通过 `item/tool/call` 向 Bridge 发起反向请求；Bridge 只把该请求转发给由 OpenAI 签名的 Codex Desktop 进程持有、且实际声明同名工具的原生 app-tools 管道，并把结构化结果回传。若多个管道同时声明同一工具，Bridge 会拒绝歧义选择；也可通过 `CODEX_APP_TOOLS_PIPE_PATH` 固定精确管道。未知反向请求、未声明工具和无效结果仍会拒绝，不会退化为任意本机调用。
+
 共享 App Server 启动时会预置一个禁用的 `codex_app` stdio transport。Codex Desktop 创建线程时只发送 `mcp_servers.codex_app.enabled_tools` 等增量配置；这个预置项保证增量合并后仍是有效 MCP 配置，同时不会自行启动额外进程。
 
 首次启用：

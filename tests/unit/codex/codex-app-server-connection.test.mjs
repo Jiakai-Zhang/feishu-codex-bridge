@@ -59,6 +59,59 @@ test("owns request correlation, notifications, and unsupported server requests",
   });
 });
 
+test("answers app-server dynamic tool requests through the client request handler", async () => {
+  const requests = [];
+  const connection = new CodexAppServerConnection({
+    url: "ws://127.0.0.1/rpc",
+    WebSocketImpl: FakeWebSocket,
+    onRequest: async (method, params) => {
+      requests.push([method, params]);
+      return { contentItems: [{ type: "inputText", text: "created" }], success: true };
+    },
+  });
+  await connection.open();
+
+  connection.socket.receive({
+    id: 77,
+    method: "item/tool/call",
+    params: { threadId: "thread", turnId: "turn", callId: "call", namespace: "codex_app", tool: "automation_update", arguments: {} },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(requests, [["item/tool/call", {
+    threadId: "thread",
+    turnId: "turn",
+    callId: "call",
+    namespace: "codex_app",
+    tool: "automation_update",
+    arguments: {},
+  }]]);
+  assert.deepEqual(connection.socket.sent.at(-1), {
+    id: 77,
+    result: { contentItems: [{ type: "inputText", text: "created" }], success: true },
+  });
+});
+
+test("returns a JSON-RPC error when a handled server request fails", async () => {
+  const connection = new CodexAppServerConnection({
+    url: "ws://127.0.0.1/rpc",
+    WebSocketImpl: FakeWebSocket,
+    onRequest: async () => {
+      const error = new Error("desktop host unavailable");
+      error.rpcCode = -32005;
+      throw error;
+    },
+  });
+  await connection.open();
+
+  connection.socket.receive({ id: 78, method: "item/tool/call", params: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(connection.socket.sent.at(-1), {
+    id: 78,
+    error: { code: -32005, message: "desktop host unavailable" },
+  });
+});
+
 test("normalizes RPC failures and rejects pending work on close", async () => {
   const closes = [];
   const connection = new CodexAppServerConnection({

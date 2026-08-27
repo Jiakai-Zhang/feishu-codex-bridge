@@ -165,6 +165,7 @@ export class CodexSessionController {
     requestTimeoutMs = 30_000,
     reconnectDelayMs = 2_000,
     sleepImpl = delay,
+    dynamicToolRequestHandler,
     log = () => {},
   }) {
     if (!appServerUrl) throw new TypeError("appServerUrl is required for the persistent session controller");
@@ -180,6 +181,7 @@ export class CodexSessionController {
     this.reconnectDelayMs = reconnectDelayMs;
     this.sleepImpl = sleepImpl;
     this.log = log;
+    this.dynamicToolRequestHandler = dynamicToolRequestHandler;
     this.states = new Map([...this.targets].map(([threadId, target]) => [threadId, controllerState(target)]));
     this.collector = new CodexTurnCollector({
       targets: [...this.targets.values()],
@@ -358,6 +360,7 @@ export class CodexSessionController {
       WebSocketImpl: this.WebSocketImpl,
       requestTimeoutMs: this.requestTimeoutMs,
       clientLabel: "controller",
+      onRequest: this.dynamicToolRequestHandler,
       log: this.log,
       onNotification: (method, params) => this.#handleNotification(method, params),
       onClose: ({ intentional }) => {
