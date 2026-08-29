@@ -88,6 +88,29 @@ test("preserves markdown and images when the same card becomes the final answer"
   assert.match(card.body.elements.at(-1).content, /12,345/);
 });
 
+test("unwraps heartbeat XML when a progress card becomes the final answer", () => {
+  const heartbeat = [
+    "<heartbeat>",
+    "<automation_id>p1118-live</automation_id>",
+    "<decision>NOTIFY</decision>",
+    "<message>J418 已完成检查，下一步继续 refinement。</message>",
+    "</heartbeat>",
+  ].join("\n");
+  const card = buildSessionStreamCard({
+    answer: heartbeat,
+    answerSegments: [{ type: "text", text: heartbeat }],
+    heartbeatSchedule: "每 10 分钟",
+  });
+
+  assert.equal(card.body.elements[0].content, "J418 已完成检查，下一步继续 refinement。");
+  assert.equal(
+    card.body.elements.at(-1).content,
+    "*定时任务 · 类型：Heartbeat · ID：p1118-live · 间隔：每 10 分钟 · 本轮：需要提醒*",
+  );
+  assert.doesNotMatch(JSON.stringify(card), /<heartbeat>|automation_id|<decision>|<message>/);
+  assert.equal(card.config.summary.content, "J418 已完成检查，下一步继续 refinement。");
+});
+
 test("persists one card per turn and deduplicates progress", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "session-stream-card-"));
   const filePath = path.join(directory, "cards.json");
@@ -132,6 +155,7 @@ test("routes public progress and completion through the persistent card only in 
   assert.match(progressBody, /appendProgress/);
   assert.match(progressBody, /channel\.updateCard/);
   assert.match(completionBody, /tryCompleteTurnStreamCard/);
+  assert.match(completionBody, /tryCompleteTurnStreamCard\(record, delivery, media, heartbeatSchedule\)/);
   assert.match(source, /onAccepted:[\s\S]*tryEnsureTurnStreamCard/);
 });
 

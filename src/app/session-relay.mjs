@@ -1088,7 +1088,7 @@ async function tryEnsureTurnStreamCard(record) {
   }
 }
 
-async function tryFinalizeTurnStreamCard(record, answerSegments) {
+async function tryFinalizeTurnStreamCard(record, answerSegments, heartbeatSchedule) {
   const current = streamCards.get(record.threadId, record.turnId);
   if (!current || !channelConnectivity.connected) return false;
   try {
@@ -1098,6 +1098,7 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
       completedAtMs: record.completedAtMs,
       durationMs: record.durationMs,
       tokenUsage: record.tokenUsage,
+      heartbeatSchedule,
       timeZone: config.sessionRelay.displayTimeZone,
       maxAnswerChars: config.maxReplyChars,
     }));
@@ -1114,8 +1115,8 @@ async function queueStreamCardFollowups(baseRecord, attachments) {
   await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
-  if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
+async function tryCompleteTurnStreamCard(record, baseDelivery, media, heartbeatSchedule) {
+  if (!await tryFinalizeTurnStreamCard(record, media.segments, heartbeatSchedule)) return false;
   await queueStreamCardFollowups(baseDelivery, media.attachments);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
@@ -1991,7 +1992,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2029,7 +2030,7 @@ async function processCompletedTurn(record) {
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2070,7 +2071,7 @@ async function processCompletedTurn(record) {
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }

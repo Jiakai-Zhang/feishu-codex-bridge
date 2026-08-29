@@ -79,9 +79,9 @@ function heartbeatEnvelopeFromAnswer({ answer, answerSegments }) {
   return undefined;
 }
 
-function heartbeatMetadataRows({ answer, answerSegments, heartbeatSchedule }) {
+export function heartbeatMetadataText({ answer, answerSegments, heartbeatSchedule }) {
   const heartbeat = heartbeatEnvelopeFromAnswer({ answer, answerSegments });
-  if (!heartbeat) return [];
+  if (!heartbeat) return undefined;
   const decisionLabels = {
     DONT_NOTIFY: "无需额外提醒",
     NOTIFY: "需要提醒",
@@ -92,9 +92,15 @@ function heartbeatMetadataRows({ answer, answerSegments, heartbeatSchedule }) {
   if (heartbeat.decision) {
     details.push(`本轮：${decisionLabels[heartbeat.decision] || heartbeat.decision.slice(0, 100)}`);
   }
+  return details.join(" · ");
+}
+
+function heartbeatMetadataRows(options) {
+  const text = heartbeatMetadataText(options);
+  if (!text) return [];
   return [
     [{ tag: "hr" }],
-    [{ tag: "text", text: details.join(" · "), style: ["italic"] }],
+    [{ tag: "text", text, style: ["italic"] }],
   ];
 }
 
