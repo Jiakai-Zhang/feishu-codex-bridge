@@ -8,6 +8,10 @@ import {
   requestCodexAppToolsPipe,
   validateWindowsCodexAppToolsPipe,
 } from "../../../src/runtime/platform/windows/codex-app-tools-pipe-client.mjs";
+import {
+  createCodexAppToolsMcpHandler,
+  resolveAutomationTool,
+} from "../../../src/runtime/platform/windows/codex-app-tools-mcp-proxy.mjs";
 
 const call = {
   threadId: "thread-one",
@@ -379,4 +383,52 @@ test("creates a reusable Windows request handler", async () => {
       : { contentItems: [], success: true },
   });
   assert.deepEqual(await handler("item/tool/call", call), { contentItems: [], success: true });
+});
+
+test("resolves one trusted automation_update host for the MCP proxy", async () => {
+  const resolved = await resolveAutomationTool({
+    listPipePaths: async () => ["pipe-a", "pipe-b"],
+    requestPipe: async (pipePath) => ({
+      tools: pipePath === "pipe-b"
+        ? [{ namespace: "codex_app", name: "automation_update", description: "update", inputSchema: { type: "object" } }]
+        : [],
+    }),
+    validatePipePath: async (pipePath) => pipePath === "pipe-b",
+  });
+  assert.equal(resolved.pipePath, "pipe-b");
+  assert.equal(resolved.tool.name, "automation_update");
+});
+
+test("MCP proxy lists and calls automation_update through the trusted Desktop host", async () => {
+  const calls = [];
+  const tool = {
+    namespace: "codex_app",
+    name: "automation_update",
+    description: "Update an automation",
+    inputSchema: { type: "object", properties: { mode: { type: "string" } } },
+  };
+  const handle = createCodexAppToolsMcpHandler({
+    threadId: "11111111-1111-4111-8111-111111111111",
+    resolveTool: async () => ({ pipePath: "pipe", tool }),
+    requestPipe: async (pipePath, method, params, options) => {
+      calls.push({ pipePath, method, params, options });
+      return { success: true, contentItems: [{ type: "inputText", text: "deleted" }] };
+    },
+  });
+
+  const listed = await handle("tools/list");
+  assert.deepEqual(listed, {
+    tools: [{ name: "automation_update", description: "Update an automation", inputSchema: tool.inputSchema }],
+  });
+  const result = await handle("tools/call", {
+    name: "automation_update",
+    arguments: { mode: "delete", id: "automation-id" },
+  });
+  assert.deepEqual(result, { content: [{ type: "text", text: "deleted" }], isError: false });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "tools/call");
+  assert.equal(calls[0].params.namespace, "codex_app");
+  assert.equal(calls[0].params.tool, "automation_update");
+  assert.equal(calls[0].params.threadId, "11111111-1111-4111-8111-111111111111");
+  assert.deepEqual(calls[0].params.arguments, { mode: "delete", id: "automation-id" });
 });

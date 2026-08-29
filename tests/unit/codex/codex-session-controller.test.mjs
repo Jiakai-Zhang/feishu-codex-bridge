@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import { CodexSessionController } from "../../../src/codex/codex-session-controller.mjs";
 
@@ -456,9 +457,16 @@ test("routes app-server dynamic tool calls through the Desktop tool handler", as
   });
   await client.start();
   const resume = server.requests.find(({ method }) => method === "thread/resume");
-  assert.deepEqual(resume.params.config, {
-    "mcp_servers.codex_app.enabled_tools": ["automation_update"],
+  assert.equal(resume.params.config["mcp_servers.codex_app.command"], process.execPath);
+  assert.match(
+    resume.params.config["mcp_servers.codex_app.args"][0],
+    /codex-app-tools-mcp-proxy\.mjs$/,
+  );
+  assert.deepEqual(resume.params.config["mcp_servers.codex_app.env"], {
+    FEISHU_CODEX_THREAD_ID: threadId,
   });
+  assert.equal(resume.params.config["mcp_servers.codex_app.enabled"], true);
+  assert.deepEqual(resume.params.config["mcp_servers.codex_app.enabled_tools"], ["automation_update"]);
 
   const params = {
     threadId,
