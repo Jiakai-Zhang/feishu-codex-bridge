@@ -104,7 +104,7 @@ export function normalizeSessionRelayConfig(raw, { configDir = process.cwd() } =
   }
   const displayTimeZone = normalizeTimeZone(raw.sessionRelay?.displayTimeZone);
   const promptPreviewChars = positiveNumber(raw.sessionRelay?.promptPreviewChars, 4_000, {
-    min: 200,
+    min: 0,
     max: 10_000,
   });
   const rawInboundAttachments = raw.sessionRelay?.inboundAttachments;

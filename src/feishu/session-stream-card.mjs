@@ -1,4 +1,5 @@
 import { createSerializedFileWriter, readJsonArrayFile } from "../persistence/serialized-json-file.mjs";
+import { heartbeatMetadataText, unwrapHeartbeatEnvelope } from "../codex/codex-turn-collector.mjs";
 import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs";
 
 const MAX_STORED_PROGRESS = 12;
@@ -79,7 +80,7 @@ function finalElements({ answer, answerSegments, maxAnswerChars }) {
       continue;
     }
     if (segment?.type !== "text" || remaining <= 0) continue;
-    const text = String(segment.text || "").trim();
+    const text = unwrapHeartbeatEnvelope(segment.text);
     if (!text) continue;
     const clipped = boundedMarkdown(
       text,
@@ -108,6 +109,7 @@ export function buildSessionStreamCard({
   completedAtMs,
   durationMs,
   tokenUsage,
+  heartbeatSchedule,
   timeZone = "Asia/Shanghai",
   maxAnswerChars = 10_000,
 } = {}) {
@@ -126,7 +128,14 @@ export function buildSessionStreamCard({
       tag: "markdown",
       content: `*回答时间：${formatTimestamp(completedAtMs, timeZone)} · 用时：${formatDuration(durationMs)} · 本轮 Token：${tokenText}*`,
     });
-    summarySource = answer || answerSegments?.find((segment) => segment?.type === "text")?.text || "Codex 回复完成";
+    const heartbeatText = heartbeatMetadataText({ answer, answerSegments, heartbeatSchedule });
+    if (heartbeatText) {
+      elements.push({ tag: "hr" });
+      elements.push({ tag: "markdown", content: `*${heartbeatText}*` });
+    }
+    summarySource = unwrapHeartbeatEnvelope(
+      answer || answerSegments?.find((segment) => segment?.type === "text")?.text || "Codex 回复完成",
+    );
   } else {
     const elapsedMs = Number.isFinite(Number(startedAtMs))
       ? Math.max(0, Number(nowMs) - Number(startedAtMs))

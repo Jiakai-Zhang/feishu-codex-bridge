@@ -1,12 +1,12 @@
 import { CodexTurnCollector } from "./codex-turn-collector.mjs";
 import { CodexAppServerConnection } from "./codex-app-server-connection.mjs";
 import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
+import { createCodexAppAutomationToolConfig } from "../runtime/codex-app-tools-host.mjs";
 
 const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
 const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
   "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
-
 function turnSandboxPolicy(mode, cwd) {
   switch (mode) {
     case "read-only":
@@ -165,6 +165,7 @@ export class CodexSessionController {
     requestTimeoutMs = 30_000,
     reconnectDelayMs = 2_000,
     sleepImpl = delay,
+    dynamicToolRequestHandler,
     log = () => {},
   }) {
     if (!appServerUrl) throw new TypeError("appServerUrl is required for the persistent session controller");
@@ -180,6 +181,7 @@ export class CodexSessionController {
     this.reconnectDelayMs = reconnectDelayMs;
     this.sleepImpl = sleepImpl;
     this.log = log;
+    this.dynamicToolRequestHandler = dynamicToolRequestHandler;
     this.states = new Map([...this.targets].map(([threadId, target]) => [threadId, controllerState(target)]));
     this.collector = new CodexTurnCollector({
       targets: [...this.targets.values()],
@@ -282,6 +284,9 @@ export class CodexSessionController {
       cwd: state.target.cwd,
       approvalPolicy: "never",
       sandbox: this.#resolvedSandboxMode(state.target.threadId),
+      ...(this.dynamicToolRequestHandler
+        ? { config: createCodexAppAutomationToolConfig(state.target.threadId) }
+        : {}),
     };
   }
 
@@ -358,6 +363,7 @@ export class CodexSessionController {
       WebSocketImpl: this.WebSocketImpl,
       requestTimeoutMs: this.requestTimeoutMs,
       clientLabel: "controller",
+      onRequest: this.dynamicToolRequestHandler,
       log: this.log,
       onNotification: (method, params) => this.#handleNotification(method, params),
       onClose: ({ intentional }) => {

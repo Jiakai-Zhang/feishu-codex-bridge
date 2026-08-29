@@ -22,6 +22,7 @@ export class CodexAppServerConnection {
     WebSocketImpl = globalThis.WebSocket,
     requestTimeoutMs = 30_000,
     clientLabel = "client",
+    onRequest,
     onNotification = () => {},
     onClose = () => {},
     log = () => {},
@@ -32,6 +33,7 @@ export class CodexAppServerConnection {
     this.WebSocketImpl = WebSocketImpl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.clientLabel = clientLabel;
+    this.onRequest = onRequest;
     this.onNotification = onNotification;
     this.onClose = onClose;
     this.log = log;
@@ -162,12 +164,33 @@ export class CodexAppServerConnection {
       return;
     }
     if (message?.method && message?.id !== undefined) {
+      void this.#handleRequest(message);
+      return;
+    }
+    if (message?.method) this.onNotification(message.method, message.params || {});
+  }
+
+  async #handleRequest(message) {
+    if (typeof this.onRequest !== "function") {
       try {
         this.#send({ id: message.id, error: { code: -32601, message: `Unsupported ${this.clientLabel} request: ${message.method}` } });
       } catch {}
       return;
     }
-    if (message?.method) this.onNotification(message.method, message.params || {});
+    try {
+      const result = await this.onRequest(message.method, message.params || {});
+      this.#send({ id: message.id, result: result ?? null });
+    } catch (error) {
+      try {
+        this.#send({
+          id: message.id,
+          error: {
+            code: Number.isInteger(error?.rpcCode) ? error.rpcCode : -32000,
+            message: String(error?.message || `The ${this.clientLabel} request failed`),
+          },
+        });
+      } catch {}
+    }
   }
 
   #handleClose(event) {

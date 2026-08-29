@@ -48,6 +48,62 @@ function boundedText(value, maxChars, suffix) {
   return `${text.slice(0, maxChars)}\n\n${suffix}`;
 }
 
+export function parseHeartbeatEnvelope(value) {
+  const text = String(value || "").trim();
+  const envelope = text.match(/^<heartbeat>\s*([\s\S]*?)\s*<\/heartbeat>$/i);
+  if (!envelope) return undefined;
+  const message = envelope[1].match(/<message>\s*([\s\S]*?)\s*<\/message>/i);
+  if (!message) return undefined;
+  const field = (name) => envelope[1].match(new RegExp(`<${name}>\\s*([\\s\\S]*?)\\s*<\\/${name}>`, "i"))?.[1]?.trim();
+  return Object.freeze({
+    message: message[1].trim(),
+    automationId: field("automation_id"),
+    decision: field("decision"),
+  });
+}
+
+export function unwrapHeartbeatEnvelope(value) {
+  const text = String(value || "").trim();
+  return parseHeartbeatEnvelope(text)?.message ?? text;
+}
+
+function heartbeatEnvelopeFromAnswer({ answer, answerSegments }) {
+  const source = Array.isArray(answerSegments)
+    ? answerSegments
+    : [{ type: "text", text: answer }];
+  for (const segment of source) {
+    if (segment?.type !== "text") continue;
+    const heartbeat = parseHeartbeatEnvelope(segment.text);
+    if (heartbeat) return heartbeat;
+  }
+  return undefined;
+}
+
+export function heartbeatMetadataText({ answer, answerSegments, heartbeatSchedule }) {
+  const heartbeat = heartbeatEnvelopeFromAnswer({ answer, answerSegments });
+  if (!heartbeat) return undefined;
+  const decisionLabels = {
+    DONT_NOTIFY: "无需额外提醒",
+    NOTIFY: "需要提醒",
+  };
+  const details = ["定时任务", "类型：Heartbeat"];
+  if (heartbeat.automationId) details.push(`ID：${heartbeat.automationId.slice(0, 100)}`);
+  if (heartbeatSchedule) details.push(`间隔：${String(heartbeatSchedule).slice(0, 100)}`);
+  if (heartbeat.decision) {
+    details.push(`本轮：${decisionLabels[heartbeat.decision] || heartbeat.decision.slice(0, 100)}`);
+  }
+  return details.join(" · ");
+}
+
+function heartbeatMetadataRows(options) {
+  const text = heartbeatMetadataText(options);
+  if (!text) return [];
+  return [
+    [{ tag: "hr" }],
+    [{ tag: "text", text, style: ["italic"] }],
+  ];
+}
+
 function answerContentRows({
   answer,
   answerSegments,
@@ -70,7 +126,7 @@ function answerContentRows({
       continue;
     }
     if (segment?.type !== "text") continue;
-    const original = String(segment.text || "").trim();
+    const original = unwrapHeartbeatEnvelope(segment.text);
     if (!original) continue;
     let text = original;
     if (text.length > remaining) {
@@ -271,60 +327,64 @@ export function buildExternalTurnPost({
   timeZone = "Asia/Shanghai",
   maxPromptChars = 4_000,
   maxReplyChars = 10_000,
+  heartbeatSchedule,
   hasPromptResources = false,
   mentionOpenId,
 }) {
   const entries = Array.isArray(promptEntries) && promptEntries.length > 0
     ? promptEntries
     : [{ text: prompt, uploadedImages, promptAtMs, hasPromptResources }];
-  const content = [[{ tag: "md", text: "#### 对应 Prompt" }]];
-  const showEntryHeadings = entries.length > 1;
-  entries.forEach((entry, index) => {
-    const entryText = boundedText(
-      entry?.text,
-      maxPromptChars,
-      "（Prompt 过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
-    );
-    const entryImages = Array.isArray(entry?.uploadedImages)
-      ? entry.uploadedImages.filter((image) => image?.imageKey)
-      : [];
-    if (showEntryHeadings) {
-      const sourceLabel = entry?.source === "feishu" ? "飞书" : "Codex";
-      content.push([{
-        tag: "md",
-        text: `${index === 0 ? "##### 初始 Prompt" : `##### 调整方向 ${index}`} · ${sourceLabel}`,
-      }]);
-    }
-    if (entryText) {
-      content.push([{ tag: "md", text: quoteMarkdown(entryText) }]);
-    } else if (entryImages.length === 0) {
-      content.push([{
-        tag: "md",
-        text: quoteMarkdown(entry?.hasPromptResources ? "（图片未能嵌入）" : "（无文本 Prompt）"),
-      }]);
-    }
-    for (const image of entryImages) {
-      content.push([{ tag: "img", image_key: String(image.imageKey) }]);
-    }
-    const entryTime = Number(entry?.promptAtMs);
-    if (Number.isFinite(entryTime) && entryTime > 0) {
-      const label = index === 0 ? "发送时间" : "调整时间";
+  const content = [];
+  if (Number(maxPromptChars) > 0) {
+    content.push([{ tag: "md", text: "#### 对应 Prompt" }]);
+    const showEntryHeadings = entries.length > 1;
+    entries.forEach((entry, index) => {
+      const entryText = boundedText(
+        entry?.text,
+        maxPromptChars,
+        "（Prompt 过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
+      );
+      const entryImages = Array.isArray(entry?.uploadedImages)
+        ? entry.uploadedImages.filter((image) => image?.imageKey)
+        : [];
+      if (showEntryHeadings) {
+        const sourceLabel = entry?.source === "feishu" ? "飞书" : "Codex";
+        content.push([{
+          tag: "md",
+          text: `${index === 0 ? "##### 初始 Prompt" : `##### 调整方向 ${index}`} · ${sourceLabel}`,
+        }]);
+      }
+      if (entryText) {
+        content.push([{ tag: "md", text: quoteMarkdown(entryText) }]);
+      } else if (entryImages.length === 0) {
+        content.push([{
+          tag: "md",
+          text: quoteMarkdown(entry?.hasPromptResources ? "（图片未能嵌入）" : "（无文本 Prompt）"),
+        }]);
+      }
+      for (const image of entryImages) {
+        content.push([{ tag: "img", image_key: String(image.imageKey) }]);
+      }
+      const entryTime = Number(entry?.promptAtMs);
+      if (Number.isFinite(entryTime) && entryTime > 0) {
+        const label = index === 0 ? "发送时间" : "调整时间";
+        content.push([{
+          tag: "text",
+          text: `${label}：${formatPromptTime(entryTime, timeZone)}`,
+          style: ["italic"],
+        }]);
+      }
+    });
+    if (!entries.some((entry) => Number.isFinite(Number(entry?.promptAtMs)) && Number(entry.promptAtMs) > 0)) {
       content.push([{
         tag: "text",
-        text: `${label}：${formatPromptTime(entryTime, timeZone)}`,
+        text: `发送时间：${formatPromptTime(promptAtMs, timeZone)}`,
         style: ["italic"],
       }]);
     }
-  });
-  if (!entries.some((entry) => Number.isFinite(Number(entry?.promptAtMs)) && Number(entry.promptAtMs) > 0)) {
-    content.push([{
-      tag: "text",
-      text: `发送时间：${formatPromptTime(promptAtMs, timeZone)}`,
-      style: ["italic"],
-    }]);
+    content.push([{ tag: "hr" }]);
   }
   content.push(
-    [{ tag: "hr" }],
     [{ tag: "md", text: "#### 最终回答" }],
     ...finalMentionRows(mentionOpenId),
     ...answerContentRows({
@@ -333,10 +393,10 @@ export function buildExternalTurnPost({
       maxReplyChars,
       suffix: "（回复过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
       emptyText: "Codex 已完成处理，但没有返回文本结果。",
-      quote: true,
     }),
   );
   content.push(...answerMetadataRows({ completedAtMs, durationMs, tokenUsage, timeZone }));
+  content.push(...heartbeatMetadataRows({ answer, answerSegments, heartbeatSchedule }));
   return {
     zh_cn: {
       title: "Codex 回复",
@@ -353,6 +413,7 @@ export function buildFinalAnswerReplyPost({
   tokenUsage,
   timeZone = "Asia/Shanghai",
   maxReplyChars = 10_000,
+  heartbeatSchedule,
   mentionOpenId,
 }) {
   const content = [
@@ -366,6 +427,7 @@ export function buildFinalAnswerReplyPost({
     }),
   ];
   content.push(...answerMetadataRows({ completedAtMs, durationMs, tokenUsage, timeZone }));
+  content.push(...heartbeatMetadataRows({ answer, answerSegments, heartbeatSchedule }));
   return {
     zh_cn: {
       content,
@@ -413,6 +475,7 @@ export function buildGoalTurnPost({
   tokenUsage,
   timeZone = "Asia/Shanghai",
   maxReplyChars = 10_000,
+  heartbeatSchedule,
   mentionOpenId,
 }) {
   const statusLabels = {
@@ -440,10 +503,10 @@ export function buildGoalTurnPost({
           maxReplyChars,
           suffix: "（本轮结果过长，已截断；完整内容保留在绑定的 Codex 任务中。）",
           emptyText: "Codex 已完成本轮 Goal 处理，但没有返回文本结果。",
-          quote: true,
         }),
       ];
   content.push(...answerMetadataRows({ completedAtMs, durationMs, tokenUsage, timeZone }));
+  content.push(...heartbeatMetadataRows({ answer, answerSegments, heartbeatSchedule }));
   return {
     zh_cn: {
       title: goal?.status === "complete" ? "Codex Goal 已完成" : "Codex Goal 进展",

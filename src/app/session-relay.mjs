@@ -6,6 +6,7 @@ import { basenameFsPath, isPathInside } from "../runtime/shared/fs-paths.mjs";
 import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
+import { readAutomationSchedule } from "../codex/codex-automation-metadata.mjs";
 import { CodexDesktopCatalog } from "../codex/codex-desktop-catalog.mjs";
 import { CodexIncrementalSummarizer } from "../codex/codex-incremental-summarizer.mjs";
 import { CodexSessionController, isFeishuMessageClientId } from "../codex/codex-session-controller.mjs";
@@ -16,6 +17,7 @@ import {
   buildGoalTurnPost,
   buildSessionProgressPost,
   externalTurnDeliveryId,
+  parseHeartbeatEnvelope,
 } from "../codex/codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "../persistence/delivery-outbox.mjs";
 import { createSerializedFileWriter } from "../persistence/serialized-json-file.mjs";
@@ -100,6 +102,7 @@ import {
   SessionStreamCardStore,
 } from "../feishu/session-stream-card.mjs";
 import { ThreadWorkQueue } from "../runtime/thread-work-queue.mjs";
+import { createCodexAppToolRequestHandler } from "../runtime/codex-app-tools-host.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../..");
@@ -417,6 +420,7 @@ function createSessionController(targets) {
       relaySettings.get(threadId).sandboxMode,
       config.sandboxMode,
     ),
+    dynamicToolRequestHandler: createCodexAppToolRequestHandler({ log }),
     onTurnCompleted: async (record) => {
       const actor = activeTurnActors.get(record.threadId);
       const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;
@@ -1084,7 +1088,7 @@ async function tryEnsureTurnStreamCard(record) {
   }
 }
 
-async function tryFinalizeTurnStreamCard(record, answerSegments) {
+async function tryFinalizeTurnStreamCard(record, answerSegments, heartbeatSchedule) {
   const current = streamCards.get(record.threadId, record.turnId);
   if (!current || !channelConnectivity.connected) return false;
   try {
@@ -1094,6 +1098,7 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
       completedAtMs: record.completedAtMs,
       durationMs: record.durationMs,
       tokenUsage: record.tokenUsage,
+      heartbeatSchedule,
       timeZone: config.sessionRelay.displayTimeZone,
       maxAnswerChars: config.maxReplyChars,
     }));
@@ -1110,8 +1115,8 @@ async function queueStreamCardFollowups(baseRecord, attachments) {
   await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
-  if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
+async function tryCompleteTurnStreamCard(record, baseDelivery, media, heartbeatSchedule) {
+  if (!await tryFinalizeTurnStreamCard(record, media.segments, heartbeatSchedule)) return false;
   await queueStreamCardFollowups(baseDelivery, media.attachments);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
@@ -1946,6 +1951,17 @@ function finalMentionOpenId(record) {
   return bindingsByChat.get(record.chatId)?.ownerOpenId || config.agent.ownerOpenId;
 }
 
+async function heartbeatScheduleFromAnswer(answer) {
+  const heartbeat = parseHeartbeatEnvelope(answer);
+  if (!heartbeat?.automationId) return undefined;
+  try {
+    return (await readAutomationSchedule(heartbeat.automationId))?.interval;
+  } catch (error) {
+    log(`automation interval could not be read: ${safeError(error)}`);
+    return undefined;
+  }
+}
+
 async function processCompletedTurn(record) {
   const deliveryId = externalTurnDeliveryId(record.threadId, record.turnId);
   if (completed.has(deliveryId)) return;
@@ -1954,6 +1970,7 @@ async function processCompletedTurn(record) {
     return;
   }
   const mentionOpenId = finalMentionOpenId(record);
+  const heartbeatSchedule = await heartbeatScheduleFromAnswer(record.answer);
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
     const media = await prepareFinalAnswerDelivery(record);
@@ -1970,11 +1987,12 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2007,11 +2025,12 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2047,11 +2066,12 @@ async function processCompletedTurn(record) {
       timeZone: config.sessionRelay.displayTimeZone,
       maxPromptChars: config.sessionRelay.promptPreviewChars,
       maxReplyChars: config.maxReplyChars,
+      heartbeatSchedule,
       mentionOpenId,
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }

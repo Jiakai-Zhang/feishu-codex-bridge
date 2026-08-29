@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import { CodexSessionController } from "../../../src/codex/codex-session-controller.mjs";
 
@@ -20,6 +21,7 @@ function userInputItem(clientId, input, id = `user-${clientId}`) {
 function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds = [] } = {}) {
   const server = {
     requests: [],
+    clientResponses: [],
     sockets: [],
     nextTurn: 1,
     failNextSteer: false,
@@ -69,6 +71,10 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
   }
 
   function handle(socket, request) {
+    if (request.id !== undefined && !request.method) {
+      server.clientResponses.push(structuredClone(request));
+      return;
+    }
     server.requests.push(structuredClone(request));
     if (request.method === "initialize") {
       respond(socket, request.id, { userAgent: "test" });
@@ -242,6 +248,12 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
 
   server.FakeWebSocket = FakeWebSocket;
   server.notify = notify;
+  server.requestClient = (method, params, id = 900) => {
+    const socket = server.sockets.at(-1);
+    queueMicrotask(() => socket?.dispatchEvent(new MessageEvent("message", {
+      data: JSON.stringify({ id, method, params }),
+    })));
+  };
   server.completeActive = (answer, { goalStatus } = {}) => {
     const turn = active();
     if (!turn) throw new Error("no active turn");
@@ -431,6 +443,47 @@ test("starts an idle Feishu prompt, steers the next prompt into the same active 
     { text: "adjust it", clientId: "om_adjust" },
   ]);
   assert.equal(completed[0].answer, "final answer");
+  await client.stop();
+});
+
+test("routes app-server dynamic tool calls through the Desktop tool handler", async () => {
+  const server = fakeControllerServer();
+  const calls = [];
+  const client = controller(server, {
+    dynamicToolRequestHandler: async (method, params) => {
+      calls.push({ method, params });
+      return { contentItems: [{ type: "inputText", text: "active" }], success: true };
+    },
+  });
+  await client.start();
+  const resume = server.requests.find(({ method }) => method === "thread/resume");
+  assert.equal(resume.params.config["mcp_servers.codex_app.command"], process.execPath);
+  assert.match(
+    resume.params.config["mcp_servers.codex_app.args"][0],
+    /codex-app-tools-mcp-proxy\.mjs$/,
+  );
+  assert.deepEqual(resume.params.config["mcp_servers.codex_app.env"], {
+    FEISHU_CODEX_THREAD_ID: threadId,
+  });
+  assert.equal(resume.params.config["mcp_servers.codex_app.enabled"], true);
+  assert.deepEqual(resume.params.config["mcp_servers.codex_app.enabled_tools"], ["automation_update"]);
+
+  const params = {
+    threadId,
+    turnId: "turn-tool",
+    callId: "call-tool",
+    namespace: "codex_app",
+    tool: "automation_update",
+    arguments: { mode: "view" },
+  };
+  server.requestClient("item/tool/call", params);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [{ method: "item/tool/call", params }]);
+  assert.deepEqual(server.clientResponses.at(-1), {
+    id: 900,
+    result: { contentItems: [{ type: "inputText", text: "active" }], success: true },
+  });
   await client.stop();
 });
 
