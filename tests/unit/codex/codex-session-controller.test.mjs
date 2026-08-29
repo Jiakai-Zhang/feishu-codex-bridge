@@ -455,6 +455,10 @@ test("routes app-server dynamic tool calls through the Desktop tool handler", as
     },
   });
   await client.start();
+  const resume = server.requests.find(({ method }) => method === "thread/resume");
+  assert.deepEqual(resume.params.config, {
+    "mcp_servers.codex_app.enabled_tools": ["automation_update"],
+  });
 
   const params = {
     threadId,

@@ -6,6 +6,9 @@ const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
 const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
   "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+const CODEX_APP_AUTOMATION_TOOL_CONFIG = Object.freeze({
+  "mcp_servers.codex_app.enabled_tools": Object.freeze(["automation_update"]),
+});
 
 function turnSandboxPolicy(mode, cwd) {
   switch (mode) {
@@ -284,6 +287,7 @@ export class CodexSessionController {
       cwd: state.target.cwd,
       approvalPolicy: "never",
       sandbox: this.#resolvedSandboxMode(state.target.threadId),
+      ...(this.dynamicToolRequestHandler ? { config: CODEX_APP_AUTOMATION_TOOL_CONFIG } : {}),
     };
   }
 

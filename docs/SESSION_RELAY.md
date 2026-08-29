@@ -61,6 +61,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 - 多端交替输入按 App Server 接受顺序形成一个输入事件流，不拆分、合并或覆盖。
 - 一个 App Server Turn 是唯一的最终回答与幂等边界。
 - 只要该 Turn 含飞书输入，最终答案回复其中最后一条飞书消息；完全没有飞书输入时，Bot 才在绑定群主动发送新消息。
+- Desktop-only 自动 Turn 与 Goal/heartbeat 的主动消息使用飞书富文本 `post` 投递；最终答案保留 Markdown 标题、列表和代码块，不再整体包成引用。
 - Bridge 启动时不补发历史答案。启动时若绑定 Session 正在运行，则接管活动 Turn；重连后会补齐断线期间刚完成的 Turn。
 
 ## 公开进度与最终回答
@@ -328,7 +329,7 @@ Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送�
 
 Session Relay 和 Codex Desktop 必须连接同一个本机 App Server。独立 App Server 对 Session 实行单 writer 锁；两个 App Server 进程不能分别接续同一 Session。
 
-Session 中由 Desktop 注册的动态工具会随 `thread/resume` 恢复。Windows 上模型触发这类工具时，共享 App Server 通过 `item/tool/call` 向 Bridge 发起反向请求；Bridge 只把该请求转发给由 OpenAI 签名的 Codex Desktop 进程持有、且实际声明同名工具的原生 app-tools 管道，并把结构化结果回传。若多个管道同时声明同一工具，Bridge 会拒绝歧义选择；也可通过 `CODEX_APP_TOOLS_PIPE_PATH` 固定精确管道。未知反向请求、未声明工具和无效结果仍会拒绝，不会退化为任意本机调用。
+Session 的 `thread/resume` 会显式恢复定时任务所需的 `codex_app/automation_update`。Windows 上模型触发已启用的 Desktop 动态工具时，共享 App Server 通过 `item/tool/call` 向 Bridge 发起反向请求；Bridge 只把该请求转发给由 OpenAI 签名的 Codex Desktop 进程持有、且实际声明同名工具的原生 app-tools 管道，并把结构化结果回传。若多个管道同时声明同一工具，Bridge 会拒绝歧义选择；也可通过 `CODEX_APP_TOOLS_PIPE_PATH` 固定精确管道。未知反向请求、未声明工具和无效结果仍会拒绝，不会退化为任意本机调用。
 
 共享 App Server 启动时会预置一个禁用的 `codex_app` stdio transport。Codex Desktop 创建线程时只发送 `mcp_servers.codex_app.enabled_tools` 等增量配置；这个预置项保证增量合并后仍是有效 MCP 配置，同时不会自行启动额外进程。
 
@@ -398,5 +399,7 @@ macOS 使用：
   "sandboxMode": "workspace-write"
 }
 ```
+
+将 `sessionRelay.promptPreviewChars` 设为 `0` 可完全省略最终消息中的 Prompt、Prompt 图片和发送时间，只保留回答与运行元数据。
 
 `bindings: []` 是合法的首次启动状态；未绑定群会被拒绝，但 owner 仍可在 Bot 私聊发送 `/add` 完成第一个绑定。可选的多用户根目录、成员和 Bridge 创建的 Project 保存在运行目录的私有 `session-relay-access.json`，不写入仓库或 `bridge.config.json`。完整示例与超时、重试和长度参数见 [`bridge.config.example.json`](../bridge.config.example.json)。

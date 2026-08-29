@@ -6,6 +6,7 @@ import { basenameFsPath, isPathInside } from "../runtime/shared/fs-paths.mjs";
 import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
+import { readAutomationSchedule } from "../codex/codex-automation-metadata.mjs";
 import { CodexDesktopCatalog } from "../codex/codex-desktop-catalog.mjs";
 import { CodexIncrementalSummarizer } from "../codex/codex-incremental-summarizer.mjs";
 import { CodexSessionController, isFeishuMessageClientId } from "../codex/codex-session-controller.mjs";
@@ -16,6 +17,7 @@ import {
   buildGoalTurnPost,
   buildSessionProgressPost,
   externalTurnDeliveryId,
+  parseHeartbeatEnvelope,
 } from "../codex/codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "../persistence/delivery-outbox.mjs";
 import { createSerializedFileWriter } from "../persistence/serialized-json-file.mjs";
@@ -1948,6 +1950,17 @@ function finalMentionOpenId(record) {
   return bindingsByChat.get(record.chatId)?.ownerOpenId || config.agent.ownerOpenId;
 }
 
+async function heartbeatScheduleFromAnswer(answer) {
+  const heartbeat = parseHeartbeatEnvelope(answer);
+  if (!heartbeat?.automationId) return undefined;
+  try {
+    return (await readAutomationSchedule(heartbeat.automationId))?.interval;
+  } catch (error) {
+    log(`automation interval could not be read: ${safeError(error)}`);
+    return undefined;
+  }
+}
+
 async function processCompletedTurn(record) {
   const deliveryId = externalTurnDeliveryId(record.threadId, record.turnId);
   if (completed.has(deliveryId)) return;
@@ -1956,6 +1969,7 @@ async function processCompletedTurn(record) {
     return;
   }
   const mentionOpenId = finalMentionOpenId(record);
+  const heartbeatSchedule = await heartbeatScheduleFromAnswer(record.answer);
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
     const media = await prepareFinalAnswerDelivery(record);
@@ -1972,6 +1986,7 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
@@ -2009,6 +2024,7 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
@@ -2049,6 +2065,7 @@ async function processCompletedTurn(record) {
       timeZone: config.sessionRelay.displayTimeZone,
       maxPromptChars: config.sessionRelay.promptPreviewChars,
       maxReplyChars: config.maxReplyChars,
+      heartbeatSchedule,
       mentionOpenId,
     }),
     createdAt: Date.now(),
