@@ -78,6 +78,16 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
     server.requests.push(structuredClone(request));
     if (request.method === "initialize") {
       respond(socket, request.id, { userAgent: "test" });
+    } else if (request.method === "thread/start") {
+      respond(socket, request.id, {
+        thread: threadSnapshot(true, "thread-created"),
+        model: server.settings.model,
+        modelProvider: "openai",
+        serviceTier: server.settings.serviceTier,
+        reasoningEffort: server.settings.effort,
+      });
+    } else if (request.method === "thread/name/set") {
+      respond(socket, request.id, {});
     } else if (request.method === "thread/resume") {
       if (server.resumeConflictThreadIds.has(request.params.threadId)) {
         respond(socket, request.id, undefined, {
@@ -97,6 +107,8 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
       respond(socket, request.id, {
         thread: threadSnapshot(request.params.includeTurns, request.params.threadId),
       });
+    } else if (request.method === "thread/delete") {
+      respond(socket, request.id, {});
     } else if (request.method === "thread/goal/get") {
       respond(socket, request.id, { goal: structuredClone(server.goal) });
     } else if (request.method === "turn/start") {
@@ -484,6 +496,69 @@ test("routes app-server dynamic tool calls through the Desktop tool handler", as
     id: 900,
     result: { contentItems: [{ type: "inputText", text: "active" }], success: true },
   });
+  await client.stop();
+});
+
+test("creates a fresh Chat on the persistent connection without resuming an empty rollout", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server, {
+    sandboxMode: "danger-full-access",
+    dynamicToolRequestHandler: async () => ({ contentItems: [], success: true }),
+    dynamicToolsProvider: async () => [{
+      type: "namespace",
+      name: "codex_app",
+      description: "Codex Desktop tools",
+      tools: [{
+        type: "function",
+        name: "automation_update",
+        description: "Update an automation",
+        inputSchema: { type: "object" },
+      }],
+    }],
+  });
+  await client.start();
+
+  const created = await client.createTarget({
+    chatId: "oc_private",
+    cwd: repoCwd,
+    name: "Temporary Chat",
+  });
+
+  assert.equal(created.id, "thread-created");
+  assert.equal(client.hasTarget("thread-created"), true);
+  assert.equal(
+    server.requests.some(({ method, params }) => method === "thread/resume" && params.threadId === "thread-created"),
+    false,
+  );
+  const start = server.requests.find(({ method }) => method === "thread/start");
+  assert.equal(start.params.dynamicTools[0].tools[0].name, "automation_update");
+  assert.equal(start.params.sandbox, "danger-full-access");
+
+  const submitted = await client.submitPrompt({
+    threadId: "thread-created",
+    text: "/schedule tomorrow at 9",
+    clientUserMessageId: "om_schedule",
+  });
+  assert.equal(submitted.kind, "started");
+  await client.stop();
+});
+
+test("reads and permanently deletes a persisted temporary Chat", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+
+  const snapshot = await client.readPersistedThread(threadId, { includeTurns: true });
+  assert.equal(snapshot.id, threadId);
+  assert.equal(client.hasTarget(threadId), true);
+
+  const deleted = await client.deletePersistedThread(threadId);
+  assert.deepEqual(deleted, { deleted: true, threadId });
+  assert.equal(client.hasTarget(threadId), false);
+  assert.deepEqual(
+    server.requests.filter(({ method }) => method === "thread/delete").map(({ params }) => params),
+    [{ threadId }],
+  );
   await client.stop();
 });
 

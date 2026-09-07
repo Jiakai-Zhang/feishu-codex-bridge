@@ -10,3 +10,11 @@ export function parseTemporaryChatCommand(value) {
     raw: text,
   });
 }
+
+export function parseDirectSchedulePrompt(value) {
+  const text = String(value || "").trim();
+  const match = /^\/schedule(?:@[^\s]+)?(?:\s+([\s\S]*))?$/i.exec(text);
+  if (!match) return undefined;
+  const args = String(match[1] || "").trim();
+  return `/schedule${args ? ` ${args}` : ""}`;
+}

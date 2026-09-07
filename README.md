@@ -205,7 +205,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 /chat 帮我分析这个问题
 ```
 
-`/chat` 后面的正文是第一条 Prompt，不是标题。私聊默认使用 Bridge 启动时的 Codex 工作目录；在已有绑定群中使用时继承原 Session 的工作目录。发送 `/endchat` 结束临时上下文：群内随后返回固定绑定的原 Session，私聊中则可再次发送 `/chat` 新建上下文。已经提交的临时消息不会被取消，完成后仍会回复原飞书会话。临时 Chat、队列和返回位置会跨 Bridge 重启保留。
+`/chat` 后面的正文是第一条 Prompt，不是标题。私聊默认使用 Bridge 启动时的 Codex 工作目录；在已有绑定群中使用时继承原 Session 的工作目录。发送 `/endchat` 结束临时上下文：群内随后返回固定绑定的原 Session，私聊中则可再次发送 `/chat` 新建上下文。已经提交的临时消息不会被取消，完成后仍会回复原飞书会话。完成后的公开对话先归档为 `<workspace>/work/feishu-codex-bridge/temporary-chat-archives/` 下的 Markdown 文件，再从 Codex 永久删除；失败会安全重试。临时 Chat、队列和返回位置会跨 Bridge 重启保留。
 
 ### 2. 创建绑定
 
@@ -232,7 +232,7 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 | 命令 | 作用 |
 | --- | --- |
 | `/chat [首条 Prompt]` | 在当前飞书私聊或绑定群创建/继续独立的临时 Codex Chat |
-| `/endchat` | 结束临时 Chat；群内返回原绑定任务，私聊等待下一次 `/chat` |
+| `/endchat` | 结束临时 Chat；归档内容后删除 Codex 对话，群内返回原绑定任务，私聊等待下一次 `/chat` |
 | `/status` | 查看连接、Turn、模型、Plan、Token、Goal、队列和待提交附件摘要 |
 | `/stop` | 暂停活动 Goal（如有）并中止当前 Turn；不清空队列 |
 | `/steer <调整方向>` | 显式调整当前 Turn；共享群仅 Session owner 或当前 Turn 初始发起者可用 |

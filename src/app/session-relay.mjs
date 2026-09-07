@@ -80,11 +80,16 @@ import {
 } from "../relay/session-relay-core.mjs";
 import { SessionPromptQueue } from "../persistence/session-prompt-queue.mjs";
 import { SessionSummaryDocumentStore } from "../persistence/session-summary-document-store.mjs";
+import { TemporaryChatArchiveStore } from "../persistence/temporary-chat-archive-store.mjs";
 import { TemporaryChatStore } from "../persistence/temporary-chat-store.mjs";
 import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
 import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
-import { parseTemporaryChatCommand } from "../relay/temporary-chat-command.mjs";
+import {
+  parseDirectSchedulePrompt,
+  parseTemporaryChatCommand,
+} from "../relay/temporary-chat-command.mjs";
+import { retireTemporaryChat } from "../relay/temporary-chat-retirement.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
 import {
   effectiveSessionSandboxMode,
@@ -126,6 +131,7 @@ const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json")
 const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
 const attachmentDraftsPath = path.join(runtimeDir, "session-relay-attachment-drafts.json");
 const temporaryChatsPath = path.join(runtimeDir, "session-relay-temporary-chats.json");
+const temporaryChatArchivesPath = path.join(runtimeDir, "temporary-chat-archives");
 const sessionAccessPath = path.join(runtimeDir, "session-relay-access.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
@@ -160,6 +166,7 @@ const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
 });
 const sessionPermissionFlow = new SessionPermissionFlow();
 const temporaryChats = await TemporaryChatStore.open(temporaryChatsPath);
+const temporaryChatArchives = new TemporaryChatArchiveStore(temporaryChatArchivesPath);
 const longAnswerDocuments = await LongAnswerDocumentStore.open(longAnswerDocumentsPath);
 const longAnswerDocumentManager = config.larkCliEntry
   ? new FeishuLongAnswerDocumentManager({
@@ -454,16 +461,29 @@ async function ensureSessionControllerTarget(target) {
   await sessionController.addTarget(target);
 }
 
+async function createSessionControllerTarget(target) {
+  if (!sessionController) {
+    sessionController = createSessionController([]);
+    await sessionController.start();
+  }
+  return sessionController.createTarget(target);
+}
+
 async function retireEndedTemporaryChat(threadId) {
   const record = temporaryChats.getByThread(threadId);
-  if (!record || record.status !== "ended" || promptQueue.count(threadId) > 0) return false;
-  const status = await sessionController?.getStatus(threadId, { refresh: false }).catch(() => undefined);
-  if (status?.status?.type === "active" || status?.goal?.status === "active") return false;
   const deliveryPrefix = `codex-turn:${threadId}:`;
-  if (deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix))) return false;
-  sessionController?.removeTarget(threadId);
-  await temporaryChats.remove(threadId);
-  return true;
+  return retireTemporaryChat({
+    record,
+    pendingPromptCount: promptQueue.count(threadId),
+    hasPendingDelivery: deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix)),
+    readStatus: async () => sessionController?.hasTarget(threadId)
+      ? sessionController.getStatus(threadId, { refresh: false })
+      : undefined,
+    archiveStore: temporaryChatArchives,
+    readThread: (id) => sessionController.readPersistedThread(id, { includeTurns: true }),
+    deleteThread: (id) => sessionController.deletePersistedThread(id),
+    removeRecord: (id) => temporaryChats.remove(id),
+  });
 }
 
 function inboundAttachmentPruneProtection(extraMessageIds = []) {
@@ -1619,12 +1639,11 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
       : "正在创建临时 Chat……",
   });
   const cwd = await temporaryChatCwd(baseBinding);
-  const thread = await startCodexProjectThread({
-    codexExecutable: config.codexExecutable,
+  const thread = await createSessionControllerTarget({
+    chatId: msg.chatId,
     cwd,
     name: "飞书临时 Chat",
     sandboxMode: config.sandboxMode,
-    appServerUrl: config.sessionRelay.appServerUrl,
   });
   const record = await temporaryChats.start({
     conversationId: msg.chatId,
@@ -1635,11 +1654,6 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
     createdAt: Date.now(),
   });
   try {
-    await ensureSessionControllerTarget({
-      threadId: record.threadId,
-      chatId: record.conversationId,
-      cwd: record.cwd,
-    });
     await relaySettings.initialize(record.threadId);
   } catch (error) {
     sessionController?.removeTarget(record.threadId);
@@ -1674,11 +1688,19 @@ async function endTemporaryChat(msg) {
     return;
   }
   await temporaryChats.end(msg.chatId);
-  await retireEndedTemporaryChat(current.threadId);
+  let retired = false;
+  try {
+    retired = await retireEndedTemporaryChat(current.threadId);
+  } catch (error) {
+    log(`temporary Chat retirement deferred: ${safeError(error)}`);
+  }
+  const retirementMessage = retired
+    ? "对话内容已保存到固定的本地复盘目录，并已从 Codex 永久删除。"
+    : "已提交的消息仍会完成并回复；完成后会自动归档到本地复盘目录，再从 Codex 永久删除。归档失败时会保留 Codex 对话并自动重试。";
   await channel.reply(msg, {
     markdown: current.baseThreadId
-      ? "已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。已提交的临时消息仍会完成并回复。"
-      : "已结束临时 Chat。已提交的消息仍会完成并回复；发送 `/chat` 可开始新的私聊上下文。",
+      ? `已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。${retirementMessage}`
+      : `已结束临时 Chat。${retirementMessage}发送 \`/chat\` 可开始新的私聊上下文。`,
   });
   await persistCompleted(msg.messageId);
 }
@@ -2307,6 +2329,21 @@ async function processInboundMessage(msg, baseBinding) {
         await processTemporaryChatCommand(msg, baseBinding, temporaryChatCommand);
         return;
       }
+      const directSchedulePrompt = !binding && msg.chatType === "p2p"
+        ? parseDirectSchedulePrompt(rawContent)
+        : undefined;
+      if (directSchedulePrompt !== undefined) {
+        if (msg.senderId !== config.agent.ownerOpenId) {
+          await channel.reply(msg, { markdown: "临时 Chat 和计划任务目前仅限 Owner 使用。" });
+          await persistCompleted(msg.messageId);
+          return;
+        }
+        await processTemporaryChatCommand(msg, baseBinding, {
+          action: "start",
+          prompt: directSchedulePrompt,
+        });
+        return;
+      }
       const directCommand = !binding && msg.chatType === "p2p"
         ? parseSessionCommand(rawContent)
         : undefined;
@@ -2472,13 +2509,15 @@ try {
       log("temporary group Chat skipped because its base binding is unavailable");
       continue;
     }
+    if (temporaryChat.status === "ended" && await temporaryChatArchives.has(temporaryChat)) continue;
     controllerTargets.push({
       threadId: temporaryChat.threadId,
       chatId: temporaryChat.conversationId,
       cwd: temporaryChat.cwd,
     });
   }
-  if (controllerTargets.length > 0) {
+  const hasPendingTemporaryRetirement = temporaryChats.list().some(({ status }) => status === "ended");
+  if (controllerTargets.length > 0 || hasPendingTemporaryRetirement) {
     sessionController = createSessionController(controllerTargets);
     await sessionController.start();
     log(`Codex session controller subscribed to ${controllerTargets.length} bound task(s)`);
