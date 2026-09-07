@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { basenameFsPath } from "../runtime/shared/fs-paths.mjs";
 import {
   parseCodexDesktopFilePrompt,
   parseFeishuAttachmentContexts,
@@ -14,7 +15,7 @@ function timestamp(value) {
 }
 
 function resourceName(value, fallback) {
-  const name = path.basename(String(value || "").replace(/[?#].*$/, ""));
+  const name = basenameFsPath(String(value || "").replace(/[?#].*$/, ""));
   return name || fallback;
 }
 

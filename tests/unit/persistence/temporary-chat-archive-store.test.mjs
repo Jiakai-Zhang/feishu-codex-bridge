@@ -45,7 +45,7 @@ test("renders only public temporary Chat content as reviewable Markdown", () => 
 });
 
 test("removes Bridge attachment paths from archived user prompts", () => {
-  const privatePath = "C:\\private\\bridge-cache\\report.pdf";
+  const privatePath = path.join(os.tmpdir(), "private", "bridge-cache", "report.pdf");
   const markdown = renderTemporaryChatArchive(record, {
     ...thread,
     turns: [{
