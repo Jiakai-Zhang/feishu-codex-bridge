@@ -1,6 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  parseCodexDesktopFilePrompt,
+  parseFeishuAttachmentContexts,
+  stripFeishuAttachmentContexts,
+} from "../feishu/feishu-inbound-attachment.mjs";
 
 function timestamp(value) {
   const number = Number(value);
@@ -13,12 +18,25 @@ function resourceName(value, fallback) {
   return name || fallback;
 }
 
+function archiveKey(threadId) {
+  return createHash("sha256").update(threadId).digest("hex").slice(0, 16);
+}
+
 function userContent(item) {
   const parts = [];
   for (const part of item?.content || []) {
     if (part?.type === "text") {
-      const text = String(part.text || "").trim();
+      const rawText = String(part.text || "");
+      const withoutLegacyContext = stripFeishuAttachmentContexts(rawText);
+      const desktopFilePrompt = parseCodexDesktopFilePrompt(withoutLegacyContext);
+      const text = String(desktopFilePrompt?.text ?? withoutLegacyContext).trim();
       if (text) parts.push(text);
+      for (const attachment of parseFeishuAttachmentContexts(rawText)) {
+        parts.push(`_[附件：${resourceName(attachment.name || attachment.localPath, "未命名附件")}]_`);
+      }
+      for (const file of desktopFilePrompt?.files || []) {
+        parts.push(`_[附件：${resourceName(file.name || file.path, "未命名附件")}]_`);
+      }
     } else if (part?.type === "localImage") {
       parts.push(`_[图片：${resourceName(part.path, "未命名图片")}]_`);
     } else if (part?.type === "image") {
@@ -69,7 +87,6 @@ export function renderTemporaryChatArchive(record, thread) {
     "",
     `- 创建时间：${timestamp(record?.createdAt) || "未知"}`,
     `- 退出时间：${timestamp(record?.endedAt) || "未知"}`,
-    `- Codex 对话 ID：${String(record?.threadId || "未知")}`,
     "",
   ];
   let visibleTurns = 0;
@@ -91,11 +108,11 @@ export class TemporaryChatArchiveStore {
   }
 
   filePath(record) {
-    const threadId = String(record?.threadId || "").replace(/[^A-Za-z0-9_-]/g, "_");
+    const threadId = String(record?.threadId || "");
     if (!threadId) throw new TypeError("Temporary Chat archive requires threadId");
     const createdAt = timestamp(record?.createdAt) || new Date(0).toISOString();
     const datePrefix = createdAt.replace(/[:.]/g, "-");
-    return path.join(this.directoryPath, `${datePrefix}_${threadId}.md`);
+    return path.join(this.directoryPath, `${datePrefix}_${archiveKey(threadId)}.md`);
   }
 
   async has(record) {

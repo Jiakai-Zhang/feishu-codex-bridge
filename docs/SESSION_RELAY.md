@@ -49,6 +49,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 
 - `/chat`：创建一个临时 Codex Session；创建完成后，普通消息持续进入该 Session。
 - `/chat <Prompt>`：创建临时 Session，并把后面的正文直接作为第一条 Prompt，不把它当作任务标题。
+- `/schedule <Prompt>`：Owner 可在尚未进入临时 Chat 的 Bot 私聊中直接发送；Bridge 自动创建临时 Session，并把完整 `/schedule` 命令作为第一条 Prompt 提交，无需先发送 `/chat`。
 - `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。临时内容会先写入本机复盘归档，再从 Codex 永久删除。
 - 绑定群中的临时 Chat 继承原 Session 的 cwd；Bot 私聊使用 Bridge 启动时的 Codex 工作目录。
 - 临时 Chat 状态持久化。Bridge 重启后仍能继续；`/endchat` 不取消已经提交的 Turn，其最终结果仍投递到原飞书会话。全部 Turn 和待投递结果完成后，Bridge 将公开的用户/Codex 对话保存为 UTF-8 Markdown 到 `<workspace>/work/feishu-codex-bridge/temporary-chat-archives/`，随后调用 Codex App Server `thread/delete`。归档或删除失败会保留退休记录并自动重试；归档失败时绝不会删除 Codex 对话。

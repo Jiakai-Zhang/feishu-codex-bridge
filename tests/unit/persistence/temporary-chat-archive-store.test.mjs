@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { buildCodexDesktopFilePrompt } from "../../../src/feishu/feishu-inbound-attachment.mjs";
 import {
   renderTemporaryChatArchive,
   TemporaryChatArchiveStore,
@@ -40,6 +41,33 @@ test("renders only public temporary Chat content as reviewable Markdown", () => 
   assert.match(markdown, /### Codex\n\nIt shows a cell\./);
   assert.doesNotMatch(markdown, /private reasoning/);
   assert.doesNotMatch(markdown, /C:\\private/);
+  assert.doesNotMatch(markdown, new RegExp(record.threadId));
+});
+
+test("removes Bridge attachment paths from archived user prompts", () => {
+  const privatePath = "C:\\private\\bridge-cache\\report.pdf";
+  const markdown = renderTemporaryChatArchive(record, {
+    ...thread,
+    turns: [{
+      id: "turn-with-file",
+      items: [{
+        type: "userMessage",
+        content: [{
+          type: "text",
+          text: buildCodexDesktopFilePrompt("Review the report", [{
+            kind: "file",
+            name: "report.pdf",
+            localPath: privatePath,
+          }]),
+        }],
+      }],
+    }],
+  });
+
+  assert.match(markdown, /Review the report/);
+  assert.match(markdown, /附件：report\.pdf/);
+  assert.doesNotMatch(markdown, /Files mentioned by the user/);
+  assert.equal(markdown.includes(privatePath), false);
 });
 
 test("writes one deterministic archive file and reuses it on retry", async () => {
@@ -53,6 +81,7 @@ test("writes one deterministic archive file and reuses it on retry", async () =>
   assert.equal(await store.has(record), true);
   assert.equal(await readFile(second, "utf8"), original);
   assert.deepEqual(await readdir(path.dirname(first)), [path.basename(first)]);
+  assert.equal(path.basename(first).includes(record.threadId), false);
 });
 
 test("rejects a mismatched Codex thread before writing an archive", async () => {

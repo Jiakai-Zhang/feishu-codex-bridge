@@ -316,6 +316,7 @@ const turnOutputTails = new Map();
 const streamCardClockRefreshes = new Set();
 const streamCardClockFailures = new Set();
 const inboundWorkQueue = new ThreadWorkQueue();
+const temporaryChatRetirementQueue = new ThreadWorkQueue();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -469,20 +470,22 @@ async function createSessionControllerTarget(target) {
   return sessionController.createTarget(target);
 }
 
-async function retireEndedTemporaryChat(threadId) {
-  const record = temporaryChats.getByThread(threadId);
-  const deliveryPrefix = `codex-turn:${threadId}:`;
-  return retireTemporaryChat({
-    record,
-    pendingPromptCount: promptQueue.count(threadId),
-    hasPendingDelivery: deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix)),
-    readStatus: async () => sessionController?.hasTarget(threadId)
-      ? sessionController.getStatus(threadId, { refresh: false })
-      : undefined,
-    archiveStore: temporaryChatArchives,
-    readThread: (id) => sessionController.readPersistedThread(id, { includeTurns: true }),
-    deleteThread: (id) => sessionController.deletePersistedThread(id),
-    removeRecord: (id) => temporaryChats.remove(id),
+function retireEndedTemporaryChat(threadId) {
+  return temporaryChatRetirementQueue.enqueue(threadId, async () => {
+    const record = temporaryChats.getByThread(threadId);
+    const deliveryPrefix = `codex-turn:${threadId}:`;
+    return retireTemporaryChat({
+      record,
+      pendingPromptCount: promptQueue.count(threadId),
+      hasPendingDelivery: deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix)),
+      readStatus: async () => sessionController?.hasTarget(threadId)
+        ? sessionController.getStatus(threadId, { refresh: false })
+        : undefined,
+      archiveStore: temporaryChatArchives,
+      readThread: (id) => sessionController.readPersistedThread(id, { includeTurns: true }),
+      deleteThread: (id) => sessionController.deletePersistedThread(id),
+      removeRecord: (id) => temporaryChats.remove(id),
+    });
   });
 }
 
@@ -1700,7 +1703,7 @@ async function endTemporaryChat(msg) {
   await channel.reply(msg, {
     markdown: current.baseThreadId
       ? `已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。${retirementMessage}`
-      : `已结束临时 Chat。${retirementMessage}发送 \`/chat\` 可开始新的私聊上下文。`,
+      : `已结束临时 Chat。${retirementMessage} 发送 \`/chat\` 可开始新的私聊上下文。`,
   });
   await persistCompleted(msg.messageId);
 }
