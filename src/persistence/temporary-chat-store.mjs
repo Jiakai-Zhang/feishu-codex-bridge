@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createSerializedFileWriter, readJsonArrayFile } from "./serialized-json-file.mjs";
 
 function normalizeRecord(record) {
@@ -17,6 +18,7 @@ function normalizeRecord(record) {
     chatType,
     baseThreadId: record.baseThreadId ? String(record.baseThreadId) : undefined,
     status,
+    pending: record.pending === true,
     createdAt: Number(record.createdAt) || Date.now(),
     endedAt: status === "ended" ? Number(record.endedAt) || Date.now() : undefined,
   };
@@ -80,8 +82,44 @@ export class TemporaryChatStore {
       throw new TypeError("The Codex task is already registered as a temporary Chat");
     }
     this.records.set(normalized.threadId, normalized);
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (error) {
+      this.records.delete(normalized.threadId);
+      throw error;
+    }
     return Object.freeze(structuredClone(normalized));
+  }
+
+  async startPending(record) {
+    return this.start({
+      ...record,
+      threadId: `pending_${randomUUID()}`,
+      pending: true,
+    });
+  }
+
+  async activate(pendingThreadId, threadId) {
+    const pendingKey = String(pendingThreadId || "");
+    const activeKey = String(threadId || "");
+    const current = this.records.get(pendingKey);
+    if (!current || current.status !== "active" || current.pending !== true) {
+      throw new TypeError("Temporary Chat activation requires an active pending record");
+    }
+    if (!activeKey || this.records.has(activeKey)) {
+      throw new TypeError("Temporary Chat activation requires a new Codex task");
+    }
+    const activated = normalizeRecord({ ...current, threadId: activeKey, pending: false });
+    this.records.delete(pendingKey);
+    this.records.set(activeKey, activated);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.records.delete(activeKey);
+      this.records.set(pendingKey, current);
+      throw error;
+    }
+    return Object.freeze(structuredClone(activated));
   }
 
   async end(conversationId, endedAt = Date.now()) {
@@ -89,13 +127,26 @@ export class TemporaryChatStore {
     if (!current) return undefined;
     const ended = normalizeRecord({ ...current, status: "ended", endedAt });
     this.records.set(ended.threadId, ended);
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (error) {
+      this.records.set(current.threadId, structuredClone(current));
+      throw error;
+    }
     return Object.freeze(structuredClone(ended));
   }
 
   async remove(threadId) {
-    if (!this.records.delete(String(threadId || ""))) return false;
-    await this.persist();
+    const key = String(threadId || "");
+    const current = this.records.get(key);
+    if (!current) return false;
+    this.records.delete(key);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.records.set(key, current);
+      throw error;
+    }
     return true;
   }
 

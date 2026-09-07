@@ -47,7 +47,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 
 ## 临时 Chat 与 Bot 私聊
 
-- `/chat`：创建一个临时 Codex Session；创建完成后，普通消息持续进入该 Session。
+- `/chat`：持久记录一个临时 Chat；首条 Prompt 到达时才创建 Codex Session，普通消息随后持续进入该 Session。这样空 Chat 跨 Bridge 重启时无需恢复不存在的 rollout。
 - `/chat <Prompt>`：创建临时 Session，并把后面的正文直接作为第一条 Prompt，不把它当作任务标题。
 - `/schedule <Prompt>`：Owner 可在尚未进入临时 Chat 的 Bot 私聊中直接发送；Bridge 自动创建临时 Session，并把完整 `/schedule` 命令作为第一条 Prompt 提交，无需先发送 `/chat`。
 - `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。临时内容会先写入本机复盘归档，再从 Codex 永久删除。

@@ -199,7 +199,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 ### 1. 私聊临时 Chat
 
-私聊 Bot 发送 `/chat` 可创建一个持久化的临时 Codex Session，并直接在私聊中继续对话：
+私聊 Bot 发送 `/chat` 可创建一个持久化的临时 Chat，并直接在私聊中继续对话；Codex Session 会在首条 Prompt 到达时创建，因此空 Chat 跨 Bridge 重启也不会触发空 rollout 恢复：
 
 ```text
 /chat 帮我分析这个问题

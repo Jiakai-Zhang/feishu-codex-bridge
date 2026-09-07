@@ -384,6 +384,7 @@ function temporaryBinding(record) {
     temporary: true,
     chatType: record.chatType,
     cwd: record.cwd,
+    pending: record.pending === true,
     baseBinding: bindingsByChat.get(record.conversationId),
   });
 }
@@ -1624,8 +1625,10 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
   }
   const current = temporaryChats.getActive(msg.chatId);
   if (current) {
-    const binding = temporaryBinding(current);
     if (firstPrompt) {
+      const binding = current.pending
+        ? await materializeTemporaryChat(current)
+        : temporaryBinding(current);
       await processPreparedPrompt(msg, binding, { text: firstPrompt, attachments: [] });
       return;
     }
@@ -1642,51 +1645,86 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
       : "正在创建临时 Chat……",
   });
   const cwd = await temporaryChatCwd(baseBinding);
+  if (!firstPrompt) {
+    await temporaryChats.startPending({
+      conversationId: msg.chatId,
+      cwd,
+      chatType: msg.chatType,
+      baseThreadId: baseBinding?.threadId,
+      createdAt: Date.now(),
+    });
+    await channel.reply(msg, {
+      markdown: [
+        "临时 Chat 已就绪，可以直接发送消息。",
+        "",
+        baseBinding
+          ? "它与原任务使用独立上下文；发送 `/endchat` 后返回原任务。"
+          : "发送 `/endchat` 可结束本次私聊上下文；之后可再次发送 `/chat` 新建一个。",
+        "",
+        "已经提交的消息会在后台继续完成。",
+      ].join("\n"),
+    });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+
   const thread = await createSessionControllerTarget({
     chatId: msg.chatId,
     cwd,
     name: "飞书临时 Chat",
     sandboxMode: config.sandboxMode,
   });
-  const record = await temporaryChats.start({
-    conversationId: msg.chatId,
-    threadId: thread.id,
-    cwd,
-    chatType: msg.chatType,
-    baseThreadId: baseBinding?.threadId,
-    createdAt: Date.now(),
-  });
+  let record;
   try {
-    await relaySettings.initialize(record.threadId);
+    await relaySettings.initialize(thread.id);
+    record = await temporaryChats.start({
+      conversationId: msg.chatId,
+      threadId: thread.id,
+      cwd,
+      chatType: msg.chatType,
+      baseThreadId: baseBinding?.threadId,
+      createdAt: Date.now(),
+    });
   } catch (error) {
-    sessionController?.removeTarget(record.threadId);
-    await temporaryChats.remove(record.threadId).catch(() => {});
+    await relaySettings.remove(thread.id).catch(() => {});
+    await sessionController?.deletePersistedThread(thread.id).catch(() => {});
     throw error;
   }
+  await processPreparedPrompt(msg, temporaryBinding(record), { text: firstPrompt, attachments: [] });
+}
 
-  const binding = temporaryBinding(record);
-  if (firstPrompt) {
-    await processPreparedPrompt(msg, binding, { text: firstPrompt, attachments: [] });
-    return;
-  }
-  await channel.reply(msg, {
-    markdown: [
-      "临时 Chat 已就绪，可以直接发送消息。",
-      "",
-      baseBinding
-        ? "它与原任务使用独立上下文；发送 `/endchat` 后返回原任务。"
-        : "发送 `/endchat` 可结束本次私聊上下文；之后可再次发送 `/chat` 新建一个。",
-      "",
-      "已经提交的消息会在后台继续完成。",
-    ].join("\n"),
+async function materializeTemporaryChat(record) {
+  const thread = await createSessionControllerTarget({
+    chatId: record.conversationId,
+    cwd: record.cwd,
+    name: "飞书临时 Chat",
+    sandboxMode: config.sandboxMode,
   });
-  await persistCompleted(msg.messageId);
+  try {
+    await relaySettings.initialize(thread.id);
+    const activated = await temporaryChats.activate(record.threadId, thread.id);
+    return temporaryBinding(activated);
+  } catch (error) {
+    await relaySettings.remove(thread.id).catch(() => {});
+    await sessionController?.deletePersistedThread(thread.id).catch(() => {});
+    throw error;
+  }
 }
 
 async function endTemporaryChat(msg) {
   const current = temporaryChats.getActive(msg.chatId);
   if (!current) {
     await channel.reply(msg, { markdown: "当前不在临时 Chat 中。发送 `/chat` 可以创建一个。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (current.pending) {
+    await temporaryChats.remove(current.threadId);
+    await channel.reply(msg, {
+      markdown: current.baseThreadId
+        ? "已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。"
+        : "已结束临时 Chat。发送 `/chat` 可开始新的私聊上下文。",
+    });
     await persistCompleted(msg.messageId);
     return;
   }
@@ -2371,6 +2409,9 @@ async function processInboundMessage(msg, baseBinding) {
         return;
       }
     }
+    if (binding?.temporary && binding.pending) {
+      binding = await materializeTemporaryChat(temporaryChats.getByThread(binding.threadId));
+    }
     if (!binding) {
       await channel.reply(msg, { markdown: "发送 `/chat` 开始私聊，或发送 `/add` 创建并绑定一个 Codex Session 群。" });
       await persistCompleted(msg.messageId);
@@ -2512,6 +2553,7 @@ try {
       log("temporary group Chat skipped because its base binding is unavailable");
       continue;
     }
+    if (temporaryChat.pending) continue;
     if (temporaryChat.status === "ended" && await temporaryChatArchives.has(temporaryChat)) continue;
     controllerTargets.push({
       threadId: temporaryChat.threadId,
