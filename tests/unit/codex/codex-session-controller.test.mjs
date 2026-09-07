@@ -18,7 +18,12 @@ function userInputItem(clientId, input, id = `user-${clientId}`) {
   return { id, type: "userMessage", clientId, content: structuredClone(input) };
 }
 
-function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds = [] } = {}) {
+function fakeControllerServer({
+  activeTurn,
+  goal = null,
+  resumeConflictThreadIds = [],
+  rejectRepeatedDelete = false,
+} = {}) {
   const server = {
     requests: [],
     clientResponses: [],
@@ -41,6 +46,8 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
     },
     goal: goal ? structuredClone(goal) : null,
     resumeConflictThreadIds: new Set(resumeConflictThreadIds),
+    deletedThreadIds: new Set(),
+    rejectRepeatedDelete,
     turns: activeTurn ? [structuredClone(activeTurn)] : [],
     status: activeTurn ? { type: "active", activeFlags: [] } : { type: "idle" },
   };
@@ -108,7 +115,12 @@ function fakeControllerServer({ activeTurn, goal = null, resumeConflictThreadIds
         thread: threadSnapshot(request.params.includeTurns, request.params.threadId),
       });
     } else if (request.method === "thread/delete") {
-      respond(socket, request.id, {});
+      if (server.rejectRepeatedDelete && server.deletedThreadIds.has(request.params.threadId)) {
+        respond(socket, request.id, undefined, { code: -32602, message: "no rollout found" });
+      } else {
+        server.deletedThreadIds.add(request.params.threadId);
+        respond(socket, request.id, {});
+      }
     } else if (request.method === "thread/goal/get") {
       respond(socket, request.id, { goal: structuredClone(server.goal) });
     } else if (request.method === "turn/start") {
@@ -544,7 +556,7 @@ test("creates a fresh Chat on the persistent connection without resuming an empt
 });
 
 test("reads and permanently deletes a persisted temporary Chat", async () => {
-  const server = fakeControllerServer();
+  const server = fakeControllerServer({ rejectRepeatedDelete: true });
   const client = controller(server);
   await client.start();
 
@@ -559,6 +571,8 @@ test("reads and permanently deletes a persisted temporary Chat", async () => {
     server.requests.filter(({ method }) => method === "thread/delete").map(({ params }) => params),
     [{ threadId }],
   );
+
+  assert.deepEqual(await client.deletePersistedThread(threadId), { deleted: true, threadId });
   await client.stop();
 });
 

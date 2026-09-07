@@ -55,6 +55,20 @@ test("keeps the retirement record when Codex deletion fails", async () => {
   assert.deepEqual(calls, ["delete"]);
 });
 
+test("can retry after Codex deletion succeeds but local record removal fails", async () => {
+  const { calls, options } = fixture({ archived: true });
+  let removeAttempts = 0;
+  options.removeRecord = async () => {
+    calls.push("remove");
+    removeAttempts += 1;
+    if (removeAttempts === 1) throw new Error("local state unavailable");
+  };
+
+  await assert.rejects(() => retireTemporaryChat(options), /local state unavailable/);
+  assert.equal(await retireTemporaryChat(options), true);
+  assert.deepEqual(calls, ["delete", "remove", "delete", "remove"]);
+});
+
 test("defers retirement while work or delivery remains", async () => {
   const prompt = fixture();
   prompt.options.pendingPromptCount = 1;

@@ -86,8 +86,8 @@ import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
 import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
 import {
-  parseDirectSchedulePrompt,
   parseTemporaryChatCommand,
+  resolveDirectPrivateSchedule,
 } from "../relay/temporary-chat-command.mjs";
 import { retireTemporaryChat } from "../relay/temporary-chat-retirement.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
@@ -2332,19 +2332,19 @@ async function processInboundMessage(msg, baseBinding) {
         await processTemporaryChatCommand(msg, baseBinding, temporaryChatCommand);
         return;
       }
-      const directSchedulePrompt = !binding && msg.chatType === "p2p"
-        ? parseDirectSchedulePrompt(rawContent)
-        : undefined;
-      if (directSchedulePrompt !== undefined) {
-        if (msg.senderId !== config.agent.ownerOpenId) {
+      const directSchedule = resolveDirectPrivateSchedule({
+        value: rawContent,
+        chatType: msg.chatType,
+        hasBinding: Boolean(binding),
+        isOwner: msg.senderId === config.agent.ownerOpenId,
+      });
+      if (directSchedule) {
+        if (!directSchedule.allowed) {
           await channel.reply(msg, { markdown: "临时 Chat 和计划任务目前仅限 Owner 使用。" });
           await persistCompleted(msg.messageId);
           return;
         }
-        await processTemporaryChatCommand(msg, baseBinding, {
-          action: "start",
-          prompt: directSchedulePrompt,
-        });
+        await processTemporaryChatCommand(msg, baseBinding, directSchedule.command);
         return;
       }
       const directCommand = !binding && msg.chatType === "p2p"

@@ -7,6 +7,7 @@ import {
 } from "../runtime/codex-app-tools-host.mjs";
 
 const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
+const MISSING_THREAD_PATTERN = /(?:no rollout found|(?:thread|conversation).*(?:not found|does not exist|unknown))/i;
 const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
   "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
@@ -77,6 +78,10 @@ function isRecoverableTransportError(error) {
 
 function isActiveWriterResumeError(error) {
   return error?.method === "thread/resume" && ACTIVE_WRITER_PATTERN.test(String(error?.message || ""));
+}
+
+function isMissingThreadDeleteError(error) {
+  return error?.method === "thread/delete" && MISSING_THREAD_PATTERN.test(String(error?.message || ""));
 }
 
 function sessionWriterConflict(error) {
@@ -297,7 +302,11 @@ export class CodexSessionController {
   async deletePersistedThread(threadId) {
     const key = String(threadId || "");
     if (!key) throw new TypeError("Codex task id is required");
-    await this.#request("thread/delete", { threadId: key });
+    try {
+      await this.#request("thread/delete", { threadId: key });
+    } catch (error) {
+      if (!isMissingThreadDeleteError(error)) throw error;
+    }
     this.removeTarget(key);
     return Object.freeze({ deleted: true, threadId: key });
   }

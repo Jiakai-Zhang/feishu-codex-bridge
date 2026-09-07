@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   parseDirectSchedulePrompt,
   parseTemporaryChatCommand,
+  resolveDirectPrivateSchedule,
 } from "../../../src/relay/temporary-chat-command.mjs";
 
 test("parses temporary Chat lifecycle commands without treating the first prompt as a title", () => {
@@ -33,6 +34,39 @@ test("normalizes a direct private schedule command for an implicit temporary Cha
   );
   assert.equal(parseDirectSchedulePrompt("please /schedule tomorrow"), undefined);
   assert.equal(parseDirectSchedulePrompt("/scheduled tomorrow"), undefined);
+});
+
+test("routes only an unbound private owner schedule into a temporary Chat", () => {
+  assert.deepEqual(resolveDirectPrivateSchedule({
+    value: "/schedule every weekday at 9",
+    chatType: "p2p",
+    hasBinding: false,
+    isOwner: true,
+  }), {
+    allowed: true,
+    command: { action: "start", prompt: "/schedule every weekday at 9" },
+  });
+  assert.deepEqual(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "p2p",
+    hasBinding: false,
+    isOwner: false,
+  }), {
+    allowed: false,
+    command: { action: "start", prompt: "/schedule tomorrow" },
+  });
+  assert.equal(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "group",
+    hasBinding: false,
+    isOwner: true,
+  }), undefined);
+  assert.equal(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "p2p",
+    hasBinding: true,
+    isOwner: true,
+  }), undefined);
 });
 
 test("wires temporary Chat before the unbound private-message fallback", async () => {

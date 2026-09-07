@@ -18,3 +18,13 @@ export function parseDirectSchedulePrompt(value) {
   const args = String(match[1] || "").trim();
   return `/schedule${args ? ` ${args}` : ""}`;
 }
+
+export function resolveDirectPrivateSchedule({ value, chatType, hasBinding, isOwner }) {
+  if (chatType !== "p2p" || hasBinding) return undefined;
+  const prompt = parseDirectSchedulePrompt(value);
+  if (prompt === undefined) return undefined;
+  return Object.freeze({
+    allowed: isOwner === true,
+    command: Object.freeze({ action: "start", prompt }),
+  });
+}
