@@ -2,7 +2,9 @@ param(
     [ValidateRange(1, 60)]
     [int]$CheckIntervalSeconds = 3,
     [ValidateRange(10, 3600)]
-    [int]$VerificationIntervalSeconds = 60
+    [int]$VerificationIntervalSeconds = 60,
+    [ValidateRange(30, 3600)]
+    [int]$BridgeRecoveryIntervalSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,6 +154,29 @@ function Test-LoopbackPort {
     }
 }
 
+function Test-SavedProcessIdentity {
+    param(
+        [Parameter(Mandatory)][string]$PidPath,
+        [Parameter(Mandatory)][string]$ExpectedProcessName,
+        [Parameter(Mandatory)][string]$ExpectedCommandPath
+    )
+    if (-not (Test-Path -LiteralPath $PidPath -PathType Leaf)) { return $false }
+    $savedProcessId = 0
+    $pidText = (Get-Content -Raw -LiteralPath $PidPath).Trim()
+    if (-not [int]::TryParse($pidText, [ref]$savedProcessId)) {
+        Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    $candidate = Get-CimInstance Win32_Process -Filter "ProcessId=$savedProcessId" -ErrorAction SilentlyContinue
+    $matches = $candidate -and
+        [string]$candidate.Name -ieq $ExpectedProcessName -and
+        ([string]$candidate.CommandLine).IndexOf($ExpectedCommandPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    if (-not $matches) {
+        Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
+    }
+    return [bool]$matches
+}
+
 function Start-BridgeRecoveryIfNeeded {
     param([Parameter(Mandatory)][object]$Config)
     try {
@@ -165,16 +190,18 @@ function Start-BridgeRecoveryIfNeeded {
         $secretPath = Join-Path $runtimeDir 'channel-secret.dpapi'
         if (-not (Test-Path -LiteralPath $secretPath -PathType Leaf)) { return $true }
 
-        foreach ($pidFileName in @('bridge.pid', 'bridge-supervisor.pid')) {
-            $pidPath = Join-Path $runtimeDir $pidFileName
-            if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) { continue }
-            $savedProcessId = 0
-            $pidText = (Get-Content -Raw -LiteralPath $pidPath).Trim()
-            if ([int]::TryParse($pidText, [ref]$savedProcessId) -and
-                (Get-Process -Id $savedProcessId -ErrorAction SilentlyContinue)) {
-                return $true
-            }
-        }
+        $mode = if ([string]::IsNullOrWhiteSpace([string]$Config.mode)) { 'project-agent' } else { [string]$Config.mode }
+        $bridgeScript = if ($mode -eq 'session-relay') { 'session-relay.mjs' } else { 'channel-bridge.mjs' }
+        $expectedBridge = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $bridgeScript))
+        $expectedSupervisor = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bridge-supervisor.ps1'))
+        if (Test-SavedProcessIdentity `
+            -PidPath (Join-Path $runtimeDir 'bridge.pid') `
+            -ExpectedProcessName 'node.exe' `
+            -ExpectedCommandPath $expectedBridge) { return $true }
+        if (Test-SavedProcessIdentity `
+            -PidPath (Join-Path $runtimeDir 'bridge-supervisor.pid') `
+            -ExpectedProcessName 'powershell.exe' `
+            -ExpectedCommandPath $expectedSupervisor) { return $true }
 
         $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) { return $true }
@@ -242,7 +269,7 @@ try {
     $lastVerificationAt = [DateTime]::MinValue
     $lastHealth = ''
     $lastAppServerProcessId = 0
-    $bridgeRecoveryChecked = $false
+    $lastBridgeRecoveryAttemptAt = [DateTime]::MinValue
 
     while ($true) {
         $relayState = Read-RelayState
@@ -260,7 +287,7 @@ try {
                 Write-WatchdogLog -Message 'Bridge was stopped intentionally; Desktop relay recovery is paused.'
             }
             $lastHealth = 'paused'
-            $bridgeRecoveryChecked = $false
+            $lastBridgeRecoveryAttemptAt = [DateTime]::MinValue
             Start-Sleep -Seconds $CheckIntervalSeconds
             continue
         }
@@ -323,8 +350,13 @@ try {
 
         Write-WatchdogStatus -RelayState $relayState -State 'ready' `
             -Detail 'verified listener is available' -AppServerProcessId $lastAppServerProcessId
-        if (-not $bridgeRecoveryChecked) {
-            $bridgeRecoveryChecked = [bool](Start-BridgeRecoveryIfNeeded -Config $config)
+        $bridgeRecoveryDue = ([DateTime]::UtcNow - $lastBridgeRecoveryAttemptAt).TotalSeconds -ge `
+            $BridgeRecoveryIntervalSeconds
+        if ($bridgeRecoveryDue) {
+            $bridgeRecoveryAttempted = [bool](Start-BridgeRecoveryIfNeeded -Config $config)
+            if ($bridgeRecoveryAttempted) {
+                $lastBridgeRecoveryAttemptAt = [DateTime]::UtcNow
+            }
         }
         Start-Sleep -Seconds $CheckIntervalSeconds
     }

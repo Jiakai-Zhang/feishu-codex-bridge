@@ -34,9 +34,28 @@ $expectedBridge = [System.IO.Path]::GetFullPath($bridge)
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 
+$startupIdentity = [Text.Encoding]::UTF8.GetBytes(([System.IO.Path]::GetFullPath($runtimeDir)).ToLowerInvariant())
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $startupHash = ([BitConverter]::ToString($sha256.ComputeHash($startupIdentity))).Replace('-', '').Substring(0, 24)
+} finally {
+    $sha256.Dispose()
+}
+$startupMutex = [Threading.Mutex]::new($false, "Local\FeishuCodexBridgeStart-$startupHash")
+$startupLockTaken = $false
+try {
+    try {
+        $startupLockTaken = $startupMutex.WaitOne([TimeSpan]::FromSeconds(30))
+    } catch [Threading.AbandonedMutexException] {
+        $startupLockTaken = $true
+    }
+    if (-not $startupLockTaken) {
+        throw 'Timed out waiting for another Bridge startup transaction to finish.'
+    }
+
 $appServerInfo = $null
 if ($mode -eq 'session-relay') {
-    & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
+    & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Preparing | Out-Null
     $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
     if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
         throw 'The shared Codex App Server startup returned no verified process.'
@@ -68,8 +87,13 @@ if (-not (Test-Path -LiteralPath $secretPath -PathType Leaf)) {
 $supervisorProcess = $null
 if (Test-Path -LiteralPath $supervisorPidPath -PathType Leaf) {
     $savedSupervisorPid = [int](Get-Content -Raw -LiteralPath $supervisorPidPath)
-    $supervisorProcess = Get-Process -Id $savedSupervisorPid -ErrorAction SilentlyContinue
-    if (-not $supervisorProcess) {
+    $supervisorCandidate = Get-CimInstance Win32_Process -Filter "ProcessId=$savedSupervisorPid" -ErrorAction SilentlyContinue
+    $isSupervisor = $supervisorCandidate -and
+        [string]$supervisorCandidate.Name -ieq 'powershell.exe' -and
+        ([string]$supervisorCandidate.CommandLine).IndexOf($supervisorScript, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    if ($isSupervisor) {
+        $supervisorProcess = Get-Process -Id $savedSupervisorPid -ErrorAction SilentlyContinue
+    } else {
         Remove-Item -LiteralPath $supervisorPidPath -Force
     }
 }
@@ -128,3 +152,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
 }
 
 throw "Bridge did not become ready within $ReadyTimeoutSeconds seconds. Check $stderrPath and $stdoutPath"
+} finally {
+    if ($startupLockTaken) { $startupMutex.ReleaseMutex() }
+    $startupMutex.Dispose()
+}

@@ -50,6 +50,18 @@ test("defaults Session Relay naming to binding-only without renaming Codex tasks
   });
 });
 
+test("allows prompt previews to be disabled", () => {
+  const config = normalizeSessionRelayConfig(base({
+    sessionRelay: {
+      appServerUrl: "ws://127.0.0.1:47321/rpc",
+      promptPreviewChars: 0,
+      bindings: [{ groupChatId: "oc_group_a", threadId: threadA }],
+    },
+  }), { configDir: "C:/bridge" });
+
+  assert.equal(config.sessionRelay.promptPreviewChars, 0);
+});
+
 test("normalizes configurable inbound attachment limits", () => {
   const config = normalizeSessionRelayConfig(base({
     sessionRelay: {

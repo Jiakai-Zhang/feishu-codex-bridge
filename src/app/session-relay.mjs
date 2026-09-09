@@ -6,6 +6,7 @@ import { basenameFsPath, isPathInside } from "../runtime/shared/fs-paths.mjs";
 import { createLarkChannel } from "@larksuite/channel";
 import { setCodexThreadName, startCodexProjectThread } from "../codex/codex-app-server.mjs";
 import { extractCodexAnswerMedia } from "../codex/codex-answer-media.mjs";
+import { readAutomationSchedule } from "../codex/codex-automation-metadata.mjs";
 import { CodexDesktopCatalog } from "../codex/codex-desktop-catalog.mjs";
 import { CodexIncrementalSummarizer } from "../codex/codex-incremental-summarizer.mjs";
 import { CodexSessionController, isFeishuMessageClientId } from "../codex/codex-session-controller.mjs";
@@ -16,6 +17,7 @@ import {
   buildGoalTurnPost,
   buildSessionProgressPost,
   externalTurnDeliveryId,
+  parseHeartbeatEnvelope,
 } from "../codex/codex-session-observer.mjs";
 import { DeliveryOutbox, deliveryIdempotencyKey } from "../persistence/delivery-outbox.mjs";
 import { createSerializedFileWriter } from "../persistence/serialized-json-file.mjs";
@@ -78,11 +80,16 @@ import {
 } from "../relay/session-relay-core.mjs";
 import { SessionPromptQueue } from "../persistence/session-prompt-queue.mjs";
 import { SessionSummaryDocumentStore } from "../persistence/session-summary-document-store.mjs";
+import { TemporaryChatArchiveStore } from "../persistence/temporary-chat-archive-store.mjs";
 import { TemporaryChatStore } from "../persistence/temporary-chat-store.mjs";
 import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
 import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
-import { parseTemporaryChatCommand } from "../relay/temporary-chat-command.mjs";
+import {
+  parseTemporaryChatCommand,
+  resolveDirectPrivateSchedule,
+} from "../relay/temporary-chat-command.mjs";
+import { retireTemporaryChat } from "../relay/temporary-chat-retirement.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
 import {
   effectiveSessionSandboxMode,
@@ -100,6 +107,7 @@ import {
   SessionStreamCardStore,
 } from "../feishu/session-stream-card.mjs";
 import { ThreadWorkQueue } from "../runtime/thread-work-queue.mjs";
+import { createCodexAppToolRequestHandler } from "../runtime/codex-app-tools-host.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../..");
@@ -123,6 +131,7 @@ const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json")
 const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
 const attachmentDraftsPath = path.join(runtimeDir, "session-relay-attachment-drafts.json");
 const temporaryChatsPath = path.join(runtimeDir, "session-relay-temporary-chats.json");
+const temporaryChatArchivesPath = path.join(runtimeDir, "temporary-chat-archives");
 const sessionAccessPath = path.join(runtimeDir, "session-relay-access.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
 const restartRequestPath = path.join(runtimeDir, "restart.request");
@@ -157,6 +166,7 @@ const relaySettings = await SessionRelaySettingsStore.open(relaySettingsPath, {
 });
 const sessionPermissionFlow = new SessionPermissionFlow();
 const temporaryChats = await TemporaryChatStore.open(temporaryChatsPath);
+const temporaryChatArchives = new TemporaryChatArchiveStore(temporaryChatArchivesPath);
 const longAnswerDocuments = await LongAnswerDocumentStore.open(longAnswerDocumentsPath);
 const longAnswerDocumentManager = config.larkCliEntry
   ? new FeishuLongAnswerDocumentManager({
@@ -306,6 +316,7 @@ const turnOutputTails = new Map();
 const streamCardClockRefreshes = new Set();
 const streamCardClockFailures = new Set();
 const inboundWorkQueue = new ThreadWorkQueue();
+const temporaryChatRetirementQueue = new ThreadWorkQueue();
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`);
@@ -373,6 +384,7 @@ function temporaryBinding(record) {
     temporary: true,
     chatType: record.chatType,
     cwd: record.cwd,
+    pending: record.pending === true,
     baseBinding: bindingsByChat.get(record.conversationId),
   });
 }
@@ -417,6 +429,7 @@ function createSessionController(targets) {
       relaySettings.get(threadId).sandboxMode,
       config.sandboxMode,
     ),
+    dynamicToolRequestHandler: createCodexAppToolRequestHandler({ log }),
     onTurnCompleted: async (record) => {
       const actor = activeTurnActors.get(record.threadId);
       const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;
@@ -450,16 +463,31 @@ async function ensureSessionControllerTarget(target) {
   await sessionController.addTarget(target);
 }
 
-async function retireEndedTemporaryChat(threadId) {
-  const record = temporaryChats.getByThread(threadId);
-  if (!record || record.status !== "ended" || promptQueue.count(threadId) > 0) return false;
-  const status = await sessionController?.getStatus(threadId, { refresh: false }).catch(() => undefined);
-  if (status?.status?.type === "active" || status?.goal?.status === "active") return false;
-  const deliveryPrefix = `codex-turn:${threadId}:`;
-  if (deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix))) return false;
-  sessionController?.removeTarget(threadId);
-  await temporaryChats.remove(threadId);
-  return true;
+async function createSessionControllerTarget(target) {
+  if (!sessionController) {
+    sessionController = createSessionController([]);
+    await sessionController.start();
+  }
+  return sessionController.createTarget(target);
+}
+
+function retireEndedTemporaryChat(threadId) {
+  return temporaryChatRetirementQueue.enqueue(threadId, async () => {
+    const record = temporaryChats.getByThread(threadId);
+    const deliveryPrefix = `codex-turn:${threadId}:`;
+    return retireTemporaryChat({
+      record,
+      pendingPromptCount: promptQueue.count(threadId),
+      hasPendingDelivery: deliveryOutbox.list().some(({ deliveryId }) => deliveryId.startsWith(deliveryPrefix)),
+      readStatus: async () => sessionController?.hasTarget(threadId)
+        ? sessionController.getStatus(threadId, { refresh: false })
+        : undefined,
+      archiveStore: temporaryChatArchives,
+      readThread: (id) => sessionController.readPersistedThread(id, { includeTurns: true }),
+      deleteThread: (id) => sessionController.deletePersistedThread(id),
+      removeRecord: (id) => temporaryChats.remove(id),
+    });
+  });
 }
 
 function inboundAttachmentPruneProtection(extraMessageIds = []) {
@@ -1084,7 +1112,7 @@ async function tryEnsureTurnStreamCard(record) {
   }
 }
 
-async function tryFinalizeTurnStreamCard(record, answerSegments) {
+async function tryFinalizeTurnStreamCard(record, answerSegments, heartbeatSchedule) {
   const current = streamCards.get(record.threadId, record.turnId);
   if (!current || !channelConnectivity.connected) return false;
   try {
@@ -1094,6 +1122,7 @@ async function tryFinalizeTurnStreamCard(record, answerSegments) {
       completedAtMs: record.completedAtMs,
       durationMs: record.durationMs,
       tokenUsage: record.tokenUsage,
+      heartbeatSchedule,
       timeZone: config.sessionRelay.displayTimeZone,
       maxAnswerChars: config.maxReplyChars,
     }));
@@ -1110,8 +1139,8 @@ async function queueStreamCardFollowups(baseRecord, attachments) {
   await queueDeliveryBundle(records, "stream card final delivery completed");
 }
 
-async function tryCompleteTurnStreamCard(record, baseDelivery, media) {
-  if (!await tryFinalizeTurnStreamCard(record, media.segments)) return false;
+async function tryCompleteTurnStreamCard(record, baseDelivery, media, heartbeatSchedule) {
+  if (!await tryFinalizeTurnStreamCard(record, media.segments, heartbeatSchedule)) return false;
   await queueStreamCardFollowups(baseDelivery, media.attachments);
   await persistCompleted(baseDelivery.deliveryId);
   await streamCards.remove(record.threadId, record.turnId);
@@ -1596,8 +1625,10 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
   }
   const current = temporaryChats.getActive(msg.chatId);
   if (current) {
-    const binding = temporaryBinding(current);
     if (firstPrompt) {
+      const binding = current.pending
+        ? await materializeTemporaryChat(current)
+        : temporaryBinding(current);
       await processPreparedPrompt(msg, binding, { text: firstPrompt, attachments: [] });
       return;
     }
@@ -1614,51 +1645,70 @@ async function startTemporaryChat(msg, baseBinding, firstPrompt) {
       : "正在创建临时 Chat……",
   });
   const cwd = await temporaryChatCwd(baseBinding);
-  const thread = await startCodexProjectThread({
-    codexExecutable: config.codexExecutable,
+  if (!firstPrompt) {
+    await temporaryChats.startPending({
+      conversationId: msg.chatId,
+      cwd,
+      chatType: msg.chatType,
+      baseThreadId: baseBinding?.threadId,
+      createdAt: Date.now(),
+    });
+    await channel.reply(msg, {
+      markdown: [
+        "临时 Chat 已就绪，可以直接发送消息。",
+        "",
+        baseBinding
+          ? "它与原任务使用独立上下文；发送 `/endchat` 后返回原任务。"
+          : "发送 `/endchat` 可结束本次私聊上下文；之后可再次发送 `/chat` 新建一个。",
+        "",
+        "已经提交的消息会在后台继续完成。",
+      ].join("\n"),
+    });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+
+  const thread = await createSessionControllerTarget({
+    chatId: msg.chatId,
     cwd,
     name: "飞书临时 Chat",
     sandboxMode: config.sandboxMode,
-    appServerUrl: config.sessionRelay.appServerUrl,
   });
-  const record = await temporaryChats.start({
-    conversationId: msg.chatId,
-    threadId: thread.id,
-    cwd,
-    chatType: msg.chatType,
-    baseThreadId: baseBinding?.threadId,
-    createdAt: Date.now(),
-  });
+  let record;
   try {
-    await ensureSessionControllerTarget({
-      threadId: record.threadId,
-      chatId: record.conversationId,
-      cwd: record.cwd,
+    await relaySettings.initialize(thread.id);
+    record = await temporaryChats.start({
+      conversationId: msg.chatId,
+      threadId: thread.id,
+      cwd,
+      chatType: msg.chatType,
+      baseThreadId: baseBinding?.threadId,
+      createdAt: Date.now(),
     });
-    await relaySettings.initialize(record.threadId);
   } catch (error) {
-    sessionController?.removeTarget(record.threadId);
-    await temporaryChats.remove(record.threadId).catch(() => {});
+    await relaySettings.remove(thread.id).catch(() => {});
+    await sessionController?.deletePersistedThread(thread.id).catch(() => {});
     throw error;
   }
+  await processPreparedPrompt(msg, temporaryBinding(record), { text: firstPrompt, attachments: [] });
+}
 
-  const binding = temporaryBinding(record);
-  if (firstPrompt) {
-    await processPreparedPrompt(msg, binding, { text: firstPrompt, attachments: [] });
-    return;
-  }
-  await channel.reply(msg, {
-    markdown: [
-      "临时 Chat 已就绪，可以直接发送消息。",
-      "",
-      baseBinding
-        ? "它与原任务使用独立上下文；发送 `/endchat` 后返回原任务。"
-        : "发送 `/endchat` 可结束本次私聊上下文；之后可再次发送 `/chat` 新建一个。",
-      "",
-      "已经提交的消息会在后台继续完成。",
-    ].join("\n"),
+async function materializeTemporaryChat(record) {
+  const thread = await createSessionControllerTarget({
+    chatId: record.conversationId,
+    cwd: record.cwd,
+    name: "飞书临时 Chat",
+    sandboxMode: config.sandboxMode,
   });
-  await persistCompleted(msg.messageId);
+  try {
+    await relaySettings.initialize(thread.id);
+    const activated = await temporaryChats.activate(record.threadId, thread.id);
+    return temporaryBinding(activated);
+  } catch (error) {
+    await relaySettings.remove(thread.id).catch(() => {});
+    await sessionController?.deletePersistedThread(thread.id).catch(() => {});
+    throw error;
+  }
 }
 
 async function endTemporaryChat(msg) {
@@ -1668,12 +1718,30 @@ async function endTemporaryChat(msg) {
     await persistCompleted(msg.messageId);
     return;
   }
+  if (current.pending) {
+    await temporaryChats.remove(current.threadId);
+    await channel.reply(msg, {
+      markdown: current.baseThreadId
+        ? "已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。"
+        : "已结束临时 Chat。发送 `/chat` 可开始新的私聊上下文。",
+    });
+    await persistCompleted(msg.messageId);
+    return;
+  }
   await temporaryChats.end(msg.chatId);
-  await retireEndedTemporaryChat(current.threadId);
+  let retired = false;
+  try {
+    retired = await retireEndedTemporaryChat(current.threadId);
+  } catch (error) {
+    log(`temporary Chat retirement deferred: ${safeError(error)}`);
+  }
+  const retirementMessage = retired
+    ? "对话内容已保存到固定的本地复盘目录，并已从 Codex 永久删除。"
+    : "已提交的消息仍会完成并回复；完成后会自动归档到本地复盘目录，再从 Codex 永久删除。归档失败时会保留 Codex 对话并自动重试。";
   await channel.reply(msg, {
     markdown: current.baseThreadId
-      ? "已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。已提交的临时消息仍会完成并回复。"
-      : "已结束临时 Chat。已提交的消息仍会完成并回复；发送 `/chat` 可开始新的私聊上下文。",
+      ? `已结束临时 Chat，后续消息会继续使用原绑定任务的完整上下文。${retirementMessage}`
+      : `已结束临时 Chat。${retirementMessage} 发送 \`/chat\` 可开始新的私聊上下文。`,
   });
   await persistCompleted(msg.messageId);
 }
@@ -1946,6 +2014,17 @@ function finalMentionOpenId(record) {
   return bindingsByChat.get(record.chatId)?.ownerOpenId || config.agent.ownerOpenId;
 }
 
+async function heartbeatScheduleFromAnswer(answer) {
+  const heartbeat = parseHeartbeatEnvelope(answer);
+  if (!heartbeat?.automationId) return undefined;
+  try {
+    return (await readAutomationSchedule(heartbeat.automationId))?.interval;
+  } catch (error) {
+    log(`automation interval could not be read: ${safeError(error)}`);
+    return undefined;
+  }
+}
+
 async function processCompletedTurn(record) {
   const deliveryId = externalTurnDeliveryId(record.threadId, record.turnId);
   if (completed.has(deliveryId)) return;
@@ -1954,6 +2033,7 @@ async function processCompletedTurn(record) {
     return;
   }
   const mentionOpenId = finalMentionOpenId(record);
+  const heartbeatSchedule = await heartbeatScheduleFromAnswer(record.answer);
   const sourcePromptEntries = Array.isArray(record.promptEntries) ? record.promptEntries : [];
   if (sourcePromptEntries.length === 0 && record.goal) {
     const media = await prepareFinalAnswerDelivery(record);
@@ -1970,11 +2050,12 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2007,11 +2088,12 @@ async function processCompletedTurn(record) {
         tokenUsage: record.tokenUsage,
         timeZone: config.sessionRelay.displayTimeZone,
         maxReplyChars: config.maxReplyChars,
+        heartbeatSchedule,
         mentionOpenId,
       }),
       createdAt: Date.now(),
     };
-    if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+    if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
       await finishLongAnswerDocumentDelivery(record, media);
       return;
     }
@@ -2047,11 +2129,12 @@ async function processCompletedTurn(record) {
       timeZone: config.sessionRelay.displayTimeZone,
       maxPromptChars: config.sessionRelay.promptPreviewChars,
       maxReplyChars: config.maxReplyChars,
+      heartbeatSchedule,
       mentionOpenId,
     }),
     createdAt: Date.now(),
   };
-  if (await tryCompleteTurnStreamCard(record, delivery, media)) {
+  if (await tryCompleteTurnStreamCard(record, delivery, media, heartbeatSchedule)) {
     await finishLongAnswerDocumentDelivery(record, media);
     return;
   }
@@ -2287,6 +2370,21 @@ async function processInboundMessage(msg, baseBinding) {
         await processTemporaryChatCommand(msg, baseBinding, temporaryChatCommand);
         return;
       }
+      const directSchedule = resolveDirectPrivateSchedule({
+        value: rawContent,
+        chatType: msg.chatType,
+        hasBinding: Boolean(binding),
+        isOwner: msg.senderId === config.agent.ownerOpenId,
+      });
+      if (directSchedule) {
+        if (!directSchedule.allowed) {
+          await channel.reply(msg, { markdown: "临时 Chat 和计划任务目前仅限 Owner 使用。" });
+          await persistCompleted(msg.messageId);
+          return;
+        }
+        await processTemporaryChatCommand(msg, baseBinding, directSchedule.command);
+        return;
+      }
       const directCommand = !binding && msg.chatType === "p2p"
         ? parseSessionCommand(rawContent)
         : undefined;
@@ -2310,6 +2408,9 @@ async function processInboundMessage(msg, baseBinding) {
         await persistCompleted(msg.messageId);
         return;
       }
+    }
+    if (binding?.temporary && binding.pending) {
+      binding = await materializeTemporaryChat(temporaryChats.getByThread(binding.threadId));
     }
     if (!binding) {
       await channel.reply(msg, { markdown: "发送 `/chat` 开始私聊，或发送 `/add` 创建并绑定一个 Codex Session 群。" });
@@ -2452,13 +2553,16 @@ try {
       log("temporary group Chat skipped because its base binding is unavailable");
       continue;
     }
+    if (temporaryChat.pending) continue;
+    if (temporaryChat.status === "ended" && await temporaryChatArchives.has(temporaryChat)) continue;
     controllerTargets.push({
       threadId: temporaryChat.threadId,
       chatId: temporaryChat.conversationId,
       cwd: temporaryChat.cwd,
     });
   }
-  if (controllerTargets.length > 0) {
+  const hasPendingTemporaryRetirement = temporaryChats.list().some(({ status }) => status === "ended");
+  if (controllerTargets.length > 0 || hasPendingTemporaryRetirement) {
     sessionController = createSessionController(controllerTargets);
     await sessionController.start();
     log(`Codex session controller subscribed to ${controllerTargets.length} bound task(s)`);

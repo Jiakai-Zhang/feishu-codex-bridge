@@ -8,14 +8,38 @@ import {
   CodexSessionObserver,
   CodexTurnCollector,
   externalTurnDeliveryId,
+  parseHeartbeatEnvelope,
   promptInputSource,
   quoteMarkdown,
   stripCodexDesktopFileContext,
+  unwrapHeartbeatEnvelope,
   userPromptDetailsFromItem,
   userPromptFromItem,
 } from "../../../src/codex/codex-session-observer.mjs";
 
 const target = { threadId: "thread-id", chatId: "oc_group", cwd: "C:/repo" };
+
+test("unwraps a heartbeat envelope to its public message", () => {
+  const answer = [
+    "<heartbeat>",
+    "<automation_id>p1118-w6</automation_id>",
+    "<decision>DONT_NOTIFY</decision>",
+    "<message>J417 尚未到计划检查点，本次跳过后端查询。</message>",
+    "</heartbeat>",
+  ].join("\n");
+
+  assert.equal(
+    unwrapHeartbeatEnvelope(answer),
+    "J417 尚未到计划检查点，本次跳过后端查询。",
+  );
+  assert.deepEqual(parseHeartbeatEnvelope(answer), {
+    message: "J417 尚未到计划检查点，本次跳过后端查询。",
+    automationId: "p1118-w6",
+    decision: "DONT_NOTIFY",
+  });
+  assert.equal(unwrapHeartbeatEnvelope("普通回答"), "普通回答");
+  assert.equal(unwrapHeartbeatEnvelope("<heartbeat>缺少 message</heartbeat>"), "<heartbeat>缺少 message</heartbeat>");
+});
 
 function userItem(clientId, text = "Desktop prompt") {
   return {
@@ -159,13 +183,54 @@ test("builds a titled rich-text post with prompt, send time, and final answer", 
   assert.deepEqual(post.zh_cn.content[3][0].style, ["italic"]);
   assert.equal(post.zh_cn.content[4][0].tag, "hr");
   assert.equal(post.zh_cn.content[5][0].text, "#### 最终回答");
-  assert.equal(post.zh_cn.content[6][0].text, "> - one\n> - two");
+  assert.equal(post.zh_cn.content[6][0].text, "- one\n- two");
   assert.equal(post.zh_cn.content[7][0].tag, "hr");
   assert.match(post.zh_cn.content[8][0].text, /2026.*08.*13.*12.*07.*08/);
   assert.match(post.zh_cn.content[8][0].text, /2分02秒/);
   assert.match(post.zh_cn.content[8][0].text, /12,345/);
   assert.deepEqual(post.zh_cn.content[8][0].style, ["italic"]);
   assert.equal(externalTurnDeliveryId("thread-id", "turn-id"), "codex-turn:thread-id:turn-id");
+});
+
+test("omits the prompt section when prompt previews are disabled", () => {
+  const post = buildExternalTurnPost({
+    prompt: "Do not include this prompt",
+    answer: "## 状态\n\n- 已完成",
+    uploadedImages: [{ imageKey: "img_prompt", name: "prompt.png" }],
+    promptAtMs: Date.UTC(2026, 7, 13, 4, 5, 6),
+    maxPromptChars: 0,
+  });
+
+  assert.equal(post.zh_cn.content[0][0].text, "#### 最终回答");
+  assert.equal(post.zh_cn.content[1][0].text, "## 状态\n\n- 已完成");
+  const serialized = JSON.stringify(post);
+  assert.doesNotMatch(serialized, /对应 Prompt/);
+  assert.doesNotMatch(serialized, /Do not include this prompt/);
+  assert.doesNotMatch(serialized, /img_prompt/);
+  assert.doesNotMatch(serialized, /发送时间/);
+});
+
+test("renders a heartbeat as its message without the transport envelope", () => {
+  const post = buildExternalTurnPost({
+    answer: [
+      "<heartbeat>",
+      "<automation_id>p1118-w6</automation_id>",
+      "<decision>DONT_NOTIFY</decision>",
+      "<message>本次跳过后端查询；10 分钟已是最短支持间隔。</message>",
+      "</heartbeat>",
+    ].join("\n"),
+    maxPromptChars: 0,
+    heartbeatSchedule: "每 10 分钟",
+  });
+
+  assert.equal(post.zh_cn.content[1][0].text, "本次跳过后端查询；10 分钟已是最短支持间隔。");
+  assert.equal(post.zh_cn.content.at(-2)[0].tag, "hr");
+  assert.equal(
+    post.zh_cn.content.at(-1)[0].text,
+    "定时任务 · 类型：Heartbeat · ID：p1118-w6 · 间隔：每 10 分钟 · 本轮：无需额外提醒",
+  );
+  const serialized = JSON.stringify(post);
+  assert.doesNotMatch(serialized, /<heartbeat>|automation_id|decision|DONT_NOTIFY/);
 });
 
 test("renders uploaded final-answer images in place without exposing local paths", () => {
@@ -287,9 +352,13 @@ test("builds a Goal progress post without exposing reasoning or tool events", ()
       tokenBudget: 20_000,
       tokensUsed: 12_345,
     },
-    answer: "- tests passed\n- ready",
+    answer: "## 检查结果\n\n- tests passed\n- ready\n\n```text\nok\n```",
   });
   assert.equal(post.zh_cn.title, "Codex Goal 已完成");
+  assert.deepEqual(post.zh_cn.content[5][0], {
+    tag: "md",
+    text: "## 检查结果\n\n- tests passed\n- ready\n\n```text\nok\n```",
+  });
   const serialized = JSON.stringify(post);
   assert.match(serialized, /finish the bridge/);
   assert.match(serialized, /最终结果/);

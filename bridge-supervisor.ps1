@@ -85,9 +85,14 @@ try {
     Write-SupervisorLog "supervisor failed: $($_.Exception.GetType().Name)"
     exit 1
 } finally {
+    $intentionalStop = Test-Path -LiteralPath $supervisorStopPath
     if ($mode -eq 'session-relay') {
         try {
-            & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
+            if ($intentionalStop) {
+                & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Disable | Out-Null
+            } else {
+                & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Preparing | Out-Null
+            }
         } catch {
             Write-SupervisorLog 'Could not pause Desktop relay during supervisor shutdown.'
         }

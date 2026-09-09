@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { parseTemporaryChatCommand } from "../../../src/relay/temporary-chat-command.mjs";
+import {
+  parseDirectSchedulePrompt,
+  parseTemporaryChatCommand,
+  resolveDirectPrivateSchedule,
+} from "../../../src/relay/temporary-chat-command.mjs";
 
 test("parses temporary Chat lifecycle commands without treating the first prompt as a title", () => {
   assert.deepEqual(parseTemporaryChatCommand("/chat"), {
@@ -22,6 +26,49 @@ test("parses temporary Chat lifecycle commands without treating the first prompt
   assert.equal(parseTemporaryChatCommand("please /chat"), undefined);
 });
 
+test("normalizes a direct private schedule command for an implicit temporary Chat", () => {
+  assert.equal(parseDirectSchedulePrompt("/schedule"), "/schedule");
+  assert.equal(
+    parseDirectSchedulePrompt(" /schedule@relay_bot every weekday at 9 "),
+    "/schedule every weekday at 9",
+  );
+  assert.equal(parseDirectSchedulePrompt("please /schedule tomorrow"), undefined);
+  assert.equal(parseDirectSchedulePrompt("/scheduled tomorrow"), undefined);
+});
+
+test("routes only an unbound private owner schedule into a temporary Chat", () => {
+  assert.deepEqual(resolveDirectPrivateSchedule({
+    value: "/schedule every weekday at 9",
+    chatType: "p2p",
+    hasBinding: false,
+    isOwner: true,
+  }), {
+    allowed: true,
+    command: { action: "start", prompt: "/schedule every weekday at 9" },
+  });
+  assert.deepEqual(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "p2p",
+    hasBinding: false,
+    isOwner: false,
+  }), {
+    allowed: false,
+    command: { action: "start", prompt: "/schedule tomorrow" },
+  });
+  assert.equal(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "group",
+    hasBinding: false,
+    isOwner: true,
+  }), undefined);
+  assert.equal(resolveDirectPrivateSchedule({
+    value: "/schedule tomorrow",
+    chatType: "p2p",
+    hasBinding: true,
+    isOwner: true,
+  }), undefined);
+});
+
 test("wires temporary Chat before the unbound private-message fallback", async () => {
   const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
   const inbound = source.slice(
@@ -29,6 +76,7 @@ test("wires temporary Chat before the unbound private-message fallback", async (
     source.indexOf('channel.on("message"'),
   );
   assert.ok(inbound.indexOf("parseTemporaryChatCommand") < inbound.indexOf("if (!binding)"));
+  assert.ok(inbound.indexOf("parseDirectSchedulePrompt") < inbound.indexOf("if (!binding)"));
   assert.match(source, /TemporaryChatStore\.open/);
   assert.match(source, /ensureSessionControllerTarget/);
   assert.match(source, /temporaryChats\.list\(\)/);

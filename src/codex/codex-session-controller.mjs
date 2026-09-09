@@ -1,12 +1,16 @@
 import { CodexTurnCollector } from "./codex-turn-collector.mjs";
 import { CodexAppServerConnection } from "./codex-app-server-connection.mjs";
 import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
+import {
+  createCodexAppAutomationToolConfig,
+  loadCodexAppAutomationDynamicTools,
+} from "../runtime/codex-app-tools-host.mjs";
 
 const ACTIVE_WRITER_PATTERN = /already has an active writer/i;
+const MISSING_THREAD_PATTERN = /(?:no rollout found|(?:thread|conversation).*(?:not found|does not exist|unknown))/i;
 const SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE =
   "当前 Session 的写入权限正被 Codex Desktop 或 CLI 占用。请在对应客户端关闭该对话，或结束正在使用它的连接后重试；Bridge 与其他群仍会继续运行。";
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
-
 function turnSandboxPolicy(mode, cwd) {
   switch (mode) {
     case "read-only":
@@ -74,6 +78,10 @@ function isRecoverableTransportError(error) {
 
 function isActiveWriterResumeError(error) {
   return error?.method === "thread/resume" && ACTIVE_WRITER_PATTERN.test(String(error?.message || ""));
+}
+
+function isMissingThreadDeleteError(error) {
+  return error?.method === "thread/delete" && MISSING_THREAD_PATTERN.test(String(error?.message || ""));
 }
 
 function sessionWriterConflict(error) {
@@ -165,6 +173,8 @@ export class CodexSessionController {
     requestTimeoutMs = 30_000,
     reconnectDelayMs = 2_000,
     sleepImpl = delay,
+    dynamicToolRequestHandler,
+    dynamicToolsProvider = loadCodexAppAutomationDynamicTools,
     log = () => {},
   }) {
     if (!appServerUrl) throw new TypeError("appServerUrl is required for the persistent session controller");
@@ -180,6 +190,8 @@ export class CodexSessionController {
     this.reconnectDelayMs = reconnectDelayMs;
     this.sleepImpl = sleepImpl;
     this.log = log;
+    this.dynamicToolRequestHandler = dynamicToolRequestHandler;
+    this.dynamicToolsProvider = dynamicToolsProvider;
     this.states = new Map([...this.targets].map(([threadId, target]) => [threadId, controllerState(target)]));
     this.collector = new CodexTurnCollector({
       targets: [...this.targets.values()],
@@ -230,12 +242,73 @@ export class CodexSessionController {
     }
   }
 
+  async createTarget({ chatId, cwd, name, sandboxMode = this.sandboxMode }) {
+    const normalizedCwd = String(cwd || "");
+    const normalizedName = String(name || "").trim();
+    if (!normalizedCwd || !normalizedName) {
+      throw new TypeError("A fresh Session controller target requires cwd and name");
+    }
+    if (!SANDBOX_MODES.has(sandboxMode)) {
+      throw new TypeError("A fresh Session controller target requires a supported sandbox mode");
+    }
+    if (this.connectPromise) await this.connectPromise;
+    if (!this.connected) {
+      throw controllerError("codex_app_server_unavailable", "The shared Codex App Server is not connected");
+    }
+    const dynamicTools = this.dynamicToolRequestHandler
+      ? await this.dynamicToolsProvider()
+      : undefined;
+    const result = await this.#request("thread/start", {
+      cwd: normalizedCwd,
+      approvalPolicy: "never",
+      sandbox: sandboxMode,
+      serviceName: "feishu-codex-session-relay",
+      ...(dynamicTools ? { dynamicTools } : {}),
+    });
+    const thread = result?.thread;
+    const threadId = String(thread?.id || "");
+    if (!threadId) throw new Error("Codex App Server did not return a thread id");
+    if (this.targets.has(threadId)) throw new Error("Codex App Server returned an existing task id");
+    await this.#request("thread/name/set", { threadId, name: normalizedName });
+
+    const target = Object.freeze({ threadId, chatId, cwd: normalizedCwd });
+    const state = controllerState(target);
+    this.targets.set(threadId, target);
+    this.states.set(threadId, state);
+    this.collector.addTarget(target);
+    this.#applyResume(state, result);
+    this.#applyThreadSnapshot(state, thread);
+    return Object.freeze({ ...thread, id: threadId, name: normalizedName });
+  }
+
   removeTarget(threadId) {
     const key = String(threadId || "");
     if (!this.targets.delete(key)) return false;
     this.states.delete(key);
     this.collector.removeTarget(key);
     return true;
+  }
+
+  async readPersistedThread(threadId, { includeTurns = true } = {}) {
+    const key = String(threadId || "");
+    if (!key) throw new TypeError("Codex task id is required");
+    const result = await this.#request("thread/read", { threadId: key, includeTurns });
+    if (result?.thread?.id !== key) throw new Error("Codex App Server returned a different task");
+    const state = this.states.get(key);
+    if (state) this.#applyThreadSnapshot(state, result.thread);
+    return clone(result.thread);
+  }
+
+  async deletePersistedThread(threadId) {
+    const key = String(threadId || "");
+    if (!key) throw new TypeError("Codex task id is required");
+    try {
+      await this.#request("thread/delete", { threadId: key });
+    } catch (error) {
+      if (!isMissingThreadDeleteError(error)) throw error;
+    }
+    this.removeTarget(key);
+    return Object.freeze({ deleted: true, threadId: key });
   }
 
   async start() {
@@ -282,6 +355,9 @@ export class CodexSessionController {
       cwd: state.target.cwd,
       approvalPolicy: "never",
       sandbox: this.#resolvedSandboxMode(state.target.threadId),
+      ...(this.dynamicToolRequestHandler
+        ? { config: createCodexAppAutomationToolConfig(state.target.threadId) }
+        : {}),
     };
   }
 
@@ -358,6 +434,7 @@ export class CodexSessionController {
       WebSocketImpl: this.WebSocketImpl,
       requestTimeoutMs: this.requestTimeoutMs,
       clientLabel: "controller",
+      onRequest: this.dynamicToolRequestHandler,
       log: this.log,
       onNotification: (method, params) => this.#handleNotification(method, params),
       onClose: ({ intentional }) => {

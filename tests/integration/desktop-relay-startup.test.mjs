@@ -94,8 +94,21 @@ test("continuous watchdog publishes heartbeat and keeps Bridge recovery asynchro
   assert.match(source, /Start-Process -FilePath \$windowsPowerShell[\s\S]*start-bridge\.ps1/);
   assert.match(
     source,
-    /\$bridgeRecoveryChecked = \[bool\]\(Start-BridgeRecoveryIfNeeded/,
+    /\$bridgeRecoveryAttempted = \[bool\]\(Start-BridgeRecoveryIfNeeded/,
   );
+  assert.match(source, /\[int\]\$BridgeRecoveryIntervalSeconds = 120/);
+  assert.match(
+    source,
+    /\$bridgeRecoveryAttempted[\s\S]*\$lastBridgeRecoveryAttemptAt = \[DateTime\]::UtcNow/,
+  );
+  assert.match(
+    source,
+    /TotalSeconds -ge[\s\S]*\$BridgeRecoveryIntervalSeconds[\s\S]*Start-BridgeRecoveryIfNeeded/,
+  );
+  assert.match(source, /function Test-SavedProcessIdentity/);
+  assert.match(source, /Get-CimInstance Win32_Process/);
+  assert.match(source, /ExpectedCommandPath/);
+  assert.match(source, /Remove-Item -LiteralPath \$PidPath/);
 });
 
 test("stable bootstrap clears only the pointer recorded in owned activation state", async () => {
@@ -144,6 +157,31 @@ test("Bridge delegates shared App Server ownership to the standalone starter", a
   assert.ok(pointerDisableIndex >= 0);
   assert.ok(appServerIndex > pointerDisableIndex);
   assert.ok(pointerEnableIndex > appServerIndex);
+});
+
+test("transient Bridge startup failures remain eligible for watchdog recovery", async () => {
+  const startSource = await readScript("start-bridge.ps1");
+  const supervisorSource = await readScript("bridge-supervisor.ps1");
+  const pointerSource = await readScript("desktop-relay-pointer.ps1");
+
+  assert.match(pointerSource, /\[switch\]\$Preparing/);
+  assert.match(
+    pointerSource,
+    /if \(\$Preparing\)[\s\S]*Write-BridgeState -State \$relayState -BridgeEnabled \$true/,
+  );
+  assert.match(
+    startSource,
+    /desktopRelayPointerScript -Url \(\[string\]\$config\.sessionRelay\.appServerUrl\) -Preparing/,
+  );
+  assert.match(startSource, /\$isSupervisor = \$supervisorCandidate -and/);
+  assert.match(startSource, /CommandLine\)\.IndexOf\(\$supervisorScript/);
+  assert.match(startSource, /Local\\FeishuCodexBridgeStart-/);
+  assert.match(startSource, /\$startupMutex\.WaitOne\(\[TimeSpan\]::FromSeconds\(30\)\)/);
+  assert.match(startSource, /\$startupMutex\.ReleaseMutex\(\)/);
+  assert.match(
+    supervisorSource,
+    /\$intentionalStop = Test-Path -LiteralPath \$supervisorStopPath[\s\S]*if \(\$intentionalStop\)[\s\S]*-Disable[\s\S]*else[\s\S]*-Preparing/,
+  );
 });
 
 test("Session binding reloads use the Supervisor handshake", async () => {
