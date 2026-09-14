@@ -134,6 +134,20 @@ Codex 从当前仓库范围加载它。不要把它安装成用户全局 Skill�
     "eventTtlMs": 900000,
     "taskLeaseMs": 43200000
   },
+  "teamHub": {
+    "enabled": true,
+    "path": "G:\\Shared\\team-agent-hub",
+    "scopeId": "shared-repository",
+    "writerOpenIds": ["<OWNER_OPEN_ID>"],
+    "repositoryIds": ["alice-local-project"],
+    "maxContextChars": 24000,
+    "sharedContext": {
+      "enabled": true,
+      "maxContextChars": 12000,
+      "maxTurns": 24,
+      "maxEntryChars": 6000
+    }
+  },
   "sandboxMode": "workspace-write"
 }
 ```
@@ -152,6 +166,9 @@ Codex 从当前仓库范围加载它。不要把它安装成用户全局 Skill�
 - `collaboration.receiveMode`：接收端自动化上限；发送方不能强迫接收方更自动。
 - `collaboration.approverOpenIds`：可选择落点、接单、拒绝与审批结果的人类。
 - `collaboration.taskLeaseMs`：本机 `(project.id, branch)` 租约，防止同一分支并发执行。
+- `teamHub.path`：每台机器都指向同一份共享或同步目录（本机路径写法可以不同）；只存在于单机的私有目录不能实现跨机器上下文共享。
+- `teamHub.scopeId`：跨机器稳定的共享范围名。各成员的本机 `project.id` 可以不同，但同一协作群的 `scopeId` 必须完全一致。
+- `teamHub.sharedContext`：把已完成的公开群聊回合自动写入共享日志，并按 `maxTurns`、`maxContextChars` 有界注入后续回合；不额外调用总结模型。
 
 ## 显式命令
 
@@ -225,16 +242,19 @@ Agent 协议 v2 包含事件/任务标识、唯一群、规范化 GitHub 仓库�
 
 ## 共享 Team Hub
 
-可选 Team Hub 只保存稳定知识，不保存实时任务状态：
+可选 Team Hub 保存稳定知识；启用 `sharedContext` 后，还保存已完成的公开群聊回合，但仍不保存实时任务状态：
 
 ```text
-<teamHub.path>/projects/<project.id>/
+<teamHub.path>/projects/<teamHub.scopeId>/
 ├─ knowledge/<id>.md + <id>.meta.json
 ├─ summaries/<id>.md + <id>.meta.json
-└─ references/<id>.md + <id>.meta.json
+├─ references/<id>.md + <id>.meta.json
+└─ shared-context/<群绑定哈希>/turns/<回合哈希>.json
 ```
 
-metadata 保存类别、标题、repository IDs、作者、时间和 SHA-256 revision。更新使用乐观锁，并发或外部修改不会被静默覆盖。每个 Codex 回合按 `knowledge → summaries → references` 注入有界上下文，并明确以当前仓库与运行态的可验证事实为准。Bridge 不自动为 Team Hub commit、pull 或 push。
+metadata 保存类别、标题、repository IDs、作者、时间和 SHA-256 revision。更新使用乐观锁，并发或外部修改不会被静默覆盖。共享回合使用不可变文件，按飞书消息和 Agent 去重；文件与目录只保存群和消息标识的 SHA-256 哈希，不保存原始 chat ID、message ID 或成员 open ID。每个 Codex 回合按 `knowledge → summaries → references → 最近共享群聊` 注入有界上下文，并明确把共享对话视为非系统指令、以当前仓库与运行态的可验证事实为准。Bridge 不自动为 Team Hub commit、pull 或 push。
+
+所有成员的 `teamHub.path` 必须指向同一份共享内容，并配置相同的 `teamHub.scopeId`、`collaboration.groupChatId` 与 `collaboration.githubRepository`。每个 Agent 只记录自己实际处理并完成的群聊回合；下一次任一 Agent 被调用时，会读取其他 Agent 已写入的公开回合。DM、进行中的回合、工具输出、隐藏推理和实时任务状态不会进入共享上下文。
 
 ## 开发验证
 

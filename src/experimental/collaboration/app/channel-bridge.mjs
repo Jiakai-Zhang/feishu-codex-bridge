@@ -16,6 +16,7 @@ import { DeliveryOutbox } from "../../../persistence/delivery-outbox.mjs";
 import { createSerializedFileWriter } from "../../../persistence/serialized-json-file.mjs";
 import { createExecutor } from "../codex/executor-registry.mjs";
 import { KnowledgeHub } from "../persistence/knowledge-hub.mjs";
+import { SharedContextJournal } from "../persistence/shared-context-journal.mjs";
 import { runProcess } from "../runtime/process-runner.mjs";
 import { createRolloutCompletionWatcher } from "../codex/rollout-completion.mjs";
 import { ProjectContext } from "../git/project-context.mjs";
@@ -77,10 +78,21 @@ const collaborationGit = config.collaboration.enabled
   : undefined;
 const knowledgeHub = config.teamHub.enabled
   ? new KnowledgeHub(config.teamHub.path, {
-      projectId: config.project.id,
+      projectId: config.teamHub.scopeId,
       agentId: config.agent.id,
       repositoryIds: config.teamHub.repositoryIds,
       maxContextChars: config.teamHub.maxContextChars,
+    })
+  : undefined;
+const sharedContextJournal = config.teamHub.sharedContext.enabled
+  ? new SharedContextJournal(config.teamHub.path, {
+      scopeId: config.teamHub.scopeId,
+      groupChatId: config.collaboration.groupChatId,
+      agentId: config.agent.id,
+      repositoryIds: config.teamHub.repositoryIds,
+      maxContextChars: config.teamHub.sharedContext.maxContextChars,
+      maxTurns: config.teamHub.sharedContext.maxTurns,
+      maxEntryChars: config.teamHub.sharedContext.maxEntryChars,
     })
   : undefined;
 
@@ -269,10 +281,14 @@ async function askCodex(content, onProgress, targetThreadId = activeThreadId) {
     log(`completion watcher unavailable for ${targetThreadId}: ${safeError(error)}`);
   }
   let lastAgentMessage = "";
-  const sharedKnowledge = knowledgeHub ? await knowledgeHub.buildContext() : "";
+  const [sharedKnowledge, sharedConversation] = await Promise.all([
+    knowledgeHub ? knowledgeHub.buildContext() : "",
+    sharedContextJournal ? sharedContextJournal.buildContext() : "",
+  ]);
   const prompt = [
     `[来自已验证的飞书消息；Project=${config.project.id}；branch=${scopedThread.worktree.branch || "detached"}]`,
     ...(sharedKnowledge ? [sharedKnowledge, ""] : []),
+    ...(sharedConversation ? [sharedConversation, ""] : []),
     content.slice(0, config.maxInputChars),
     "",
     `请直接处理并回答这条消息。本轮运行沙箱为 ${effectiveSandbox}。只允许在当前 Project 的 worktree 内工作，不得切换 checkout 的分支。${effectiveSandbox === "read-only" ? "当前是受保护的默认分支，只能读取和分析；需要修改时请让用户用 /new --branch 创建任务 worktree。" : "当前任务分支允许按沙箱策略修改。"}`,
@@ -640,6 +656,7 @@ const { processMessage, processQueuedMessage } = createSessionTurnOrchestrator({
   retryPendingDeliveries,
   safeError,
   safeErrorCode,
+  sharedContextJournal,
 });
 
 registerInboundHandlers({

@@ -2,6 +2,8 @@ import { streamCodexInSingleMessage } from "../feishu/stream-progress.mjs";
 import { commandName } from "./command-router.mjs";
 import { formatDuration } from "./progress-renderer.mjs";
 
+const SHARED_CHAT_TYPES = new Set(["group", "topic"]);
+
 export function createSessionTurnOrchestrator({
   config,
   channel,
@@ -20,6 +22,7 @@ export function createSessionTurnOrchestrator({
   retryPendingDeliveries,
   safeError,
   safeErrorCode,
+  sharedContextJournal,
 }) {
   async function streamCodex(msg, content, targetThreadId, work) {
     // Feishu disables native streaming_mode after ten minutes. End it early,
@@ -43,13 +46,22 @@ export function createSessionTurnOrchestrator({
         }
         return answer;
       },
-      onAnswerReady: (answer) => deliveryOutbox.put({
-        messageId: msg.messageId,
-        chatId: msg.chatId,
-        threadId: msg.threadId,
-        markdown: answer,
-        createdAt: Date.now(),
-      }),
+      onAnswerReady: async (answer) => {
+        await deliveryOutbox.put({
+          messageId: msg.messageId,
+          chatId: msg.chatId,
+          threadId: msg.threadId,
+          markdown: answer,
+          createdAt: Date.now(),
+        });
+        if (sharedContextJournal && SHARED_CHAT_TYPES.has(msg.chatType)) {
+          await sharedContextJournal.appendTurn({
+            messageId: msg.messageId,
+            humanContent: content,
+            agentAnswer: answer,
+          }).catch((error) => log(`shared context append failed: ${safeError(error)}`));
+        }
+      },
       log,
       streamWindowMs: segmentMs,
     });

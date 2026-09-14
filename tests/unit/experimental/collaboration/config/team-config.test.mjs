@@ -63,8 +63,15 @@ test("normalizes a one-group, one-Project, one-GitHub-repository team config", (
     teamHub: {
       enabled: true,
       path: "../team-agent-hub",
+      scopeId: "shared-repository",
       writerOpenIds: ["ou_owner"],
       repositoryIds: ["bridge"],
+      sharedContext: {
+        enabled: true,
+        maxContextChars: 8000,
+        maxTurns: 12,
+        maxEntryChars: 3000,
+      },
     },
   }, { configDir: "C:/config" });
 
@@ -79,6 +86,13 @@ test("normalizes a one-group, one-Project, one-GitHub-repository team config", (
   assert.equal(config.project.desktopProjectId, "desktop-project-1");
   assert.equal(config.project.worktreeRoot, path.resolve("C:/config", "../worktrees/bridge"));
   assert.equal(config.teamHub.path, path.resolve("C:/config", "../team-agent-hub"));
+  assert.equal(config.teamHub.scopeId, "shared-repository");
+  assert.deepEqual(config.teamHub.sharedContext, {
+    enabled: true,
+    maxContextChars: 8000,
+    maxTurns: 12,
+    maxEntryChars: 3000,
+  });
 });
 
 test("requires exactly one collaboration group and one GitHub repository", () => {
@@ -173,6 +187,10 @@ test("restricts approvers, Team Hub writers, and repository scopes", () => {
     repositories: [{ id: "bridge", path: "./workspace" }],
     teamHub: { enabled: true, path: "./hub", repositoryIds: ["unknown"] },
   }), /repositoryIds/);
+  assert.throws(() => normalizeBridgeConfig({
+    ...legacy,
+    teamHub: { enabled: true, path: "./hub", sharedContext: { enabled: true } },
+  }), /requires both Team Hub and collaboration/);
 });
 
 test("refuses a worktree root or collaboration remote outside Project allowlists", () => {

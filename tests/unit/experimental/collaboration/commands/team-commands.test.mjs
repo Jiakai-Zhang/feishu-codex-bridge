@@ -27,7 +27,11 @@ const config = {
       enabled: true,
     }],
   },
-  teamHub: { enabled: true, repositoryIds: ["bridge"] },
+  teamHub: {
+    enabled: true,
+    repositoryIds: ["bridge"],
+    sharedContext: { enabled: true, maxTurns: 24, maxContextChars: 12_000 },
+  },
 };
 
 test("parses repository-bound peer control messages", () => {
@@ -53,6 +57,7 @@ test("team status shows the one-group one-repository boundary and local receive 
   assert.match(markdown, /local-bridge-project/);
   assert.match(markdown, /oc_team/);
   assert.match(markdown, /example\/shared-repository/);
+  assert.match(markdown, /共享群聊上下文：\*\*已启用\*\* · 最近 24 回合 · 最多 12000 字符/);
   assert.match(markdown, /普通 owner 群消息会进入自己的 Agent/);
 });
 

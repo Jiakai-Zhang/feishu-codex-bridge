@@ -207,6 +207,12 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
   if (teamHubRepositoryIds.length === 0 || teamHubRepositoryIds.some((id) => !knownRepositoryIds.has(id))) {
     throw new TypeError("teamHub.repositoryIds must contain only configured repository ids");
   }
+  const teamHubScopeId = String(raw.teamHub?.scopeId || project.id).trim();
+  if (!AGENT_ID.test(teamHubScopeId)) throw new TypeError(`Invalid teamHub.scopeId: ${teamHubScopeId}`);
+  const sharedContextEnabled = raw.teamHub?.sharedContext?.enabled === true;
+  if (sharedContextEnabled && (!teamHubEnabled || !collaborationEnabled)) {
+    throw new TypeError("teamHub.sharedContext requires both Team Hub and collaboration to be enabled");
+  }
 
   return {
     ...raw,
@@ -252,12 +258,25 @@ export function normalizeBridgeConfig(raw, { configDir = process.cwd() } = {}) {
     teamHub: {
       enabled: teamHubEnabled,
       path: teamHubPath,
+      scopeId: teamHubScopeId,
       writerOpenIds: teamHubWriterOpenIds,
       repositoryIds: teamHubRepositoryIds,
       maxContextChars: positiveNumber(raw.teamHub?.maxContextChars, 24_000, {
         min: 1_000,
         max: 100_000,
       }),
+      sharedContext: {
+        enabled: sharedContextEnabled,
+        maxContextChars: positiveNumber(raw.teamHub?.sharedContext?.maxContextChars, 12_000, {
+          min: 1_000,
+          max: 50_000,
+        }),
+        maxTurns: positiveNumber(raw.teamHub?.sharedContext?.maxTurns, 24, { min: 1, max: 200 }),
+        maxEntryChars: positiveNumber(raw.teamHub?.sharedContext?.maxEntryChars, 6_000, {
+          min: 500,
+          max: 50_000,
+        }),
+      },
     },
   };
 }
