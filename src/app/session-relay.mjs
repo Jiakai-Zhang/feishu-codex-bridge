@@ -86,6 +86,10 @@ import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
 import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
 import {
+  fetchFeishuChatRoster,
+  summarizeFeishuRosterFailure,
+} from "../feishu/feishu-roster-fetch.mjs";
+import {
   parseTemporaryChatCommand,
   resolveDirectPrivateSchedule,
 } from "../relay/temporary-chat-command.mjs";
@@ -704,12 +708,15 @@ async function inspectBinding(binding, { syncName = true } = {}) {
   let members;
   let bots;
   try {
-    [chatInfo, members, bots] = await Promise.all([
-      channel.getChatInfo(binding.groupChatId),
-      channel.getChatMembers(binding.groupChatId, { force: true, idType: "open_id", pageSize: 100, maxPages: 2 }),
-      channel.getChatBots(binding.groupChatId, { force: true }),
-    ]);
+    ({ chatInfo, members, bots } = await fetchFeishuChatRoster(channel, binding.groupChatId, {
+      onRetry: ({ failures }) => {
+        log(`group roster lookup retrying: ${failures.map(({ operation, category, code }) => (
+          `${operation}:${category}${code ? `:code=${String(code).slice(0, 40)}` : ""}`
+        )).join(",")}`);
+      },
+    }));
   } catch (error) {
+    log(`group roster lookup failed: ${summarizeFeishuRosterFailure(error)}`);
     throw new SessionRelayError(
       "roster_unavailable",
       "The Bridge Bot cannot verify the bound group's complete membership",
@@ -840,11 +847,7 @@ async function createWorkspaceProject({ name, actorOpenId }) {
 }
 
 async function verifyCreatedGroup({ binding, groupName }) {
-  const [chatInfo, members, bots] = await Promise.all([
-    channel.getChatInfo(binding.groupChatId),
-    channel.getChatMembers(binding.groupChatId, { force: true, idType: "open_id", pageSize: 100, maxPages: 2 }),
-    channel.getChatBots(binding.groupChatId, { force: true }),
-  ]);
+  const { chatInfo, members, bots } = await fetchFeishuChatRoster(channel, binding.groupChatId);
   assertSessionGroup({
     chatInfo,
     members,
@@ -954,6 +957,12 @@ function publicFailure(error) {
     case "codex_app_server_error":
       return "本机 Codex 服务没有接受这次操作；消息未被改投到其他任务。请发送 `/status` 确认状态后重试。";
     case "roster_unavailable":
+      if (error?.cause?.category === "network") {
+        return "飞书网络暂时不稳定，Bridge 自动重试后仍无法核验群成员。为安全起见，本消息没有进入 Codex，请稍后重新发送。";
+      }
+      if (error?.cause?.category !== "permission") {
+        return "群绑定核验暂时失败，但飞书没有明确返回权限错误。为安全起见，本消息没有进入 Codex，请稍后重新发送；若持续出现，请检查 Bridge 日志中的群核验错误分类。";
+      }
       return "群绑定尚未就绪：Bridge 无法用 Bot 身份核验群成员。请为该飞书应用开通 `im:chat:readonly` 与 `im:chat.members:read` 并发布新版本。为安全起见，本消息没有进入 Codex。";
     case "owner_missing":
     case "owner_inactive":
