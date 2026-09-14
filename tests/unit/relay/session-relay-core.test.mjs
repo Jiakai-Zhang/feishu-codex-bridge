@@ -60,7 +60,7 @@ test("rejects another human, a bot, another group, and unsupported content", () 
   assert.throws(() => assertRelayMessage({ ...message, senderId: "ou_other" }, binding), /authorized Session participant/);
   assert.throws(() => assertRelayMessage({ ...message, senderIsBot: true }, binding), /authorized Session participant/);
   assert.throws(() => assertRelayMessage({ ...message, chatId: "oc_other" }, binding), /bound group/);
-  assert.throws(() => assertRelayMessage({ ...message, rawContentType: "folder", content: "" }, binding), /text, image, and file/);
+  assert.throws(() => assertRelayMessage({ ...message, rawContentType: "folder", content: "" }, binding), /text, rich posts, and supported attachment/);
 });
 
 test("accepts image-only, file-only, and rich post resource messages from the bound owner", () => {
@@ -74,6 +74,34 @@ test("accepts image-only, file-only, and rich post resource messages from the bo
       content: rawContentType === "image" ? "![image](img_key)" : "",
       resources: [{ type: rawContentType === "image" ? "image" : "file", fileKey: "resource_key" }],
     }, binding));
+  }
+});
+
+test("accepts a rich post list without attachments", () => {
+  const content = assertRelayMessage({
+    chatId: "oc_bound",
+    chatType: "group",
+    senderId: "ou_owner",
+    senderIsBot: false,
+    rawContentType: "post",
+    content: "Plan\n- inspect\n- implement\n- verify",
+    resources: [],
+  }, binding);
+
+  assert.equal(content, "Plan\n- inspect\n- implement\n- verify");
+});
+
+test("still rejects resource message types when the resource descriptor is missing", () => {
+  for (const rawContentType of ["image", "file", "audio", "video"]) {
+    assert.throws(() => assertRelayMessage({
+      chatId: "oc_bound",
+      chatType: "group",
+      senderId: "ou_owner",
+      senderIsBot: false,
+      rawContentType,
+      content: "resource placeholder",
+      resources: [],
+    }, binding), /text, rich posts, and supported attachment/);
   }
 });
 

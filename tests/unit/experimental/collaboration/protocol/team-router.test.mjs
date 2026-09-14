@@ -46,6 +46,19 @@ test("delivers the owner's ordinary group dialogue to their Agent", () => {
   assert.equal(route.addressedBy, "owner-message");
 });
 
+test("delivers a rich post list from an allowed human", () => {
+  const route = classifyInboundMessage({
+    ...base,
+    rawContentType: "post",
+    content: "Plan\n- inspect\n- verify",
+    chatType: "group",
+    chatId: "oc_team",
+    mentionedBot: false,
+  }, config);
+  assert.equal(route.kind, "human");
+  assert.equal(route.addressedBy, "owner-message");
+});
+
 test("mention mode requires a real Bot mention", () => {
   const mentionConfig = {
     ...config,
@@ -95,4 +108,5 @@ test("peer bots must be trusted and explicitly mention the local Bot", () => {
   assert.equal(classifyInboundMessage({ ...peerMessage, mentionedBot: false }, config).reason, "not_mentioned");
   assert.equal(classifyInboundMessage({ ...peerMessage, senderId: "ou_localbot" }, config).reason, "self_message");
   assert.equal(classifyInboundMessage({ ...peerMessage, senderId: "ou_unknown" }, config).reason, "untrusted_peer");
+  assert.equal(classifyInboundMessage({ ...peerMessage, rawContentType: "post" }, config).reason, "bot_non_text");
 });

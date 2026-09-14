@@ -1,5 +1,8 @@
+const HUMAN_CONTENT_TYPES = new Set(["text", "post"]);
+
 export function classifyInboundMessage(msg, config, localBotOpenId = config.agent.botOpenId) {
-  if (!msg || msg.rawContentType !== "text") return { kind: "ignore", reason: "non_text" };
+  const contentType = String(msg?.rawContentType || "");
+  if (!HUMAN_CONTENT_TYPES.has(contentType)) return { kind: "ignore", reason: "non_text" };
   const senderIsBot = msg.senderIsBot === true || msg.senderType === "bot";
 
   if (msg.chatType === "p2p") {
@@ -20,6 +23,7 @@ export function classifyInboundMessage(msg, config, localBotOpenId = config.agen
   if (msg.mentionAll) return { kind: "ignore", reason: "mention_all" };
 
   if (senderIsBot) {
+    if (contentType !== "text") return { kind: "ignore", reason: "bot_non_text" };
     if (!msg.mentionedBot) return { kind: "ignore", reason: "not_mentioned" };
     if (localBotOpenId && msg.senderId === localBotOpenId) {
       return { kind: "ignore", reason: "self_message" };

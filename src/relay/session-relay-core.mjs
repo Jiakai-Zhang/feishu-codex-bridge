@@ -7,6 +7,7 @@ export class SessionRelayError extends Error {
 }
 
 const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video"]);
+const RELAY_RESOURCE_MESSAGE_TYPES = new Set(["image", "file", "audio", "video"]);
 
 export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?.ownerOpenId] } = {}) {
   if (!msg || msg.chatId !== binding.groupChatId) {
@@ -21,8 +22,9 @@ export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?
     throw new SessionRelayError("untrusted_sender", "Message sender is not an authorized Session participant");
   }
   const resources = Array.isArray(msg.resources) ? msg.resources : [];
-  if (!RELAY_MESSAGE_TYPES.has(String(msg.rawContentType || "")) || (msg.rawContentType !== "text" && resources.length === 0)) {
-    throw new SessionRelayError("unsupported_message", "Session Relay accepts text, image, and file messages only");
+  const contentType = String(msg.rawContentType || "");
+  if (!RELAY_MESSAGE_TYPES.has(contentType) || (RELAY_RESOURCE_MESSAGE_TYPES.has(contentType) && resources.length === 0)) {
+    throw new SessionRelayError("unsupported_message", "Session Relay accepts text, rich posts, and supported attachment messages only");
   }
   const content = String(msg.content || "");
   if (!content.trim() && resources.length === 0) throw new SessionRelayError("empty_message", "Message has no usable content");
