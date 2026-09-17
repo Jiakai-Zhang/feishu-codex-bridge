@@ -2613,11 +2613,9 @@ async function processInboundMessage(msg, baseBinding) {
     if (command) await processCommandMessage(msg, binding, command);
     else {
       const humanMemberCount = inspection?.humanMemberCount || 1;
-      const videoOnly = hasResources && msg.resources.every(({ type }) => type === "video");
       const addressed = isSessionPromptAddressed(msg, {
         humanMemberCount,
         replyToBot: await repliesToBridgeBot(msg),
-        allowUnmentionedAttachment: videoOnly,
       });
       if (!addressed) {
         log(`ignored normal group conversation message ${msg.messageId}`);

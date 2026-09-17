@@ -79,10 +79,10 @@ export function assertSoloGroup({ chatInfo, members, bots, binding, connectedBot
 export function isSessionPromptAddressed(msg, {
   humanMemberCount = 1,
   replyToBot = false,
-  allowUnmentionedAttachment = false,
 } = {}) {
   if (msg?.chatType !== "group" || Number(humanMemberCount) <= 1) return true;
-  return Boolean(msg?.mentionedBot || replyToBot || allowUnmentionedAttachment);
+  const hasAttachment = Array.isArray(msg?.resources) && msg.resources.length > 0;
+  return Boolean(msg?.mentionedBot || replyToBot || hasAttachment);
 }
 
 export function assertMatchingNames(groupName, sessionTitle) {

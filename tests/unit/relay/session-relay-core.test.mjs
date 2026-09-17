@@ -161,10 +161,13 @@ test("requires an explicit Bot address after a second human joins but permits at
     humanMemberCount: 2,
     replyToBot: true,
   }), true);
-  assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, {
-    humanMemberCount: 2,
-    allowUnmentionedAttachment: true,
-  }), true);
+  for (const type of ["image", "file", "audio", "video"]) {
+    assert.equal(isSessionPromptAddressed({
+      chatType: "group",
+      mentionedBot: false,
+      resources: [{ type, fileKey: `${type}_key` }],
+    }, { humanMemberCount: 2 }), true);
+  }
 });
 
 test("requires the Feishu group and Codex session names to match exactly", () => {
