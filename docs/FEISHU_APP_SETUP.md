@@ -104,6 +104,7 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 - `docx:document:create`：以当前用户身份创建长回答云文档；
 - `docx:document:readonly`：定位每群独立文档中的持续摘要受控区块；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
+- `drive:file:upload`：当附件超过飞书消息 30 MiB 上限时上传原文件并返回云盘链接。
 
 上述 OAuth 是 Bridge 主机当前授权用户（通常为 Bridge Owner）的个人身份。Feed 标签也是个人视图：由普通成员作为 owner 的私有群可能不在 Owner OAuth 的可见范围，因此标签只能尽力应用，不能作为该成员 Session 绑定的授权依据；授权始终由本机成员登记、固定 `chat_id` 和实时群成员校验决定。长回答文档同样由该 OAuth 用户创建后把链接发到绑定群。
 
@@ -123,10 +124,10 @@ Lark CLI 当前创建的新应用通常已默认启用 Bot、长连接和该消�
 
 ## C. 用户 OAuth 与安全校验
 
-Feed 标签和长回答云文档由当前用户身份调用，需要单独授权：
+Feed 标签、长回答云文档和超限附件云盘兜底由当前用户身份调用，需要单独授权：
 
 ```bash
-./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
+./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
 ```
 
 用户本人在浏览器确认后运行：
@@ -140,14 +141,14 @@ Feed 标签和长回答云文档由当前用户身份调用，需要单独授权
 Windows 使用完全对应的入口：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
 .\verify-feishu-app.ps1
 ```
 
 - 应用配置存在；
 - Bot 身份 available/verified；
 - 用户身份 available/verified；
-- 七项用户 OAuth scope 完整；
+- 八项用户 OAuth scope 完整；
 - `im.message.receive_v1` 已发布；
 - 消息事件所需应用权限已生效。
 

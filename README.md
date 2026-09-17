@@ -157,6 +157,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 | 操作系统 | macOS 13+ 或 Windows 10/11 |
 | Codex | 已安装并登录 Codex Desktop；CLI/App Server 能力可用；macOS 或 Windows 由 Codex 执行安装时，当前对话均已设为“完全访问（Full access）”；“替我审批”不解除沙盒边界 |
 | Node.js | `>=22.13.0`，并带 npm |
+| FFmpeg | 可选；安装后，大于 30 MiB 的 MP4 会先自动压缩为适合飞书消息的 H.264/AAC 视频；未安装或压缩质量不足时直接使用云盘兜底 |
 | 其他 | macOS 自带 Bash/launchd/Keychain，或 PowerShell 5.1/7；Git；已登录且可读取私有仓库的 GitHub CLI |
 | 飞书 | 可创建企业自建应用的组织账号；macOS 和 Windows 安装脚本都会打开官方模板配置权限和事件 |
 
@@ -183,7 +184,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 事件订阅必须使用长连接，并包含 `im.message.receive_v1`。
 
-标准安装还会以当前用户身份调用 Feed 标签与长回答文档接口，因此需要浏览器 OAuth：
+标准安装还会以当前用户身份调用 Feed 标签、长回答文档与超限附件云盘上传接口，因此需要浏览器 OAuth：
 
 - `im:feed_group_v1:read`
 - `im:feed_group_v1:write`
@@ -192,6 +193,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 - `docx:document:create`（当前 `main`）
 - `docx:document:write_only`（当前 `main`）
 - `docx:document:readonly`（当前 `main`）
+- `drive:file:upload`（超过消息附件上限时上传原文件并返回云盘链接）
 
 `auth status --json --verify` 的完整结果含身份信息，不要粘贴到聊天、Issue 或日志。App Secret 只允许在本机可见的 `setup-channel-secret.sh`/`.ps1` 交互提示中输入，并由 macOS Keychain 或 Windows DPAPI 保存。
 
@@ -277,7 +279,7 @@ Session owner 可在自己的绑定群运行 `/permissions`，为该 Session 单
 - 入站图片在 Codex 与最终 Prompt 回显中按图片展示；普通附件只回显安全文件名，不显示飞书 `file_key` 或本机绝对路径。
 - 当前 `main` 的一个 Turn 使用一张可更新卡片；公开进度在原卡片刷新，完成后由最终答案原位替换，并显示完成时间、总用时和本轮真实 Token。随后完整最终答案会作为最新消息再次发送，避免原地更新的旧卡片留在聊天上方。
 - 公开进度始终不 `@`；最终回答可按 Session 设置 `@` 初始 Turn 发起者，Desktop-only Turn 回退到 Session owner，私聊临时 Chat 不额外 `@`。
-- 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送，且不暴露本机绝对路径。
+- 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送。更大的 MP4 在 FFmpeg 可用时先压缩到约 27 MiB 后发送原生视频；压缩失败、质量预算过低或其他超限文件会上传原文件到飞书云盘并返回链接。所有路径都不会暴露本机绝对路径。
 - 当前 `main` 中，最终文本超过 `maxReplyChars` 时会写入当前用户的飞书云文档；创建失败则回退到普通文本投递。
 - 每个固定绑定群可关联一份独立持续摘要文档，并自动固定为群顶部的“持续摘要”标签页。默认等待 60 秒合并相邻回合，由后台 ephemeral Luna（`gpt-5.6-luna`，low effort）处理；每次模型输入只有“上次摘要 + 尚未处理的新回合”，不重读完整聊天历史或整份文档，也不改变群聊主任务的模型设置。
 - Bridge 启动时不会补发历史答案；若启动时绑定 Session 正在运行，会接管活动 Turn，并补齐断线期间刚完成的结果。

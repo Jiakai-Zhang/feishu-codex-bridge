@@ -95,12 +95,14 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 文档创建失败时自动退回普通文本投递。
 - 本地图片不超过 10 MiB 时内嵌；超过内嵌上限但不超过 30 MiB 时降级为原生附件。
 - 视频和其他本地文件不超过 30 MiB 时，在最终回答后按原顺序发送为原生附件。
+- 超过 30 MiB 的 MP4 在 FFmpeg 可用时先以 H.264/AAC 双遍压缩到约 27 MiB，并继续作为群内原生视频发送；原文件不会被修改。
+- 压缩失败、质量预算过低或其他超过 30 MiB 的文件会以当前用户身份上传原文件到飞书云盘并返回链接；上传结果按源文件指纹持久化，重试不会重复创建文件。
 - `::visualize` 指向的本地 HTML 也作为附件发送。
 - 生产路径不限制媒体条目数；重复路径只投递一次。
-- 超限、空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
+- 空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
 - 飞书消息不会包含本机绝对路径；附件消息也不会额外 `@` 任何人。
 
-文档能力需要用户 OAuth `docx:document:create`、`docx:document:readonly` 与 `docx:document:write_only`；自动固定到群顶部还需要 `im:chat.tabs:read` 与 `im:chat.tabs:write_only`。只读文档权限用于局部定位持续摘要受控区块，不会把整份文档提交给模型。把 Codex 媒体上传回飞书需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
+文档能力需要用户 OAuth `docx:document:create`、`docx:document:readonly` 与 `docx:document:write_only`；自动固定到群顶部还需要 `im:chat.tabs:read` 与 `im:chat.tabs:write_only`。只读文档权限用于局部定位持续摘要受控区块，不会把整份文档提交给模型。超限附件云盘兜底需要用户 OAuth `drive:file:upload`。把 Codex 媒体上传回飞书消息需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
 
 ## Session 命令
 

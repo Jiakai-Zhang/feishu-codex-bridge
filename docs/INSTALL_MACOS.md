@@ -79,7 +79,7 @@ Lark CLI 创建的新应用通常已默认启用机器人能力、长连接和 `
 再完成当前用户 OAuth：
 
 ```bash
-./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
+./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
 ./verify-feishu-app.sh
 ```
 

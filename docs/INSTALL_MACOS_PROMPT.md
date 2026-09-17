@@ -126,6 +126,7 @@
    - im:chat.tabs:read
    - im:chat.tabs:write_only
    - docx:document:create
+   - drive:file:upload
    - docx:document:write_only
    - docx:document:readonly
 
@@ -140,7 +141,7 @@
    - 在状态明确为已发布/已生效前暂停等待。
 
 9. 完成当前用户 OAuth：
-   ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
+   ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
 
    浏览器授权必须由用户本人确认。与第 6 步相同，CLI 一旦输出 verification URL，必须将该 URL 原样作为可点击备用链接交给用户并暂停；不输出 device code 或原始 JSON，不重跑令已交付 URL 失效的登录命令。授权完成后运行：
    ./verify-feishu-app.sh
