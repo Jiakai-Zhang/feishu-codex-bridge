@@ -6,8 +6,8 @@ export class SessionRelayError extends Error {
   }
 }
 
-const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video"]);
-const RELAY_RESOURCE_MESSAGE_TYPES = new Set(["image", "file", "audio", "video"]);
+const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video", "media"]);
+const RELAY_RESOURCE_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media"]);
 
 export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?.ownerOpenId] } = {}) {
   if (!msg || msg.chatId !== binding.groupChatId) {
@@ -76,9 +76,13 @@ export function assertSoloGroup({ chatInfo, members, bots, binding, connectedBot
   return true;
 }
 
-export function isSessionPromptAddressed(msg, { humanMemberCount = 1, replyToBot = false } = {}) {
+export function isSessionPromptAddressed(msg, {
+  humanMemberCount = 1,
+  replyToBot = false,
+  allowUnmentionedAttachment = false,
+} = {}) {
   if (msg?.chatType !== "group" || Number(humanMemberCount) <= 1) return true;
-  return Boolean(msg?.mentionedBot || replyToBot);
+  return Boolean(msg?.mentionedBot || replyToBot || allowUnmentionedAttachment);
 }
 
 export function assertMatchingNames(groupName, sessionTitle) {

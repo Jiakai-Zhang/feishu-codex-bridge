@@ -20,6 +20,7 @@ export const FEISHU_BRIDGE_USER_SCOPES = Object.freeze([
   "docx:document:create",
   "docx:document:readonly",
   "docx:document:write_only",
+  "drive:file:upload",
 ]);
 
 export const FEISHU_BRIDGE_EVENTS = Object.freeze([

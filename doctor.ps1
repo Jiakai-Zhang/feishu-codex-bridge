@@ -334,6 +334,12 @@ if ($config) {
         Add-Check -Name 'Feishu long-answer document OAuth scopes' -Passed $documentsReady `
             -Detail $(if ($documentsReady) { 'create and write scopes granted' } else { "missing: $($missingDocumentScopes -join ', ')" })
 
+        $requiredDriveScopes = @('drive:file:upload')
+        $missingDriveScopes = @($requiredDriveScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
+        $driveReady = $missingDriveScopes.Count -eq 0
+        Add-Check -Name 'Feishu oversized-file Drive OAuth scope' -Passed $driveReady `
+            -Detail $(if ($driveReady) { 'upload scope granted' } else { "missing: $($missingDriveScopes -join ', ')" })
+
         $requiredChatTabScopes = @('im:chat.tabs:read', 'im:chat.tabs:write_only')
         $missingChatTabScopes = @($requiredChatTabScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
         $chatTabsReady = $missingChatTabScopes.Count -eq 0
