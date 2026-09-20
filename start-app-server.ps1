@@ -2,7 +2,8 @@ param(
     [switch]$PassThru,
     [string]$Proxy,
     [switch]$NoProxy,
-    [switch]$AllowProxyRestart
+    [switch]$AllowProxyRestart,
+    [switch]$AllowManagedUpgradePortRotation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +96,85 @@ function Update-ConfiguredCodexExecutable {
     } finally {
         Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Move-ManagedUpgradeEndpoint {
+    param(
+        [Parameter(Mandatory)][Uri]$PreviousUri,
+        [Parameter(Mandatory)][int]$PreviousProcessId
+    )
+
+    if (-not $AllowManagedUpgradePortRotation -or
+        -not $codexExecutableChanged -or
+        $PreviousProcessId -le 0 -or
+        (Get-Process -Id $PreviousProcessId -ErrorAction SilentlyContinue) -or
+        -not (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) {
+        return $null
+    }
+
+    $rawConfig = [IO.File]::ReadAllText($configPath)
+    $currentConfig = $rawConfig | ConvertFrom-Json
+    if ([string]$currentConfig.sessionRelay.appServerUrl -ne $PreviousUri.AbsoluteUri) {
+        return $null
+    }
+
+    $rawRelayState = [IO.File]::ReadAllText($relayStatePath)
+    $currentRelayState = $rawRelayState | ConvertFrom-Json
+    if (-not [bool]$currentRelayState.enabled -or
+        [string]$currentRelayState.expectedUrl -ne $PreviousUri.AbsoluteUri) {
+        return $null
+    }
+
+    $listenerAddress = if ($PreviousUri.Host -eq '::1') {
+        [Net.IPAddress]::IPv6Loopback
+    } else {
+        [Net.IPAddress]::Loopback
+    }
+    $reservation = [Net.Sockets.TcpListener]::new($listenerAddress, 0)
+    try {
+        $reservation.Start()
+        $replacementPort = ([Net.IPEndPoint]$reservation.LocalEndpoint).Port
+    } finally {
+        $reservation.Stop()
+    }
+    $replacementHost = if ($PreviousUri.Host -eq '::1') { '[::1]' } else { $PreviousUri.Host }
+    $replacementUri = [Uri]("ws://${replacementHost}:$replacementPort/rpc")
+
+    $propertyPattern = [regex]::new('(?m)("appServerUrl"\s*:\s*)"(?:\\.|[^"\\])*"')
+    $propertyMatch = $propertyPattern.Match($rawConfig)
+    if (-not $propertyMatch.Success) {
+        throw 'bridge.config.json has no replaceable sessionRelay.appServerUrl property.'
+    }
+    $jsonEndpoint = ConvertTo-Json -InputObject $replacementUri.AbsoluteUri -Compress
+    $updatedConfig = $rawConfig.Substring(0, $propertyMatch.Index) +
+        $propertyMatch.Groups[1].Value + $jsonEndpoint +
+        $rawConfig.Substring($propertyMatch.Index + $propertyMatch.Length)
+    $currentRelayState.expectedUrl = $replacementUri.AbsoluteUri
+    $updatedRelayState = ($currentRelayState | ConvertTo-Json -Depth 8) + "`n"
+
+    $configTemporaryPath = "$configPath.$PID.$([guid]::NewGuid().ToString('N')).tmp"
+    $stateTemporaryPath = "$relayStatePath.$PID.$([guid]::NewGuid().ToString('N')).tmp"
+    $rollbackPath = "$configPath.$PID.$([guid]::NewGuid().ToString('N')).rollback"
+    $configMoved = $false
+    try {
+        [IO.File]::WriteAllText($configTemporaryPath, $updatedConfig, [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($stateTemporaryPath, $updatedRelayState, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $configTemporaryPath -Destination $configPath -Force
+        $configMoved = $true
+        Move-Item -LiteralPath $stateTemporaryPath -Destination $relayStatePath -Force
+    } catch {
+        if ($configMoved) {
+            [IO.File]::WriteAllText($rollbackPath, $rawConfig, [Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $rollbackPath -Destination $configPath -Force
+        }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $configTemporaryPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stateTemporaryPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $rollbackPath -Force -ErrorAction SilentlyContinue
+    }
+
+    return $replacementUri
 }
 
 function Request-BridgeReloadForCodexSwitch {
@@ -330,6 +410,7 @@ function Start-AppServerWithNetworkEnvironment {
 
 $mutex = [Threading.Mutex]::new($false, "Local\FeishuCodexBridgeAppServer-$($appServerUri.Port)")
 $lockTaken = $false
+$managedUpgradeListenerStuck = $false
 try {
     try {
         $lockTaken = $mutex.WaitOne([TimeSpan]::FromSeconds(30))
@@ -359,9 +440,10 @@ try {
                         Start-Sleep -Milliseconds 200
                     }
                     if (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port) {
-                        throw 'The previous shared App Server listener remained active after a managed Codex upgrade.'
+                        $managedUpgradeListenerStuck = $true
+                    } else {
+                        Remove-Item -LiteralPath $appServerEnvironmentPath -Force -ErrorAction SilentlyContinue
                     }
-                    Remove-Item -LiteralPath $appServerEnvironmentPath -Force -ErrorAction SilentlyContinue
                 }
             }
         }
@@ -401,7 +483,17 @@ try {
 
     if (-not $appServerProcess) {
         if (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port) {
-            throw "Port $($appServerUri.Port) is already in use by an unverified process; refusing to start the shared Codex App Server."
+            $replacementUri = Move-ManagedUpgradeEndpoint `
+                -PreviousUri $appServerUri -PreviousProcessId $savedAppServerPid
+            if ($replacementUri) {
+                $appServerUri = $replacementUri
+                Remove-Item -LiteralPath $appServerPidPath -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $appServerEnvironmentPath -Force -ErrorAction SilentlyContinue
+            } elseif ($managedUpgradeListenerStuck) {
+                throw 'The previous shared App Server listener remained active after a managed Codex upgrade.'
+            } else {
+                throw "Port $($appServerUri.Port) is already in use by an unverified process; refusing to start the shared Codex App Server."
+            }
         }
         $listenHost = if ($appServerUri.Host -eq '::1') { '[::1]' } else { $appServerUri.Host }
         $listenUrl = "ws://${listenHost}:$($appServerUri.Port)"
