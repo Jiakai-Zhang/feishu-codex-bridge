@@ -43,7 +43,6 @@ export function readNativeVideoThumbnail(localPath, {
       child.kill();
       finish(undefined);
     }, timeoutMs);
-    timer.unref?.();
     child.on("error", () => finish(undefined));
     child.stdout.setEncoding("ascii");
     child.stdout.on("data", (chunk) => {

@@ -9,6 +9,8 @@ import {
   transcodeVideoForFeishu,
 } from "../../../src/runtime/video-transcoder.mjs";
 
+const portableVideoPath = path.join(os.tmpdir(), "bridge-video-cover-test.mp4");
+
 test("calculates a bounded video bitrate and rejects unusably low quality", () => {
   assert.equal(calculateVideoBitrateKbps(60, { targetBytes: 10 * 1024 * 1024 }) > 1_000, true);
   assert.equal(calculateVideoBitrateKbps(24 * 60 * 60, { targetBytes: 1024 * 1024 }), undefined);
@@ -74,7 +76,7 @@ test("extracts a real PNG frame from the final video for the Feishu cover", asyn
     callback(null, png, Buffer.alloc(0));
   };
 
-  const result = await extractVideoFrameForFeishu("C:/output/final.mp4", {
+  const result = await extractVideoFrameForFeishu(portableVideoPath, {
     ffmpegExecutable: "ffmpeg-test",
     ffprobeExecutable: "ffprobe-test",
     execFile,
@@ -95,7 +97,7 @@ test("rejects an invalid extracted frame and removes an oversized temporary tran
     }
     callback(null, Buffer.from("not a png"), Buffer.alloc(0));
   };
-  await assert.rejects(() => extractVideoFrameForFeishu("C:/output/final.mp4", {
+  await assert.rejects(() => extractVideoFrameForFeishu(portableVideoPath, {
     ffmpegExecutable: "ffmpeg-test",
     ffprobeExecutable: "ffprobe-test",
     execFile: invalidFrameExec,
