@@ -2,63 +2,19 @@
 
 在 macOS 或 Windows 上把飞书群固定连接到本机 Codex Session。它复用 ChatGPT/Codex Desktop/CLI 的登录状态，不需要 OpenAI API Key；你可以从飞书继续同一段 Codex 对话，也能把 Desktop 发起的结果同步回群。
 
-> **Beta 状态**：macOS 私有多用户候选版为 `v0.4.0-macos-rc.9`；Windows 公开基线仍为 `v0.3.2-windows-rc.4`，私有多用户候选版为 `v0.4.0-windows-rc.5`。两个私有候选版提供固定链接的极简安装与升级入口；它们仍依赖 Codex App Server 的实验性 WebSocket 接口，不建议作为无人值守的生产服务。
+> **Beta**：当前版本仍依赖 Codex App Server 的实验性 WebSocket 接口，适合个人和小团队试用，不建议作为无人值守的生产服务。安装时请直接使用下方安装入口中的固定 release tag，不要改用持续变化的 `main`。
 
-## 版本边界
+## 快速入口
 
-| 基线 | 包含内容 |
+| 你想做什么 | 从这里开始 |
 | --- | --- |
-| 固定安装版 `v0.3.1-beta.1` | Session 绑定、queue/steer、公开进度、最终提醒、模型/Plan/Goal 控制、原生附件和 Desktop 连续 watchdog |
-| 上游 `be75d65` | 在附件与领域架构基线上继续合并原生媒体、串行 JSON 持久化、私聊临时 Chat 和单 Session writer 冲突隔离 |
-| `v0.3.2-macos-rc.10` | 保留 rc.9 的代理与 watchdog 修复，并把完整安装要求收拢到固定版本协议链接 |
-| `v0.3.2-macos-rc.11` | 安装前强制当前对话 Full access，增加 Keychain 诊断和不含 App ID 的浏览器备用 URL |
-| `v0.3.2-macos-rc.12` | 合入原生媒体、临时 Chat、串行持久化和单 Session writer 隔离，并补齐私有发行源、升级回滚与 macOS CI |
-| `v0.3.2-windows-rc.4` | Windows 安装前强制当前对话 Full access，补齐 Doctor/relay 提示及 Windows 上的 POSIX 附件路径归一化 |
-| `v0.4.0-windows-rc.1` | 私有 Windows 测试版：成员个人 Project 目录、Session 共享权限、多人群 queue/steer 规则，以及保留 Desktop 代理/守护状态的事务升级 |
-| `v0.4.0-windows-rc.2` | 私有 Windows 测试版：同步主动私聊、非空 Project 新建 Session、用户名片登记和 owner 可远程调整的 Session 权限 |
-| `v0.4.0-windows-rc.3` | Windows 多用户候选版：全新安装切换到私有 v0.4 基线，并提供用户只需重启 Desktop 的固定版本极简升级入口 |
-| `v0.4.0-windows-rc.4` | Windows 多用户候选版：加入独立于 Desktop 的可见前台升级器，用户退出后自动保留代理并重开 Desktop；修复 PowerShell 5/7 升级与 heartbeat 兼容问题 |
-| `v0.4.0-windows-rc.5` | Windows 多用户候选版：修复 packaged Desktop 代理恢复启动，并在用户关闭窗口后安全结束已验证的残留 Desktop 进程 |
-| `v0.4.0-macos-rc.1` | 私有 macOS 测试版：同步 Windows v0.4 的多用户 Session 权限，新增不暴露绝对路径的 `setup-project-root.sh`，并保留 Keychain、launchd relay 和升级回滚边界 |
-| `v0.4.0-macos-rc.2` | macOS 多用户候选版：登记成员后由 Bot 主动发送私聊欢迎消息和 `/add` 指引；投递失败不回滚成员状态，并向 Owner 提供安全兜底 |
-| `v0.4.0-macos-rc.3` | macOS 多用户候选版：在 `/add` 的任意非空 Project 任务列表中提供“新建任务”，创建 Session 后立即建立专属绑定群 |
-| `v0.4.0-macos-rc.4` | macOS 多用户候选版：Owner 可发送飞书用户名片并按提示回复目录名登记成员，原有 mention 命令继续兼容 |
-| `v0.4.0-macos-rc.5` | macOS 多用户候选版：Session owner 可从飞书安全查看和调整自己 Session 的持久权限边界，完全访问需二次确认 |
-| `v0.4.0-macos-rc.6` | macOS 多用户候选版：提供固定版本极简安装与升级入口；健康升级由 Codex 准备独立 Terminal，用户只需退出并重开 Desktop |
-| `v0.4.0-macos-rc.7` | macOS 多用户候选版：同步 Windows rc5 的前台升级生命周期；精确验证 Desktop Bundle/签名/可执行路径，保留原网络模式并自动重开，补齐同版本 relay 自愈 |
-| `v0.4.0-macos-rc.8` | macOS 多用户候选版：修复 rc7 前台升级失败后的跨版本 Desktop 恢复；重开逻辑不再依赖旧 checkout 的新参数，并为安装阶段加入幂等重试和安全诊断 |
-| `v0.4.0-macos-rc.9` | macOS 多用户候选版：把前台 worker 已验证的 Node 显式传给 bootstrap、安装和回滚，避免 Desktop 退出后独立 Terminal 因 PATH/Bundle 重新发现失败而中止 |
-
-当前项目不发布 npm 包，`package.json` 仍保留 `0.3.1-beta.1`；平台固定 tag 才是安装版本依据。安装代理必须使用明确 release tag，不得用持续变化的 `main` 代替固定版本。
-
-- [v0.3.1-beta.1 Release Note](docs/releases/v0.3.1-beta.1.md)
-- [v0.3.2-macos-rc.12 Release Note](docs/releases/v0.3.2-macos-rc.12.md)
-- [v0.4.0-macos-rc.1 Release Note](docs/releases/v0.4.0-macos-rc.1.md)
-- [v0.4.0-macos-rc.2 Release Note](docs/releases/v0.4.0-macos-rc.2.md)
-- [v0.4.0-macos-rc.3 Release Note](docs/releases/v0.4.0-macos-rc.3.md)
-- [v0.4.0-macos-rc.4 Release Note](docs/releases/v0.4.0-macos-rc.4.md)
-- [v0.4.0-macos-rc.5 Release Note](docs/releases/v0.4.0-macos-rc.5.md)
-- [v0.4.0-macos-rc.6 Release Note](docs/releases/v0.4.0-macos-rc.6.md)
-- [v0.4.0-macos-rc.7 Release Note](docs/releases/v0.4.0-macos-rc.7.md)
-- [v0.4.0-macos-rc.8 Release Note](docs/releases/v0.4.0-macos-rc.8.md)
-- [v0.4.0-macos-rc.9 Release Note](docs/releases/v0.4.0-macos-rc.9.md)
-- [v0.4.0-windows-rc.1 Release Note](docs/releases/v0.4.0-windows-rc.1.md)
-- [v0.4.0-windows-rc.2 Release Note](docs/releases/v0.4.0-windows-rc.2.md)
-- [v0.4.0-windows-rc.3 Release Note](docs/releases/v0.4.0-windows-rc.3.md)
-- [v0.4.0-windows-rc.4 Release Note](docs/releases/v0.4.0-windows-rc.4.md)
-- [v0.4.0-windows-rc.5 Release Note](docs/releases/v0.4.0-windows-rc.5.md)
-- [v0.3.2-macos-rc.11 Release Note](docs/releases/v0.3.2-macos-rc.11.md)
-- [v0.3.2-macos-rc.10 Release Note](docs/releases/v0.3.2-macos-rc.10.md)
-- [v0.3.2-macos-rc.9 Release Note](docs/releases/v0.3.2-macos-rc.9.md)
-- [v0.3.2-macos-rc.8 Release Note](docs/releases/v0.3.2-macos-rc.8.md)
-- [v0.3.2-windows-rc.4 Release Note](docs/releases/v0.3.2-windows-rc.4.md)
-- [v0.3.2-windows-rc.3 Release Note](docs/releases/v0.3.2-windows-rc.3.md)
-- [v0.3.2-windows-rc.1 Release Note](docs/releases/v0.3.2-windows-rc.1.md)
-- [`main`：Bridge pointer 生命周期](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/8)
-- [`main`：单张持久流式卡片](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/9)
-- [`main`：长回答文档与媒体转发](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/10)
-- [已合并 PR #12：飞书入站附件 relay](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/12)
-- [上游 PR #19：静态检查基线](https://github.com/Jiakai-Zhang/feishu-codex-bridge/pull/19)
+| 了解 Bridge 能力 | [能做什么](#能做什么) |
+| 在新电脑安装 | [交给 Codex 全新安装](#交给-codex-全新安装推荐) |
+| 升级已有安装 | [交给 Codex 极简升级](#交给-codex-极简升级) |
+| 配置飞书应用 | [飞书权限速查](#飞书权限速查) |
+| 开始绑定和对话 | [开始使用](#开始使用) |
+| 排查或维护服务 | [日常运维](#日常运维) |
+| 查看完整行为 | [Session Relay 参考](docs/SESSION_RELAY.md) |
 
 ## 能做什么
 
@@ -372,7 +328,7 @@ Windows 底层升级入口：
 - [飞书应用、权限、事件、发布与 OAuth](docs/FEISHU_APP_SETUP.md)
 - [Codex 安装代理协议](docs/INSTALL_AGENT.md)
 - [Project Agent / 多人协作保留模式](docs/PROJECT_AGENT.md)
-- Release Notes：[v0.1](docs/releases/v0.1.0-beta.1.md) · [v0.2](docs/releases/v0.2.0-beta.1.md) · [v0.3](docs/releases/v0.3.0-beta.1.md) · [v0.3.1](docs/releases/v0.3.1-beta.1.md) · [macOS v0.4 rc.1](docs/releases/v0.4.0-macos-rc.1.md) · [macOS v0.4 rc.2](docs/releases/v0.4.0-macos-rc.2.md) · [macOS v0.4 rc.3](docs/releases/v0.4.0-macos-rc.3.md) · [macOS v0.4 rc.4](docs/releases/v0.4.0-macos-rc.4.md) · [macOS v0.4 rc.5](docs/releases/v0.4.0-macos-rc.5.md) · [macOS v0.4 rc.6](docs/releases/v0.4.0-macos-rc.6.md) · [macOS v0.4 rc.7](docs/releases/v0.4.0-macos-rc.7.md) · [macOS v0.4 rc.8](docs/releases/v0.4.0-macos-rc.8.md) · [macOS v0.4 rc.9](docs/releases/v0.4.0-macos-rc.9.md) · [Windows v0.4 rc.1](docs/releases/v0.4.0-windows-rc.1.md) · [Windows v0.4 rc.2](docs/releases/v0.4.0-windows-rc.2.md) · [Windows v0.4 rc.3](docs/releases/v0.4.0-windows-rc.3.md) · [Windows v0.4 rc.4](docs/releases/v0.4.0-windows-rc.4.md) · [Windows v0.4 rc.5](docs/releases/v0.4.0-windows-rc.5.md)
+- [全部 Release Notes](docs/releases/)
 
 ## 开发与验证
 
