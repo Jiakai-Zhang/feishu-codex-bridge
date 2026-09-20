@@ -21,6 +21,7 @@ function userInputItem(clientId, input, id = `user-${clientId}`) {
 function fakeControllerServer({
   activeTurn,
   goal = null,
+  missingResumeThreadIds = [],
   resumeConflictThreadIds = [],
   rejectRepeatedDelete = false,
 } = {}) {
@@ -45,6 +46,7 @@ function fakeControllerServer({
       },
     },
     goal: goal ? structuredClone(goal) : null,
+    missingResumeThreadIds: new Set(missingResumeThreadIds),
     resumeConflictThreadIds: new Set(resumeConflictThreadIds),
     deletedThreadIds: new Set(),
     rejectRepeatedDelete,
@@ -96,6 +98,13 @@ function fakeControllerServer({
     } else if (request.method === "thread/name/set") {
       respond(socket, request.id, {});
     } else if (request.method === "thread/resume") {
+      if (server.missingResumeThreadIds.has(request.params.threadId)) {
+        respond(socket, request.id, undefined, {
+          code: -32600,
+          message: "no rollout found",
+        });
+        return;
+      }
       if (server.resumeConflictThreadIds.has(request.params.threadId)) {
         respond(socket, request.id, undefined, {
           code: -32603,
@@ -434,6 +443,28 @@ test("isolates an active-writer resume conflict to one Session and retries it af
     server.requests.filter(({ method, params }) => method === "thread/resume" && params.threadId === threadId).length,
     3,
   );
+  await client.stop();
+});
+
+test("isolates a missing rollout to one Session and keeps other bindings connected", async () => {
+  const healthyThreadId = "049ff5b8-decb-7ca3-802c-f115f2f196de";
+  const server = fakeControllerServer({ missingResumeThreadIds: [threadId] });
+  const logs = [];
+  const client = controller(server, {
+    targets: [target, { threadId: healthyThreadId, chatId: "oc_healthy", cwd: repoCwd }],
+    log: (message) => logs.push(message),
+  });
+
+  await client.start();
+
+  assert.equal(client.connected, true);
+  assert.equal((await client.getStatus(healthyThreadId)).status.type, "idle");
+  await assert.rejects(
+    () => client.submitPrompt({ threadId, text: "stale prompt", clientUserMessageId: "om_stale" }),
+    (error) => error?.code === "session_missing",
+  );
+  assert.equal(client.connected, true);
+  assert.equal(logs.some((message) => /rollout missing/i.test(message)), true);
   await client.stop();
 });
 

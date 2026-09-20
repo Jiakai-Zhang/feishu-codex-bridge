@@ -63,16 +63,19 @@ test("rejects another human, a bot, another group, and unsupported content", () 
   assert.throws(() => assertRelayMessage({ ...message, rawContentType: "folder", content: "" }, binding), /text, rich posts, and supported attachment/);
 });
 
-test("accepts image-only, file-only, and rich post resource messages from the bound owner", () => {
-  for (const rawContentType of ["image", "file", "post"]) {
+test("accepts image, file, audio, video, media, and rich post messages from the bound owner", () => {
+  for (const rawContentType of ["image", "file", "audio", "video", "media", "post"]) {
+    const resourceType = rawContentType === "media" ? "video" : rawContentType;
     assert.doesNotThrow(() => assertRelayMessage({
       chatId: "oc_bound",
       chatType: "group",
       senderId: "ou_owner",
       senderIsBot: false,
       rawContentType,
-      content: rawContentType === "image" ? "![image](img_key)" : "",
-      resources: [{ type: rawContentType === "image" ? "image" : "file", fileKey: "resource_key" }],
+      content: rawContentType === "image"
+        ? "![image](img_key)"
+        : rawContentType === "post" ? "rich post" : "",
+      resources: rawContentType === "post" ? [] : [{ type: resourceType, fileKey: "resource_key" }],
     }, binding));
   }
 });
@@ -92,7 +95,7 @@ test("accepts a rich post list without attachments", () => {
 });
 
 test("still rejects resource message types when the resource descriptor is missing", () => {
-  for (const rawContentType of ["image", "file", "audio", "video"]) {
+  for (const rawContentType of ["image", "file", "audio", "video", "media"]) {
     assert.throws(() => assertRelayMessage({
       chatId: "oc_bound",
       chatType: "group",
@@ -150,7 +153,7 @@ test("authorizes active group members while keeping the Session owner and Bot ma
   assert.throws(() => assertSessionGroup({ ...valid, bots: [{ id: "ou_wrong" }] }), /exactly this Bridge Bot/);
 });
 
-test("requires an explicit Bot address only after a second human joins", () => {
+test("requires an explicit Bot address after a second human joins but permits attachment staging", () => {
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 1 }), true);
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 2 }), false);
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: true }, { humanMemberCount: 2 }), true);
@@ -158,6 +161,13 @@ test("requires an explicit Bot address only after a second human joins", () => {
     humanMemberCount: 2,
     replyToBot: true,
   }), true);
+  for (const type of ["image", "file", "audio", "video"]) {
+    assert.equal(isSessionPromptAddressed({
+      chatType: "group",
+      mentionedBot: false,
+      resources: [{ type, fileKey: `${type}_key` }],
+    }, { humanMemberCount: 2 }), true);
+  }
 });
 
 test("requires the Feishu group and Codex session names to match exactly", () => {

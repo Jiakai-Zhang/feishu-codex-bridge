@@ -27,7 +27,9 @@ import {
   buildNativeAttachmentDeliveries,
   buildNativeAttachmentMessage,
   classifyFeishuImageSize,
+  classifyFeishuNativeMedia,
   inspectFeishuNativeAttachment,
+  sendFeishuNativeVideo,
   uploadFeishuNativeAttachment,
 } from "../feishu/feishu-native-attachment.mjs";
 import { FeishuFeedGroupManager } from "../feishu/feishu-feed-group.mjs";
@@ -42,6 +44,11 @@ import {
   LongAnswerDocumentStore,
   shouldCreateLongAnswerDocument,
 } from "../feishu/feishu-long-answer-document.mjs";
+import {
+  DriveFileUploadStore,
+  FeishuDriveFileManager,
+  fingerprintDriveFile,
+} from "../feishu/feishu-drive-file.mjs";
 import { FeishuChannelConnectivity } from "../feishu/feishu-channel-connectivity.mjs";
 import { FeishuSummaryDocumentManager } from "../feishu/feishu-summary-document.mjs";
 import { FeishuChatTabManager } from "../feishu/feishu-chat-tab.mjs";
@@ -110,8 +117,13 @@ import {
   buildSessionStreamCardFollowups,
   SessionStreamCardStore,
 } from "../feishu/session-stream-card.mjs";
+import {
+  buildVideoUploadProgressCard,
+  createVideoUploadProgressReporter,
+} from "../feishu/video-upload-progress-card.mjs";
 import { ThreadWorkQueue } from "../runtime/thread-work-queue.mjs";
 import { createCodexAppToolRequestHandler } from "../runtime/codex-app-tools-host.mjs";
+import { defaultVideoCacheDir, transcodeVideoForFeishu } from "../runtime/video-transcoder.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDir, "../..");
@@ -130,6 +142,7 @@ const inputLedgerPath = path.join(runtimeDir, "session-relay-input-ledger.json")
 const promptQueuePath = path.join(runtimeDir, "session-relay-prompt-queue.json");
 const relaySettingsPath = path.join(runtimeDir, "session-relay-settings.json");
 const longAnswerDocumentsPath = path.join(runtimeDir, "session-relay-long-answer-documents.json");
+const driveFileUploadsPath = path.join(runtimeDir, "session-relay-drive-file-uploads.json");
 const summaryDocumentsPath = path.join(runtimeDir, "session-relay-summary-documents.json");
 const streamCardsPath = path.join(runtimeDir, "session-relay-stream-cards.json");
 const inboundAttachmentsPath = path.join(runtimeDir, "session-relay-inbound-attachments");
@@ -138,6 +151,7 @@ const temporaryChatsPath = path.join(runtimeDir, "session-relay-temporary-chats.
 const temporaryChatArchivesPath = path.join(runtimeDir, "temporary-chat-archives");
 const sessionAccessPath = path.join(runtimeDir, "session-relay-access.json");
 const bindingInboxPath = path.join(runtimeDir, "session-binding-requests");
+const outboundVideoCacheDir = defaultVideoCacheDir(runtimeDir);
 const restartRequestPath = path.join(runtimeDir, "restart.request");
 const supervisorPidPath = path.join(runtimeDir, "bridge-supervisor.pid");
 const sessionStore = new CodexSessionStore({
@@ -177,6 +191,13 @@ const longAnswerDocumentManager = config.larkCliEntry
       nodeExecutable: config.nodeExecutable,
       larkCliEntry: config.larkCliEntry,
       cwd: repositoryRoot,
+    })
+  : undefined;
+const driveFileUploads = await DriveFileUploadStore.open(driveFileUploadsPath);
+const driveFileManager = config.larkCliEntry
+  ? new FeishuDriveFileManager({
+      nodeExecutable: config.nodeExecutable,
+      larkCliEntry: config.larkCliEntry,
     })
   : undefined;
 const summaryDocuments = await SessionSummaryDocumentStore.open(summaryDocumentsPath);
@@ -588,9 +609,106 @@ async function resolveNativeFileDelivery(record) {
   return updated;
 }
 
+async function ensureVideoProgressCard(record) {
+  if (record.progressMessageId) return record;
+  const attempt = Math.max(1, Number(record.attempts) + 1);
+  const content = JSON.stringify(buildVideoUploadProgressCard({
+    stage: "preparing",
+    totalBytes: record.fileSize,
+    attempt,
+  }));
+  const uuid = deliveryIdempotencyKey(`${record.deliveryId}:video-progress`);
+  const response = record.messageId
+    ? await channel.rawClient.im.message.reply({
+      data: {
+        content,
+        msg_type: "interactive",
+        reply_in_thread: Boolean(record.threadId),
+        uuid,
+      },
+      path: { message_id: record.messageId },
+    })
+    : await channel.rawClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: record.chatId,
+        content,
+        msg_type: "interactive",
+        uuid,
+      },
+    });
+  if (response?.code !== undefined && response.code !== 0) {
+    throw new Error(`Feishu video progress card creation failed with code ${response.code}`);
+  }
+  const progressMessageId = response?.data?.message_id || response?.data?.message?.message_id;
+  if (!progressMessageId) throw new Error("Feishu video progress card creation returned no message id");
+  const updated = { ...record, progressMessageId };
+  await deliveryOutbox.put(updated);
+  return updated;
+}
+
 async function deliverPendingRecord(record) {
   if (record.kind === "file") {
     await inspectDeliveryTarget(record.chatId);
+    const mediaType = record.mediaType || classifyFeishuNativeMedia(
+      record.fileName || record.localPath,
+      record.fileSize,
+    );
+    if (mediaType === "video") {
+      let deliveryState = record;
+      try {
+        deliveryState = await ensureVideoProgressCard(record);
+      } catch (error) {
+        log(`video progress card unavailable; continuing delivery: ${safeError(error)}`);
+      }
+      const attempt = Math.max(1, Number(deliveryState.attempts) + 1);
+      let lastProgress = {
+        stage: "preparing",
+        uploadedBytes: 0,
+        totalBytes: deliveryState.fileSize,
+      };
+      let progressFailureLogged = false;
+      const reporter = deliveryState.progressMessageId
+        ? createVideoUploadProgressReporter({
+          attempt,
+          update: (card) => channel.updateCard(deliveryState.progressMessageId, card),
+          onError: (error) => {
+            if (progressFailureLogged) return;
+            progressFailureLogged = true;
+            log(`video progress card update deferred: ${safeError(error)}`);
+          },
+        })
+        : undefined;
+      try {
+        const delivered = await sendFeishuNativeVideo(channel, deliveryState, {
+          idempotencyKey: deliveryIdempotencyKey(deliveryState.deliveryId),
+          onProgress: async (progress) => {
+            lastProgress = progress;
+            await reporter?.report(progress);
+          },
+          onPrepared: async (prepared) => {
+            deliveryState = {
+              ...deliveryState,
+              fileName: prepared.fileName,
+              fileSize: prepared.fileSize,
+              modifiedAtMs: prepared.modifiedAtMs,
+              mediaType: prepared.mediaType,
+              coverImageKey: prepared.coverImageKey,
+              coverVersion: prepared.coverVersion,
+              fileKey: prepared.fileKey,
+              durationMs: prepared.durationMs,
+            };
+            await deliveryOutbox.put(deliveryState);
+          },
+        });
+        await reporter?.flush();
+        return delivered.messageId;
+      } catch (error) {
+        await reporter?.report({ ...lastProgress, stage: "failed" }, { force: true });
+        await reporter?.flush();
+        throw error;
+      }
+    }
     const delivery = await resolveNativeFileDelivery(record);
     const message = buildNativeAttachmentMessage(delivery);
     const content = JSON.stringify(message.content);
@@ -654,6 +772,15 @@ async function deliverPendingRecord(record) {
   return response?.data?.message_id;
 }
 
+async function cleanupDeliveredAttachment(record) {
+  if (record?.kind !== "file" || record.cleanupAfterDelivery !== true || !record.localPath) return;
+  const target = path.resolve(record.localPath);
+  if (!isPathInside(outboundVideoCacheDir, target)) return;
+  await fs.rm(target, { force: true }).catch((error) => {
+    log(`delivered video cache cleanup deferred: ${safeError(error)}`);
+  });
+}
+
 async function retryPendingDeliveries() {
   if (!channelConnectivity.connected || deliveryRetryInFlight) return;
   deliveryRetryInFlight = true;
@@ -664,6 +791,7 @@ async function retryPendingDeliveries() {
         await deliverPendingRecord(record);
         await persistCompleted(record.deliveryId);
         await deliveryOutbox.remove(record.deliveryId);
+        await cleanupDeliveredAttachment(record);
         const label = record.kind === "file"
           ? "native attachment"
           : record.kind === "send" ? "proactive final answer" : "final reply";
@@ -1040,6 +1168,7 @@ async function queueDeliveryBundle(records, successLog) {
       await deliverPendingRecord(pending);
       await persistCompleted(record.deliveryId);
       await deliveryOutbox.remove(record.deliveryId);
+      await cleanupDeliveredAttachment(pending);
     } catch (error) {
       deliveredAll = false;
       await deliveryOutbox.markFailure(record.deliveryId, error);
@@ -1808,19 +1937,64 @@ async function prepareFinalAnswerMedia(answer) {
   const deliveryNotices = [];
   const attachments = [];
   const attachmentsByPath = new Map();
-
-  const addNativeAttachment = async ({ localPath, fileName }) => {
-    const existing = attachmentsByPath.get(localPath);
-    if (existing) return existing;
-    const inspected = await inspectFeishuNativeAttachment(localPath, { name: fileName });
-    attachments.push(inspected);
-    attachmentsByPath.set(localPath, inspected);
-    return inspected;
-  };
   const addDeliveryNotice = (text) => {
     const notice = Object.freeze({ type: "text", text });
     segments.push(notice);
     deliveryNotices.push(notice);
+  };
+
+  const addNativeAttachment = async ({ localPath, fileName }) => {
+    const existing = attachmentsByPath.get(localPath);
+    if (existing) return existing;
+    let inspected;
+    try {
+      inspected = await inspectFeishuNativeAttachment(localPath, { name: fileName });
+    } catch (error) {
+      if (!path.isAbsolute(localPath)) throw error;
+      const stat = await fs.lstat(localPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= FEISHU_FILE_MAX_BYTES) throw error;
+
+      if (path.extname(localPath).toLowerCase() === ".mp4") {
+        try {
+          const transcoded = await transcodeVideoForFeishu(localPath, { cacheDir: outboundVideoCacheDir });
+          const parsedName = path.parse(String(fileName || basenameFsPath(localPath)));
+          inspected = {
+            ...await inspectFeishuNativeAttachment(transcoded.localPath, {
+              name: `${parsedName.name || "Codex 视频"}（飞书压缩版）.mp4`,
+            }),
+            cleanupAfterDelivery: true,
+          };
+          addDeliveryNotice("（视频超过飞书消息 30 MB 上限，已自动压缩后作为群内原生视频发送。）");
+          log(`oversized final answer video compressed for native delivery (${stat.size} -> ${inspected.fileSize} bytes)`);
+        } catch (transcodeError) {
+          log(`oversized final answer video compression unavailable; using Drive: ${safeError(transcodeError)}`);
+        }
+      }
+
+      if (!inspected) {
+        if (!driveFileManager) throw error;
+        const source = await fingerprintDriveFile(localPath);
+        let uploaded = driveFileUploads.get(source.fingerprint);
+        if (!uploaded) {
+          const created = await driveFileManager.upload({ localPath, name: fileName });
+          uploaded = await driveFileUploads.put({
+            fingerprint: source.fingerprint,
+            url: created.url,
+            createdAt: Date.now(),
+          });
+        }
+        const label = String(fileName || basenameFsPath(localPath) || "原文件")
+          .replace(/[\[\]]/g, "")
+          .slice(0, 100);
+        addDeliveryNotice(`（附件超过飞书消息 30 MB 上限，已上传原文件到飞书云盘：[打开 ${label}](${uploaded.url})。）`);
+        const driveResult = Object.freeze({ driveUrl: uploaded.url });
+        attachmentsByPath.set(localPath, driveResult);
+        return driveResult;
+      }
+    }
+    attachments.push(inspected);
+    attachmentsByPath.set(localPath, inspected);
+    return inspected;
   };
 
   for (const attachment of extracted.attachments) {
@@ -2464,7 +2638,7 @@ async function processInboundMessage(msg, baseBinding) {
   }
 }
 
-channel.on("message", async (msg) => {
+async function handleChannelMessage(msg) {
   recoverChannelFromInbound();
   const binding = bindingsByChat.get(msg.chatId);
   if (msg.senderIsBot !== false || !sessionAccess.isActive(msg.senderId)) return;
@@ -2487,6 +2661,12 @@ channel.on("message", async (msg) => {
   } finally {
     inFlightMessageIds.delete(msg.messageId);
   }
+}
+
+channel.on("message", (msg) => {
+  void handleChannelMessage(msg).catch((error) => {
+    log(`inbound message handler failed: ${safeError(error)}`);
+  });
 });
 channel.on("reject", (event) => log(`rejected message ${event.messageId}: ${event.reason}`));
 channel.on("error", (error) => log(`channel error: ${safeError(error)}`));

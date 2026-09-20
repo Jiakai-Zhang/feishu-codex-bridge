@@ -79,6 +79,11 @@ test("persists an ordered final-answer and native-file delivery bundle", async (
         localPath: "C:/output/demo.mp4",
         fileName: "demo.mp4",
         mediaType: "video",
+        coverImageKey: "img_cover",
+        coverVersion: 2,
+        progressMessageId: "om_progress",
+        fileKey: "file_video",
+        durationMs: 75_000,
         fileSize: 123,
         createdAt: 101,
       },
@@ -90,6 +95,11 @@ test("persists an ordered final-answer and native-file delivery bundle", async (
     assert.equal(attachment.dependsOn, answer.deliveryId);
     assert.equal(attachment.fileName, "demo.mp4");
     assert.equal(attachment.mediaType, "video");
+    assert.equal(attachment.coverImageKey, "img_cover");
+    assert.equal(attachment.coverVersion, 2);
+    assert.equal(attachment.progressMessageId, "om_progress");
+    assert.equal(attachment.fileKey, "file_video");
+    assert.equal(attachment.durationMs, 75_000);
     assert.equal(attachment.fileSize, 123);
   });
 });

@@ -28,6 +28,13 @@ function normalizeRecord(record) {
     post: post ? structuredClone(post) : undefined,
     dependsOn: record.dependsOn ? String(record.dependsOn) : undefined,
     fileKey,
+    coverImageKey: kind === "file" && record.coverImageKey ? String(record.coverImageKey) : undefined,
+    coverVersion: kind === "file" && Number(record.coverVersion) > 0
+      ? Number(record.coverVersion)
+      : undefined,
+    progressMessageId: kind === "file" && record.progressMessageId
+      ? String(record.progressMessageId)
+      : undefined,
     localPath,
     fileName: record.fileName ? String(record.fileName).slice(0, 200) : undefined,
     mediaType: kind === "file" && (record.mediaType === "image" || record.mediaType === "video")
@@ -35,6 +42,10 @@ function normalizeRecord(record) {
       : undefined,
     fileSize: Number(record.fileSize) > 0 ? Number(record.fileSize) : undefined,
     modifiedAtMs: Number(record.modifiedAtMs) > 0 ? Number(record.modifiedAtMs) : undefined,
+    durationMs: kind === "file" && Number(record.durationMs) > 0
+      ? Number(record.durationMs)
+      : undefined,
+    cleanupAfterDelivery: kind === "file" && record.cleanupAfterDelivery === true,
     publicStatus: kind === "reply" && record.publicStatus === true,
     createdAt: Number(record.createdAt) || Date.now(),
     attempts: Math.max(0, Number(record.attempts) || 0),

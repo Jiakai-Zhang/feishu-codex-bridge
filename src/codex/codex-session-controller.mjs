@@ -80,6 +80,10 @@ function isActiveWriterResumeError(error) {
   return error?.method === "thread/resume" && ACTIVE_WRITER_PATTERN.test(String(error?.message || ""));
 }
 
+function isMissingThreadResumeError(error) {
+  return error?.method === "thread/resume" && MISSING_THREAD_PATTERN.test(String(error?.message || ""));
+}
+
 function isMissingThreadDeleteError(error) {
   return error?.method === "thread/delete" && MISSING_THREAD_PATTERN.test(String(error?.message || ""));
 }
@@ -92,6 +96,14 @@ function sessionWriterConflict(error) {
   );
   conflict.publicMessage = SESSION_WRITER_CONFLICT_PUBLIC_MESSAGE;
   return conflict;
+}
+
+function sessionMissing(error) {
+  return controllerError(
+    "session_missing",
+    "The bound Codex Session rollout is unavailable",
+    { cause: error },
+  );
 }
 
 function clone(value) {
@@ -467,8 +479,9 @@ export class CodexSessionController {
         try {
           await this.#hydrateState(connection, state, { catchUpAfterMs });
         } catch (error) {
-          if (error?.code !== "session_writer_conflict") throw error;
-          this.log("Codex Session unavailable: active writer conflict; other bindings remain connected");
+          if (!new Set(["session_writer_conflict", "session_missing"]).has(error?.code)) throw error;
+          const reason = error.code === "session_writer_conflict" ? "active writer conflict" : "rollout missing";
+          this.log(`Codex Session unavailable: ${reason}; other bindings remain connected`);
         }
       }
       connection.activate();
@@ -488,8 +501,10 @@ export class CodexSessionController {
         await this.#hydrateStateOnce(connection, state, { catchUpAfterMs });
         state.hydrationError = undefined;
       } catch (error) {
-        const normalized = isActiveWriterResumeError(error) ? sessionWriterConflict(error) : error;
-        if (normalized?.code === "session_writer_conflict") {
+        const normalized = isActiveWriterResumeError(error)
+          ? sessionWriterConflict(error)
+          : isMissingThreadResumeError(error) ? sessionMissing(error) : error;
+        if (new Set(["session_writer_conflict", "session_missing"]).has(normalized?.code)) {
           state.hydrationError = normalized;
           state.status = { type: "notLoaded" };
           state.activeTurnId = undefined;

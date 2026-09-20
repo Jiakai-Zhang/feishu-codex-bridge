@@ -16,6 +16,7 @@
 - GitHub CLI，已登录且账号可访问私有仓库
 - Node.js 22.13 或更高版本（建议当前 LTS）
 - PowerShell 5.1 或 PowerShell 7
+- FFmpeg（可选；用于把超过 30 MiB 的 MP4 自动压缩后作为原生视频发送）
 
 如果由 Codex Desktop 在当前对话中执行安装，在运行任何命令前，先在输入框下方的权限菜单中将当前对话设为“完全访问（Full access）”并等待用户明确确认。按 [OpenAI Codex 沙盒说明](https://developers.openai.com/codex/sandboxing)，“替我审批（Approve for me）”只处理审批请求，不会改变当前沙盒边界；Windows PowerShell、DPAPI 检查、Scheduled Task、共享 App Server 与 Desktop relay 可能需要访问沙盒外的当前用户资源。不要修改 Codex 全局配置或 Windows 安全机制来代替当前对话权限。
 
@@ -25,6 +26,7 @@
 winget install --id Git.Git -e --source winget
 winget install --id GitHub.cli -e --source winget
 winget install --id OpenJS.NodeJS.LTS -e --source winget
+winget install --id Gyan.FFmpeg -e --source winget
 ```
 
 安装后关闭并重新打开 PowerShell，再验证：
@@ -88,7 +90,7 @@ Lark CLI 输出 verification URL 后，无论浏览器是否自动打开，都�
 若飞书要求可用范围、版本发布或管理员审批，可用范围只加入当前安装用户，由用户本人提交，并等待状态明确生效。然后完成 OAuth 与安全校验：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
 .\verify-feishu-app.ps1
 ```
 

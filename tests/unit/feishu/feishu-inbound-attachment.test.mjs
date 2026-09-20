@@ -146,6 +146,33 @@ test("downloads a Feishu image and file with bounded streaming and prepares one 
   });
 });
 
+test("downloads an inbound Feishu media message as an MP4 Codex file attachment", async () => {
+  await fixture(async (directory) => {
+    const channel = fakeChannel(new Map([
+      ["video_key", { contentType: "video/mp4", buffer: Buffer.from("mp4-video-bytes") }],
+    ]));
+    const store = new FeishuInboundAttachmentStore(directory);
+    const prompt = await prepareFeishuPrompt({
+      messageId: "om_video_test",
+      rawContentType: "media",
+      content: '<video key="video_key" duration="00:03"/>',
+      resources: [{ type: "video", fileKey: "video_key" }],
+    }, channel, store);
+
+    assert.equal(prompt.text, "");
+    assert.equal(prompt.attachments.length, 1);
+    assert.equal(prompt.attachments[0].kind, "file");
+    assert.equal(prompt.attachments[0].name, "video.mp4");
+    assert.equal(path.extname(prompt.attachments[0].localPath), ".mp4");
+    assert.equal(await fs.readFile(prompt.attachments[0].localPath, "utf8"), "mp4-video-bytes");
+    assert.deepEqual(channel.requests.map(({ params }) => params.type), ["file"]);
+
+    const input = buildCodexPromptInput(prompt);
+    assert.equal(input.length, 1);
+    assert.equal(parseCodexDesktopFilePrompt(input[0].text)?.files[0]?.name, "video.mp4");
+  });
+});
+
 test("rejects an oversized streamed attachment and removes its partial download", async () => {
   await fixture(async (directory) => {
     const channel = fakeChannel(new Map([
