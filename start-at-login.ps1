@@ -140,6 +140,38 @@ function Set-DesktopRelayPointer {
     }
 }
 
+function Read-RotatedRelayRuntime {
+    param(
+        [Parameter(Mandatory)][object]$AppServerInfo,
+        [Parameter(Mandatory)][Uri]$PreviousUri,
+        [Parameter(Mandatory)][string]$ExpectedActivationId
+    )
+
+    $reportedUrl = [string]$AppServerInfo.AppServerUrl
+    if ([string]::IsNullOrWhiteSpace($reportedUrl)) {
+        throw 'The shared App Server startup returned no endpoint.'
+    }
+    $reportedUri = [Uri]$reportedUrl
+    if ($reportedUri.AbsoluteUri -eq $PreviousUri.AbsoluteUri) { return $null }
+
+    Set-DesktopRelayPointer -ExpectedUrl $PreviousUri.AbsoluteUri -Enabled $false
+    $updatedConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $updatedRelayState = Read-RelayState
+    if ([string]$updatedConfig.sessionRelay.appServerUrl -ne $reportedUri.AbsoluteUri -or
+        -not $updatedRelayState -or
+        -not [bool]$updatedRelayState.enabled -or
+        [string]$updatedRelayState.activationId -ne $ExpectedActivationId -or
+        [string]$updatedRelayState.expectedUrl -ne $reportedUri.AbsoluteUri) {
+        throw 'The managed Codex upgrade changed the App Server endpoint without a matching relay-state transaction.'
+    }
+
+    return [pscustomobject]@{
+        Config = $updatedConfig
+        RelayState = $updatedRelayState
+        AppServerUri = $reportedUri
+    }
+}
+
 function Test-LoopbackPort {
     param([Parameter(Mandatory)][string]$HostName, [Parameter(Mandatory)][int]$Port)
     $client = [Net.Sockets.TcpClient]::new()
@@ -299,9 +331,18 @@ try {
             Write-WatchdogStatus -RelayState $relayState -State 'recovering' `
                 -Detail 'listener unavailable; attempting verified restart'
             try {
-                $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
+                $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') `
+                    -PassThru -AllowManagedUpgradePortRotation
                 if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
                     throw 'The shared App Server startup returned no verified process.'
+                }
+                $rotatedRuntime = Read-RotatedRelayRuntime -AppServerInfo $appServerInfo `
+                    -PreviousUri $appServerUri -ExpectedActivationId ([string]$relayState.activationId)
+                if ($rotatedRuntime) {
+                    $config = $rotatedRuntime.Config
+                    $relayState = $rotatedRuntime.RelayState
+                    $appServerUri = $rotatedRuntime.AppServerUri
+                    Write-WatchdogLog -Message 'Moved the shared App Server to a free loopback port after a managed Codex upgrade left the previous listener occupied.'
                 }
                 $lastAppServerProcessId = [int]$appServerInfo.ProcessId
                 $lastVerificationAt = [DateTime]::UtcNow
@@ -322,9 +363,18 @@ try {
             }
         } elseif ($verificationDue) {
             try {
-                $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
+                $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') `
+                    -PassThru -AllowManagedUpgradePortRotation
                 if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
                     throw 'The listening App Server could not be verified.'
+                }
+                $rotatedRuntime = Read-RotatedRelayRuntime -AppServerInfo $appServerInfo `
+                    -PreviousUri $appServerUri -ExpectedActivationId ([string]$relayState.activationId)
+                if ($rotatedRuntime) {
+                    $config = $rotatedRuntime.Config
+                    $relayState = $rotatedRuntime.RelayState
+                    $appServerUri = $rotatedRuntime.AppServerUri
+                    Write-WatchdogLog -Message 'Moved the shared App Server to a free loopback port after a managed Codex upgrade left the previous listener occupied.'
                 }
                 $lastAppServerProcessId = [int]$appServerInfo.ProcessId
                 $lastVerificationAt = [DateTime]::UtcNow
