@@ -56,9 +56,15 @@ try {
 $appServerInfo = $null
 if ($mode -eq 'session-relay') {
     & $desktopRelayPointerScript -Url ([string]$config.sessionRelay.appServerUrl) -Preparing | Out-Null
-    $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru
+    $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') -PassThru -AllowManagedUpgradePortRotation
     if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
         throw 'The shared Codex App Server startup returned no verified process.'
+    }
+    if ([string]$appServerInfo.AppServerUrl -ne [string]$config.sessionRelay.appServerUrl) {
+        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        if ([string]$config.sessionRelay.appServerUrl -ne [string]$appServerInfo.AppServerUrl) {
+            throw 'The managed Codex upgrade changed the App Server endpoint without updating bridge.config.json.'
+        }
     }
 }
 

@@ -125,10 +125,10 @@ async function prepareRelease(tempRoot, executable, port) {
   return { releaseRoot, runtime };
 }
 
-function runStarter(releaseRoot, localAppData) {
+function runStarter(releaseRoot, localAppData, extraArguments = []) {
   return spawnSync(powershell, [
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-    "-File", path.join(releaseRoot, "start-app-server.ps1"), "-PassThru",
+    "-File", path.join(releaseRoot, "start-app-server.ps1"), "-PassThru", ...extraArguments,
   ], {
     cwd: releaseRoot,
     encoding: "utf8",
@@ -242,6 +242,67 @@ test("managed Codex upgrade replaces only the recorded old App Server and persis
   assert.equal(path.resolve(executableResult.stdout.trim()).toLowerCase(), path.resolve(managed.current).toLowerCase());
   await waitForPort(port, true);
   await assertDesktopCodexAppOverridesMerge(port, tempRoot);
+});
+
+test("managed Codex upgrade rotates an owned relay endpoint when a stale PID leaves the port occupied", {
+  skip: process.platform !== "win32",
+  timeout: 60_000,
+}, async (t) => {
+  const source = (await managedCodexCandidates().catch(() => []))
+    .find((candidate) => candidate.hasCodeModeHost);
+  if (!source) {
+    t.skip("requires a complete managed Codex installation");
+    return;
+  }
+
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-codex-port-rotation-"));
+  const managed = await prepareManagedInstall(tempRoot, source);
+  const listener = net.createServer();
+  await new Promise((resolve, reject) => listener.listen(0, "127.0.0.1", resolve).once("error", reject));
+  const { port: occupiedPort } = listener.address();
+  const { releaseRoot, runtime } = await prepareRelease(tempRoot, managed.previous, occupiedPort);
+  const relayStateRoot = path.join(managed.localAppData, "FeishuCodexBridge", "bootstrap");
+  const previousUrl = `ws://127.0.0.1:${occupiedPort}/rpc`;
+  await fs.mkdir(relayStateRoot, { recursive: true });
+  await fs.writeFile(path.join(relayStateRoot, "desktop-relay-state.json"), `${JSON.stringify({
+    schemaVersion: 2,
+    activationId: "managed-upgrade-port-rotation-test",
+    enabled: true,
+    bridgeEnabled: true,
+    expectedUrl: previousUrl,
+  }, null, 2)}\n`);
+  await fs.writeFile(path.join(runtime, "codex-app-server.pid"), "2147483000");
+
+  let replacementProcessId = 0;
+  t.after(async () => {
+    await stopProcess(replacementProcessId);
+    await new Promise((resolve) => listener.close(resolve));
+    stopProcessesUnder(managed.localAppData);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const result = runStarter(
+    releaseRoot,
+    managed.localAppData,
+    ["-AllowManagedUpgradePortRotation"],
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const config = JSON.parse(await fs.readFile(path.join(releaseRoot, "bridge.config.json"), "utf8"));
+  const relayState = JSON.parse(await fs.readFile(
+    path.join(relayStateRoot, "desktop-relay-state.json"),
+    "utf8",
+  ));
+  const replacementUrl = new URL(config.sessionRelay.appServerUrl);
+  replacementProcessId = Number(await fs.readFile(path.join(runtime, "codex-app-server.pid"), "utf8"));
+
+  assert.notEqual(config.sessionRelay.appServerUrl, previousUrl);
+  assert.equal(relayState.expectedUrl, config.sessionRelay.appServerUrl);
+  assert.equal(relayState.activationId, "managed-upgrade-port-rotation-test");
+  assert.equal(path.resolve(config.codexExecutable).toLowerCase(), path.resolve(managed.current).toLowerCase());
+  assert.equal(listener.listening, true, "the unverified listener must remain untouched");
+  await waitForPort(Number(replacementUrl.port), true);
+  await assertDesktopCodexAppOverridesMerge(Number(replacementUrl.port), tempRoot);
 });
 
 test("an unverified listener is left running when App Server ownership cannot be proven", {

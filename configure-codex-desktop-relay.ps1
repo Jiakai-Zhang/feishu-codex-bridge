@@ -365,12 +365,39 @@ try {
             Send-EnvironmentChanged
         }
     }
-    $appServerParameters = @{ PassThru = $true; AllowProxyRestart = $true }
+    $appServerParameters = @{
+        PassThru = $true
+        AllowProxyRestart = $true
+        AllowManagedUpgradePortRotation = $true
+    }
     if ($desktopProxyUrl) { $appServerParameters['Proxy'] = $desktopProxyUrl }
     else { $appServerParameters['NoProxy'] = $true }
     $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') @appServerParameters
     if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
         throw 'The shared Codex App Server startup returned no verified process.'
+    }
+    $reportedUrl = [Uri]([string]$appServerInfo.AppServerUrl)
+    if ($reportedUrl.AbsoluteUri -ne $url.AbsoluteUri) {
+        $pointerBeforeRotation = [Environment]::GetEnvironmentVariable(
+            $variableName, [EnvironmentVariableTarget]::User)
+        if ($pointerBeforeRotation -eq $url.AbsoluteUri) {
+            [Environment]::SetEnvironmentVariable(
+                $variableName, $null, [EnvironmentVariableTarget]::User)
+            Send-EnvironmentChanged
+        } elseif (-not [string]::IsNullOrWhiteSpace($pointerBeforeRotation) -and
+            $pointerBeforeRotation -ne $reportedUrl.AbsoluteUri) {
+            throw 'The managed Codex upgrade found a different Desktop relay pointer; refusing to overwrite it.'
+        }
+        $updatedConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $updatedRelayState = Read-RelayState
+        if ([string]$updatedConfig.sessionRelay.appServerUrl -ne $reportedUrl.AbsoluteUri -or
+            -not $updatedRelayState -or
+            -not [bool]$updatedRelayState.enabled -or
+            [string]$updatedRelayState.activationId -ne $activationId -or
+            [string]$updatedRelayState.expectedUrl -ne $reportedUrl.AbsoluteUri) {
+            throw 'The managed Codex upgrade changed the App Server endpoint without a matching relay-state transaction.'
+        }
+        $url = $reportedUrl
     }
 
     if (-not (Test-Path -LiteralPath $bootstrapSourcePath -PathType Leaf)) {
