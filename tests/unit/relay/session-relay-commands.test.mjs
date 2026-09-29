@@ -203,6 +203,29 @@ test("reports context and account capacity without submitting a prompt", async (
   assert.match(output, /不调用模型/);
 });
 
+test("reports partial capacity safely when usage or account windows are unavailable", async () => {
+  const output = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller: {
+      getCapacity: async () => ({
+        rateLimits: { planType: "team", primary: { usedPercent: 150, resetsAt: 1_800_000_000 } },
+      }),
+    },
+    threadId: "thread-id",
+    timeZone: "Invalid/TimeZone",
+  });
+
+  assert.match(output, /当前上下文：暂不可用/);
+  assert.match(output, /账户计划：team/i);
+  assert.match(output, /主窗口：剩余 0%/);
+  assert.match(output, /2027-01-15T08:00:00\.000Z/);
+
+  const unavailable = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller: { getCapacity: async () => ({}) },
+    threadId: "thread-id",
+  });
+  assert.match(unavailable, /账户额度：暂不可用/);
+});
+
 test("routes an explicit steer independently from the Session default input mode", async () => {
   const calls = [];
   const result = await executeSessionCommand(parseSessionCommand("/steer use the other API"), {
@@ -221,6 +244,10 @@ test("rejects malformed recognized commands instead of sending them to Codex", a
   const controller = { interrupt: async () => ({}) };
   await assert.rejects(
     () => executeSessionCommand(parseSessionCommand("/stop now"), { controller, threadId: "thread-id" }),
+    /用法/,
+  );
+  await assert.rejects(
+    () => executeSessionCommand(parseSessionCommand("/capacity now"), { controller, threadId: "thread-id" }),
     /用法/,
   );
 });

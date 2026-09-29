@@ -24,6 +24,7 @@ function fakeControllerServer({
   missingResumeThreadIds = [],
   resumeConflictThreadIds = [],
   rejectRepeatedDelete = false,
+  rejectRateLimits = false,
 } = {}) {
   const server = {
     requests: [],
@@ -50,6 +51,7 @@ function fakeControllerServer({
     resumeConflictThreadIds: new Set(resumeConflictThreadIds),
     deletedThreadIds: new Set(),
     rejectRepeatedDelete,
+    rejectRateLimits,
     turns: activeTurn ? [structuredClone(activeTurn)] : [],
     status: activeTurn ? { type: "active", activeFlags: [] } : { type: "idle" },
   };
@@ -239,6 +241,10 @@ function fakeControllerServer({
         { name: "Plan", mode: "plan", model: null, reasoning_effort: null },
       ] });
     } else if (request.method === "account/rateLimits/read") {
+      if (server.rejectRateLimits) {
+        respond(socket, request.id, undefined, { code: -32601, message: "rate limits unavailable" });
+        return;
+      }
       respond(socket, request.id, {
         rateLimits: {
           limitId: "default",
@@ -402,6 +408,28 @@ test("reads context and account capacity without starting a Turn", async () => {
   assert.equal(capacity.rateLimits.planType, "plus");
   assert.equal(server.requests.some(({ method }) => method === "account/rateLimits/read"), true);
   assert.equal(server.requests.filter(({ method }) => method === "turn/start").length, turnStartsBefore);
+  await client.stop();
+});
+
+test("keeps context capacity available when account limits cannot be read", async () => {
+  const logs = [];
+  const server = fakeControllerServer({ rejectRateLimits: true });
+  const client = controller(server, { log: (message) => logs.push(message) });
+  await client.start();
+  const tokenUsage = {
+    total: { totalTokens: 42_000 },
+    last: { totalTokens: 12_000 },
+    modelContextWindow: 128_000,
+  };
+  server.notify("thread/tokenUsage/updated", { threadId, tokenUsage });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const capacity = await client.getCapacity(threadId);
+
+  assert.deepEqual(capacity.tokenUsage, tokenUsage);
+  assert.equal(capacity.rateLimits, undefined);
+  assert.equal(logs.some((message) => /rate-limit query unavailable/.test(message)), true);
+  assert.equal(logs.some((message) => /rate limits unavailable/.test(message)), false);
   await client.stop();
 });
 
