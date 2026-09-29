@@ -82,7 +82,10 @@ try {
         break
     }
 } catch {
-    Write-SupervisorLog "supervisor failed: $($_.Exception.GetType().Name)"
+    $commandName = [string]$_.InvocationInfo.MyCommand.Name
+    $errorId = [string]$_.FullyQualifiedErrorId
+    $lineNumber = [int]$_.InvocationInfo.ScriptLineNumber
+    Write-SupervisorLog "supervisor failed: $($_.Exception.GetType().Name); command=$commandName; id=$errorId; line=$lineNumber"
     exit 1
 } finally {
     $intentionalStop = Test-Path -LiteralPath $supervisorStopPath

@@ -18,6 +18,7 @@ import {
 
 test("recognizes only Bridge-owned slash commands and leaves unknown slash text as a prompt", () => {
   assert.deepEqual(parseSessionCommand(" /status "), { name: "status", args: "", raw: "/status" });
+  assert.deepEqual(parseSessionCommand("/capacity"), { name: "capacity", args: "", raw: "/capacity" });
   assert.deepEqual(parseSessionCommand("/model effort high"), {
     name: "model",
     args: "effort high",
@@ -168,6 +169,63 @@ test("routes stop, model, plan, and Goal commands to native controller operation
   ]);
 });
 
+test("reports context and account capacity without submitting a prompt", async () => {
+  const calls = [];
+  const controller = {
+    getCapacity: async (...args) => {
+      calls.push(args);
+      return {
+        tokenUsage: {
+          total: { totalTokens: 180_000 },
+          last: { totalTokens: 100_000 },
+          modelContextWindow: 400_000,
+        },
+        rateLimits: {
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 1_800_100_000 },
+          planType: "plus",
+        },
+      };
+    },
+  };
+
+  const output = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller,
+    threadId: "thread-id",
+    timeZone: "Asia/Taipei",
+  });
+
+  assert.deepEqual(calls, [["thread-id"]]);
+  assert.match(output, /300,000/);
+  assert.match(output, /75%/);
+  assert.match(output, /60%/);
+  assert.match(output, /Plus/i);
+  assert.match(output, /不调用模型/);
+});
+
+test("reports partial capacity safely when usage or account windows are unavailable", async () => {
+  const output = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller: {
+      getCapacity: async () => ({
+        rateLimits: { planType: "team", primary: { usedPercent: 150, resetsAt: 1_800_000_000 } },
+      }),
+    },
+    threadId: "thread-id",
+    timeZone: "Invalid/TimeZone",
+  });
+
+  assert.match(output, /当前上下文：暂不可用/);
+  assert.match(output, /账户计划：team/i);
+  assert.match(output, /主窗口：剩余 0%/);
+  assert.match(output, /2027-01-15T08:00:00\.000Z/);
+
+  const unavailable = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller: { getCapacity: async () => ({}) },
+    threadId: "thread-id",
+  });
+  assert.match(unavailable, /账户额度：暂不可用/);
+});
+
 test("routes an explicit steer independently from the Session default input mode", async () => {
   const calls = [];
   const result = await executeSessionCommand(parseSessionCommand("/steer use the other API"), {
@@ -186,6 +244,10 @@ test("rejects malformed recognized commands instead of sending them to Codex", a
   const controller = { interrupt: async () => ({}) };
   await assert.rejects(
     () => executeSessionCommand(parseSessionCommand("/stop now"), { controller, threadId: "thread-id" }),
+    /用法/,
+  );
+  await assert.rejects(
+    () => executeSessionCommand(parseSessionCommand("/capacity now"), { controller, threadId: "thread-id" }),
     /用法/,
   );
 });

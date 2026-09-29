@@ -184,6 +184,21 @@ test("transient Bridge startup failures remain eligible for watchdog recovery", 
   );
 });
 
+test("Bridge startup isolates the legacy Windows PowerShell module path", async () => {
+  const startSource = await readScript("start-bridge.ps1");
+  const environmentIndex = startSource.indexOf("$supervisorEnvironmentNames");
+  const modulePathIndex = startSource.indexOf("'PSModulePath'", environmentIndex);
+  const removeIndex = startSource.indexOf('Remove-Item -LiteralPath "Env:$name"', modulePathIndex);
+  const supervisorIndex = startSource.indexOf("Start-Process -FilePath 'powershell.exe'", removeIndex);
+  const restoreIndex = startSource.indexOf('Set-Item -LiteralPath "Env:$name"', supervisorIndex);
+
+  assert.ok(environmentIndex >= 0);
+  assert.ok(modulePathIndex > environmentIndex);
+  assert.ok(removeIndex > modulePathIndex);
+  assert.ok(supervisorIndex > removeIndex);
+  assert.ok(restoreIndex > supervisorIndex);
+});
+
 test("Session binding reloads use the Supervisor handshake", async () => {
   const relaySource = await readFile(path.join(repositoryRoot, "src/app/session-relay.mjs"), "utf8");
   const supervisorSource = await readScript("bridge-supervisor.ps1");

@@ -108,10 +108,13 @@ if (-not $supervisorProcess) {
     Remove-Item -LiteralPath $supervisorStopPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $supervisorStdoutPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $supervisorStderrPath -Force -ErrorAction SilentlyContinue
-    $proxyEnvironmentNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+    # PowerShell 7 prepends its own module directories to PSModulePath. Passing
+    # that value to Windows PowerShell 5.1 can break autoloading of the built-in
+    # security module used to decrypt the DPAPI Channel secret.
+    $supervisorEnvironmentNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'PSModulePath')
     $savedEnvironment = @{}
     try {
-        foreach ($name in $proxyEnvironmentNames) {
+        foreach ($name in $supervisorEnvironmentNames) {
             $item = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
             if ($item) { $savedEnvironment[$name] = [string]$item.Value }
             Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
@@ -124,7 +127,7 @@ if (-not $supervisorProcess) {
             -RedirectStandardError $supervisorStderrPath `
             -PassThru
     } finally {
-        foreach ($name in $proxyEnvironmentNames) {
+        foreach ($name in $supervisorEnvironmentNames) {
             Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
             if ($savedEnvironment.ContainsKey($name)) {
                 Set-Item -LiteralPath "Env:$name" -Value $savedEnvironment[$name]

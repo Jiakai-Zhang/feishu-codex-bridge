@@ -875,6 +875,22 @@ export class CodexSessionController {
     });
   }
 
+  async getCapacity(threadId) {
+    const state = this.#state(threadId);
+    let rateLimits;
+    try {
+      const result = await this.#request("account/rateLimits/read");
+      rateLimits = clone(result?.rateLimits);
+    } catch (error) {
+      const reason = String(error?.code || error?.name || "unknown_error");
+      this.log(`account rate-limit query unavailable (${reason})`);
+    }
+    return Object.freeze({
+      tokenUsage: clone(state.tokenUsage),
+      rateLimits,
+    });
+  }
+
   async getGoal(threadId, { refresh = true } = {}) {
     const state = this.#state(threadId);
     if (refresh) {
