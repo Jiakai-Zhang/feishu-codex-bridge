@@ -1474,7 +1474,7 @@ async function processPreparedPrompt(msg, binding, prompt, { forceQueue = false 
 
 async function commandAllowedForParticipant(msg, binding, command) {
   if (msg.senderId === binding.ownerOpenId) return true;
-  if (["status", "attachments"].includes(command.name)) return true;
+  if (["status", "capacity", "attachments"].includes(command.name)) return true;
   if (command.name === "queue") {
     try {
       const action = parseQueueAction(command.args).action;

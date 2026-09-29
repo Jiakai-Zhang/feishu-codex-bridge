@@ -27,7 +27,7 @@
 - PDF、Office 文档、压缩包、音视频和其他普通文件先流式下载到 Bridge 受控缓存，再按 Codex Desktop 自身持久化文件 Prompt 的格式加入输入：`Files mentioned by the user`、安全文件名、受控缓存绝对路径和 `My request for Codex`。模型因此可以直接读取原文件，Desktop 可按原生文件消息呈现；
 - 纯普通文件消息不会立即启动 Codex，而是成为“当前 Session + 当前发送者”的附件草稿；不同协作者的暂存附件不会混合。可以连续上传多个文件，发送者的第一条普通文字 Prompt 会原子地取走自己的全部草稿附件并提交一次；
 - 已有附件草稿时，后续纯图片消息也加入同一草稿；没有草稿时，单独图片仍按原行为立即成为 Prompt；同一条富文本中的文字和图片仍立即一起提交；
-- `/status`、`/model` 等 Bridge 命令不会消费草稿；`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
+- `/status`、`/capacity`、`/model` 等 Bridge 命令不会消费草稿；`/queue <Prompt>` 会取走草稿并显式排入独立新 Turn；
 - 草稿、排队记录和附件元数据都会持久保存，Bridge 重启后不会丢失或退化成空 Prompt；同一 Session 的入站消息串行处理，避免连续上传与首条文字发生竞态；
 - 默认限制为单文件 30 MiB，单条消息或整份草稿最多 10 个资源、总计 60 MiB；缓存默认保留 7 天且最多占用 1 GiB，可通过 `sessionRelay.inboundAttachments` 调整；
 - 最终 Prompt 回显只显示图片或安全附件名，不显示飞书资源 key 与本机绝对路径。
@@ -109,6 +109,10 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 ### `/status`
 
 查看 Bridge 连接、Session idle/active 状态、当前 Turn、等待标志、队列、待提交附件、模型、推理强度、速度、Plan、Token 和 Goal 摘要。命令只读取本机状态，不调用模型，也不会消费暂存附件。
+
+### `/capacity`
+
+查看当前 Session 的上下文窗口已用/剩余 token、账户主/次额度窗口的剩余百分比和重置时间，以及账户计划。数据直接来自 Codex App Server 的 token 状态和 `account/rateLimits/read`，不调用模型、不启动 Turn，也不会消费 Prompt 队列或暂存附件。若 Codex 尚未上报 token 用量，或当前 App Server 不提供账户额度，命令会保留其余可用结果并将对应部分标为“暂不可用”。
 
 ### `/stop`
 
@@ -246,7 +250,7 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 ### 共享群命令权限
 
-- 所有已启用且仍在群内的成员：`/status`、查看/清理自己的 `/attachments`、查看队列、`/queue <Prompt>`。
+- 所有已启用且仍在群内的成员：`/status`、`/capacity`、查看/清理自己的 `/attachments`、查看队列、`/queue <Prompt>`。
 - 当前 Turn 初始发起者：额外允许 `/steer` 与 `/stop`。
 - Session owner：允许全部 Session 命令，包括模型、Plan、Goal、设置、权限、队列删除/清空和 `/delete`。
 - `/members` 与 Bot 私聊中的全局 `/settings` 只允许 Bridge Owner。

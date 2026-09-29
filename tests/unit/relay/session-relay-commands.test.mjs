@@ -18,6 +18,7 @@ import {
 
 test("recognizes only Bridge-owned slash commands and leaves unknown slash text as a prompt", () => {
   assert.deepEqual(parseSessionCommand(" /status "), { name: "status", args: "", raw: "/status" });
+  assert.deepEqual(parseSessionCommand("/capacity"), { name: "capacity", args: "", raw: "/capacity" });
   assert.deepEqual(parseSessionCommand("/model effort high"), {
     name: "model",
     args: "effort high",
@@ -166,6 +167,40 @@ test("routes stop, model, plan, and Goal commands to native controller operation
     ["setPlan", "thread-id", true],
     ["startGoal", "thread-id", "finish it"],
   ]);
+});
+
+test("reports context and account capacity without submitting a prompt", async () => {
+  const calls = [];
+  const controller = {
+    getCapacity: async (...args) => {
+      calls.push(args);
+      return {
+        tokenUsage: {
+          total: { totalTokens: 180_000 },
+          last: { totalTokens: 100_000 },
+          modelContextWindow: 400_000,
+        },
+        rateLimits: {
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 1_800_100_000 },
+          planType: "plus",
+        },
+      };
+    },
+  };
+
+  const output = await executeSessionCommand(parseSessionCommand("/capacity"), {
+    controller,
+    threadId: "thread-id",
+    timeZone: "Asia/Taipei",
+  });
+
+  assert.deepEqual(calls, [["thread-id"]]);
+  assert.match(output, /300,000/);
+  assert.match(output, /75%/);
+  assert.match(output, /60%/);
+  assert.match(output, /Plus/i);
+  assert.match(output, /不调用模型/);
 });
 
 test("routes an explicit steer independently from the Session default input mode", async () => {

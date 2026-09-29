@@ -238,6 +238,22 @@ function fakeControllerServer({
         { name: "Default", mode: "default", model: null, reasoning_effort: null },
         { name: "Plan", mode: "plan", model: null, reasoning_effort: null },
       ] });
+    } else if (request.method === "account/rateLimits/read") {
+      respond(socket, request.id, {
+        rateLimits: {
+          limitId: "default",
+          limitName: "Codex",
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 1_800_100_000 },
+          credits: null,
+          individualLimit: null,
+          spendControlReached: false,
+          planType: "plus",
+          rateLimitReachedType: null,
+        },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null,
+      });
     } else if (request.method === "thread/goal/set") {
       const now = Date.now() / 1000;
       server.goal = {
@@ -361,6 +377,31 @@ test("resolves a Session sandbox on resume and on every Bridge-started Turn", as
   const fullStart = server.requests.filter(({ method }) => method === "turn/start").at(-1);
   assert.deepEqual(fullStart.params.sandboxPolicy, { type: "dangerFullAccess" });
   assert.equal((await client.getStatus(threadId, { refresh: false })).sandboxMode, "danger-full-access");
+  await client.stop();
+});
+
+test("reads context and account capacity without starting a Turn", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  const tokenUsage = {
+    total: { inputTokens: 120_000, cachedInputTokens: 0, outputTokens: 60_000, reasoningOutputTokens: 0, totalTokens: 180_000 },
+    last: { inputTokens: 80_000, cachedInputTokens: 0, outputTokens: 20_000, reasoningOutputTokens: 0, totalTokens: 100_000 },
+    modelContextWindow: 400_000,
+  };
+  server.notify("thread/tokenUsage/updated", { threadId, tokenUsage });
+  await new Promise((resolve) => setImmediate(resolve));
+  const turnStartsBefore = server.requests.filter(({ method }) => method === "turn/start").length;
+
+  assert.equal(typeof client.getCapacity, "function");
+  const capacity = await client.getCapacity(threadId);
+
+  assert.deepEqual(capacity.tokenUsage, tokenUsage);
+  assert.equal(capacity.rateLimits.primary.usedPercent, 25);
+  assert.equal(capacity.rateLimits.secondary.usedPercent, 40);
+  assert.equal(capacity.rateLimits.planType, "plus");
+  assert.equal(server.requests.some(({ method }) => method === "account/rateLimits/read"), true);
+  assert.equal(server.requests.filter(({ method }) => method === "turn/start").length, turnStartsBefore);
   await client.stop();
 });
 

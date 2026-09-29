@@ -3,6 +3,7 @@ import { sessionSandboxModeLabel } from "./session-permission-command.mjs";
 
 const COMMANDS = new Set([
   "status",
+  "capacity",
   "stop",
   "model",
   "plan",
@@ -302,6 +303,90 @@ export function formatSessionStatus(status, { queueEntries = [], attachmentDraft
   return lines.join("\n");
 }
 
+function capacityPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  return Math.min(100, Math.max(0, number));
+}
+
+function formatCapacityPercent(value) {
+  return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value)}%`;
+}
+
+function formatCapacityDuration(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) return undefined;
+  if (minutes % 10_080 === 0) return `${minutes / 10_080} 周`;
+  if (minutes % 1_440 === 0) return `${minutes / 1_440} 天`;
+  if (minutes % 60 === 0) return `${minutes / 60} 小时`;
+  return `${minutes} 分钟`;
+}
+
+function formatCapacityReset(value, timeZone) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  try {
+    return new Date(seconds * 1_000).toLocaleString("zh-CN", {
+      timeZone: timeZone || "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
+    return new Date(seconds * 1_000).toISOString();
+  }
+}
+
+function formatCapacityWindow(label, window, timeZone) {
+  const used = capacityPercent(window?.usedPercent);
+  if (used === undefined) return `- ${label}：暂不可用`;
+  const remaining = 100 - used;
+  const duration = formatCapacityDuration(window?.windowDurationMins);
+  const reset = formatCapacityReset(window?.resetsAt, timeZone);
+  const details = [
+    `剩余 ${formatCapacityPercent(remaining)}`,
+    duration ? `${duration}窗口` : undefined,
+    reset ? `重置于 ${reset}` : undefined,
+  ].filter(Boolean);
+  return `- ${label}：${details.join(" · ")}`;
+}
+
+export function formatCapacityView(capacity, { timeZone } = {}) {
+  const usage = capacity?.tokenUsage;
+  const used = Number(usage?.last?.totalTokens);
+  const window = Number(usage?.modelContextWindow);
+  const lines = ["### Codex 容量", ""];
+  if (Number.isFinite(used) && used >= 0 && Number.isFinite(window) && window > 0) {
+    const remaining = Math.max(0, window - used);
+    const remainingPercent = Math.max(0, Math.min(100, (remaining / window) * 100));
+    lines.push(
+      `- 当前上下文：已用 ${used.toLocaleString("zh-CN")} / ${window.toLocaleString("zh-CN")} tokens`,
+      `- 上下文剩余：${remaining.toLocaleString("zh-CN")} tokens（${formatCapacityPercent(remainingPercent)}）`,
+    );
+  } else {
+    lines.push("- 当前上下文：暂不可用（等待 Codex 上报 token 使用量）");
+  }
+  const cumulative = Number(usage?.total?.totalTokens);
+  if (Number.isFinite(cumulative) && cumulative >= 0) {
+    lines.push(`- 会话累计：${cumulative.toLocaleString("zh-CN")} tokens`);
+  }
+
+  const rateLimits = capacity?.rateLimits;
+  lines.push("");
+  if (rateLimits) {
+    lines.push(`- 账户计划：${rateLimits.planType || "未知"}`);
+    lines.push(formatCapacityWindow("主窗口", rateLimits.primary, timeZone));
+    if (rateLimits.secondary) lines.push(formatCapacityWindow("次窗口", rateLimits.secondary, timeZone));
+  } else {
+    lines.push("- 账户额度：暂不可用");
+  }
+  lines.push("", "> 本查询直接读取 Codex App Server 状态，不调用模型，也不会占用 Prompt 队列。");
+  return lines.join("\n");
+}
+
 async function executeAttachments(command, context) {
   const { attachmentDraftStore, threadId } = context;
   if (!attachmentDraftStore) throw new TypeError("Attachment command execution requires a draft store");
@@ -518,6 +603,10 @@ export async function executeSessionCommand(command, context) {
       ) || [],
       relaySettings: context.settingsStore?.get(threadId),
     });
+  }
+  if (command.name === "capacity") {
+    if (command.args) usage("用法：`/capacity`");
+    return formatCapacityView(await controller.getCapacity(threadId), { timeZone: context.timeZone });
   }
   if (command.name === "stop") {
     if (command.args) usage("用法：`/stop`");
