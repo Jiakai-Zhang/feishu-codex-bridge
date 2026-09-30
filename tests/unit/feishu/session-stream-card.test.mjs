@@ -9,7 +9,7 @@ import {
   SessionStreamCardStore,
 } from "../../../src/feishu/session-stream-card.mjs";
 
-test("reposts the final answer after updating the stream card", () => {
+test("delivers only attachments after updating the final stream card", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "reply",
     deliveryId: "final-a",
@@ -24,14 +24,14 @@ test("reposts the final answer after updating the stream card", () => {
     modifiedAtMs: 10,
   }]);
 
-  assert.equal(records.length, 2);
-  assert.equal(records[0].deliveryId, "final-a");
-  assert.equal(records[0].kind, "reply");
-  assert.equal(records[1].kind, "file");
-  assert.equal(records[1].dependsOn, "final-a");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].deliveryId, "final-a:attachment:1");
+  assert.equal(records[0].kind, "file");
+  assert.equal(records[0].messageId, "message-a");
+  assert.equal(records[0].dependsOn, "final-a");
 });
 
-test("reposts proactive final answers before native attachments", () => {
+test("does not repost proactive final answers with native attachments", () => {
   const records = buildSessionStreamCardFollowups({
     kind: "send",
     deliveryId: "final-b",
@@ -39,11 +39,93 @@ test("reposts proactive final answers before native attachments", () => {
     createdAt: 100,
   }, [{ localPath: "C:\\tmp\\result.zip", fileName: "result.zip" }]);
 
-  assert.equal(records.length, 2);
-  assert.equal(records[0].kind, "send");
-  assert.equal(records[1].kind, "file");
-  assert.equal(records[1].dependsOn, "final-b");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].kind, "file");
+  assert.equal(records[0].dependsOn, "final-b");
   assert.equal(records[0].messageId, undefined);
+});
+
+test("successful final cards produce no extra answer or completion reminder", () => {
+  for (const kind of ["reply", "send"]) {
+    const base = { kind, deliveryId: "final", text: "answer", chatId: "chat-a" };
+    assert.deepEqual(buildSessionStreamCardFollowups(base, []), []);
+    assert.deepEqual(buildSessionStreamCardFollowups(base), []);
+  }
+});
+
+test("final card followups preserve image, video and file delivery order", () => {
+  const records = buildSessionStreamCardFollowups({
+    kind: "reply", deliveryId: "final", messageId: "message-a", chatId: "chat-a", createdAt: 100,
+  }, [
+    { localPath: "C:\\tmp\\image.png", mediaType: "image" },
+    { localPath: "C:\\tmp\\video.mp4", mediaType: "video" },
+    { localPath: "C:\\tmp\\report.pdf", mediaType: "file" },
+  ]);
+  assert.deepEqual(records.map(record => record.mediaType), ["image", "video", "file"]);
+  assert.deepEqual(records.map(record => record.deliveryId), [
+    "final:attachment:1", "final:attachment:2", "final:attachment:3",
+  ]);
+  assert.deepEqual(records.map(record => record.createdAt), [101, 102, 103]);
+  assert.ok(records.every(record => record.kind === "file" && record.messageId === "message-a"));
+});
+
+test("final card completion persists deduplication only after durable attachment delivery", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function tryFinalizeTurnStreamCard(");
+  const end = source.indexOf("async function enqueuePromptMessage(", start);
+  assert.ok(start >= 0 && end > start);
+  const createHandler = new Function(
+    "streamCards", "channelConnectivity", "channel", "buildSessionStreamCard", "config",
+    "log", "safeError", "tryEnsureTurnStreamCard", "buildSessionStreamCardFollowups",
+    "queueDeliveryBundle", "persistCompleted",
+    `${source.slice(start, end)}\nreturn tryCompleteTurnStreamCard;`,
+  );
+  const record = { threadId: "thread-a", turnId: "turn-a", answer: "answer" };
+  const delivery = { kind: "reply", deliveryId: "final", chatId: "chat-a" };
+  for (const scenario of ["success", "attachments", "failed-update", "missing-card", "offline", "failed-outbox"]) {
+    const events = [];
+    const followups = [];
+    const handler = createHandler(
+      {
+        get: () => scenario === "missing-card" ? undefined : { messageId: "card-a" },
+        remove: async () => events.push("removed"),
+      },
+      { connected: scenario !== "offline" },
+      { updateCard: async () => {
+        events.push("updated");
+        if (scenario === "failed-update") throw new Error("card unavailable");
+      } },
+      buildSessionStreamCard,
+      { sessionRelay: { displayTimeZone: "Asia/Shanghai" }, maxReplyChars: 5000 },
+      () => {}, () => "card unavailable", async () => undefined,
+      buildSessionStreamCardFollowups,
+      async records => {
+        if (scenario === "failed-outbox") throw new Error("outbox unavailable");
+        followups.push(...records);
+        events.push("durable-followups");
+      },
+      async id => {
+        assert.equal(id, "final");
+        events.push("completed");
+      },
+    );
+    const media = {
+      segments: [{ type: "text", text: "answer" }],
+      attachments: scenario === "attachments" ? [{ localPath: "C:\\tmp\\report.pdf" }] : [],
+    };
+    if (scenario === "failed-outbox") {
+      await assert.rejects(handler(record, delivery, media), /outbox unavailable/);
+      assert.deepEqual(events, ["updated"]);
+    } else {
+      const succeeded = scenario === "success" || scenario === "attachments";
+      assert.equal(await handler(record, delivery, media), succeeded, scenario);
+      assert.deepEqual(events, succeeded
+        ? ["updated", "durable-followups", "completed", "removed"]
+        : scenario === "failed-update" ? ["updated"] : [], scenario);
+    }
+    assert.equal(followups.length, scenario === "attachments" ? 1 : 0, scenario);
+    assert.ok(followups.every(item => item.kind === "file"));
+  }
 });
 
 test("builds one updateable progress card from public commentary", () => {

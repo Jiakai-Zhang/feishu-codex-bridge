@@ -1274,7 +1274,7 @@ async function tryFinalizeTurnStreamCard(record, answerSegments, heartbeatSchedu
 
 async function queueStreamCardFollowups(baseRecord, attachments) {
   const records = buildSessionStreamCardFollowups(baseRecord, attachments);
-  await queueDeliveryBundle(records, "stream card final delivery completed");
+  await queueDeliveryBundle(records, "stream card attachments delivered");
 }
 
 async function tryCompleteTurnStreamCard(record, baseDelivery, media, heartbeatSchedule) {
