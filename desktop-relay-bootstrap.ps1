@@ -96,6 +96,8 @@ if (-not (Test-Path -LiteralPath $startupScript -PathType Leaf)) {
 }
 
 try {
+    # Clear an owned legacy dependency before any potentially slow recovery.
+    Disable-OwnedDesktopRelayPointer
     & $startupScript
     $startupExitCode = $LASTEXITCODE
     if ($startupExitCode -ne 0) {

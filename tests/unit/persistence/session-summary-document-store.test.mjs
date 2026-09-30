@@ -42,3 +42,15 @@ test("persists links, idempotent pending turns, and incremental commits", async 
     content: "仍然重复",
   }), false);
 });
+
+test("zero-byte summary state does not crash repeated Bridge store startup", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "summary-recovery-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "summaries.json");
+  await fs.writeFile(filePath, "");
+  assert.deepEqual((await SessionSummaryDocumentStore.open(filePath)).list(), []);
+  assert.deepEqual((await SessionSummaryDocumentStore.open(filePath)).list(), []);
+  const files = await fs.readdir(directory);
+  assert.equal(files.length, 1);
+  assert.match(files[0], /\.corrupt-/);
+});

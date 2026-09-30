@@ -203,6 +203,7 @@ function Write-RelayState {
         schemaVersion = 1
         enabled = $true
         bridgeEnabled = $true
+        pointerMode = 'process-only'
         expectedUrl = $RelayUrl.AbsoluteUri
         activationId = $ActivationId
         configuredAt = [DateTime]::UtcNow.ToString('o')
@@ -352,6 +353,11 @@ if ($current -and $current -ne $url.AbsoluteUri -and -not $Force) {
 $activationId = [guid]::NewGuid().ToString('N')
 $activationCompleted = $false
 try {
+    # Migrate legacy activation before touching the listener or scheduled task.
+    if ($current -eq $url.AbsoluteUri) {
+        [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+        Send-EnvironmentChanged
+    }
     if ($networkReconfigurationRequired) {
         $existingOwnedTask = Get-RelayTask -Name $taskName
         if ($existingOwnedTask -and (Test-RelayTaskOwnership -Task $existingOwnedTask)) {
@@ -373,7 +379,7 @@ try {
     if ($desktopProxyUrl) { $appServerParameters['Proxy'] = $desktopProxyUrl }
     else { $appServerParameters['NoProxy'] = $true }
     $appServerInfo = & (Join-Path $PSScriptRoot 'start-app-server.ps1') @appServerParameters
-    if (-not $appServerInfo -or -not $appServerInfo.ProcessId) {
+    if (-not $appServerInfo -or -not $appServerInfo.ProcessId -or -not $appServerInfo.Initialized) {
         throw 'The shared Codex App Server startup returned no verified process.'
     }
     $reportedUrl = [Uri]([string]$appServerInfo.AppServerUrl)
@@ -483,8 +489,7 @@ try {
             if (-not (Wait-RelayTaskStopped -Name $taskName)) { continue }
         }
         Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
-        # The shared listener and watchdog definition are both verified before
-        # the persistent Desktop dependency is introduced.
+        # Recovery is enabled, but the persistent Desktop dependency stays absent.
         try {
             & $desktopRelayPointerScript -Url $url.AbsoluteUri | Out-Null
             Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
@@ -537,7 +542,7 @@ try {
     if (@($externalGuardianKinds).Count -gt 0) {
         Write-Warning ("Potential custom guardian detected ({0}). It was left untouched. The official watchdog reuses the verified listener; remove the custom guardian only after strict Doctor passes." -f ($externalGuardianKinds -join ', '))
     }
-    Write-Output 'Fully exit and reopen Codex Desktop once if it has not previously loaded this relay pointer.'
+    Write-Output 'Use launch-codex-desktop-with-relay.ps1 to connect Desktop. Start Menu/Store launches stay independent.'
 } catch {
     $activationError = $_
     $stateAfterFailure = Read-RelayState

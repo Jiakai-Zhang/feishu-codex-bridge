@@ -13,7 +13,7 @@ test("Windows operational scripts parse under PowerShell 5.1 and PowerShell 7 wh
   skip: process.platform !== "win32",
 }, async (t) => {
   const parser = [
-    "$files=@('launch-codex-desktop-with-relay.ps1','update-windows-with-desktop-restart.ps1','tests/integration/windows-foreground-update-smoke.ps1')",
+    "$files=@('launch-codex-desktop-with-relay.ps1','update-windows-with-desktop-restart.ps1','tests/integration/windows-foreground-update-smoke.ps1','update.ps1','start-app-server.ps1','start-at-login.ps1','configure-codex-desktop-relay.ps1','desktop-relay-bootstrap.ps1','desktop-relay-pointer.ps1','doctor.ps1','scripts/windows/app-server-readiness.ps1')",
     "$failed=$false",
     "foreach($file in $files){",
     "$tokens=$null;$errors=$null",
@@ -69,7 +69,8 @@ test("foreground Windows updater is visible, one-shot, and preserves Desktop net
   );
 });
 
-test("foreground Windows updater completes its isolated restart transaction", {
+for (const processOnly of [false, true]) {
+test(`foreground Windows updater completes its isolated ${processOnly ? "process-only" : "legacy-pointer"} restart transaction`, {
   skip: process.platform !== "win32",
   timeout: 180_000,
 }, async () => {
@@ -81,6 +82,7 @@ test("foreground Windows updater completes its isolated restart transaction", {
       "Bypass",
       "-File",
       path.join(repositoryRoot, "tests/integration/windows-foreground-update-smoke.ps1"),
+      ...(processOnly ? ["-ProcessOnlyRelay"] : []),
     ],
     {
       cwd: repositoryRoot,
@@ -94,3 +96,4 @@ test("foreground Windows updater completes its isolated restart transaction", {
     /Foreground updater smoke test passed, including residual Desktop shutdown, proxy-preserving relaunch, and final Doctor\./,
   );
 });
+}

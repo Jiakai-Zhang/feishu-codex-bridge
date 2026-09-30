@@ -114,6 +114,9 @@ async function prepareRelease(tempRoot, executable, port) {
   await fs.mkdir(releaseRoot, { recursive: true });
   await fs.mkdir(workspace, { recursive: true });
   await fs.copyFile(path.join(repositoryRoot, "start-app-server.ps1"), path.join(releaseRoot, "start-app-server.ps1"));
+  await fs.mkdir(path.join(releaseRoot, "scripts", "windows"), { recursive: true });
+  await fs.copyFile(path.join(repositoryRoot, "scripts/windows/app-server-readiness.ps1"),
+    path.join(releaseRoot, "scripts/windows/app-server-readiness.ps1"));
   await fs.writeFile(path.join(releaseRoot, "bridge.config.json"), `${JSON.stringify({
     mode: "session-relay",
     workspace,

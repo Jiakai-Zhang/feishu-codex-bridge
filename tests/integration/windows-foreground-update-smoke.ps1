@@ -1,5 +1,6 @@
 param(
-    [switch]$KeepTemp
+    [switch]$KeepTemp,
+    [switch]$ProcessOnlyRelay
 )
 
 $ErrorActionPreference = 'Stop'
@@ -127,6 +128,8 @@ Add-Content -LiteralPath (Join-Path $runtime 'desktop-launch.log') -Value $mode
     Write-Utf8File -Path $relayStatePath -Content (([ordered]@{
         schemaVersion = 1
         enabled = $true
+        bridgeEnabled = $true
+        pointerMode = $(if ($ProcessOnlyRelay) { 'process-only' } else { 'legacy-user' })
         expectedUrl = $relayUrl
         desktopProxyUrl = $desktopProxyUrl
     } | ConvertTo-Json) + "`n")
@@ -136,7 +139,7 @@ Add-Content -LiteralPath (Join-Path $runtime 'desktop-launch.log') -Value $mode
     $env:FEISHU_CODEX_BRIDGE_FOREGROUND_UPDATE_TEST_ROOT = $testRoot
     $env:FEISHU_CODEX_BRIDGE_FOREGROUND_UPDATE_TEST_RELAY_STATE = $relayStatePath
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST = '1'
-    $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $relayUrl
+    $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_URL = $(if ($ProcessOnlyRelay) { 'ws://127.0.0.1:1/rpc' } else { $relayUrl })
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_STATE_PATH = $relayStatePath
     $env:FEISHU_CODEX_BRIDGE_UPDATE_TEST_RELAY_BOOTSTRAP_PATH = $relayBootstrapPath
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null

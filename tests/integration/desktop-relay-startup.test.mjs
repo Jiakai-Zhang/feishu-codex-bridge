@@ -61,7 +61,7 @@ test("Desktop relay disable path removes dependency before official tasks", asyn
   assert.match(disableBody, /External guardians were left untouched/);
 });
 
-test("continuous watchdog clears pointer before restart and restores it only after verification", async () => {
+test("continuous watchdog clears the legacy pointer before restart and never republishes it", async () => {
   const source = await readScript("start-at-login.ps1");
   const outageIndex = source.indexOf("if (-not $portListening)");
   const clearIndex = source.indexOf(
@@ -80,6 +80,39 @@ test("continuous watchdog clears pointer before restart and restores it only aft
   assert.match(source, /\[int\]\$CheckIntervalSeconds = 3/);
   assert.match(source, /FeishuCodexBridgeDesktopRelayWatchdog-/);
   assert.match(source, /Another official Desktop relay watchdog[\s\S]*duplicate startup was ignored/);
+  assert.doesNotMatch(source, /SetEnvironmentVariable\(\$variableName, \$ExpectedUrl/);
+  assert.match(source, /launcher-process-only/);
+});
+
+test("relay activation migrates the persistent dependency to process-only launcher handoff", async () => {
+  const pointer = await readScript("desktop-relay-pointer.ps1");
+  const configure = await readScript("configure-codex-desktop-relay.ps1");
+  const launcher = await readScript("launch-codex-desktop-with-relay.ps1");
+  const bootstrap = await readScript("desktop-relay-bootstrap.ps1");
+  const doctor = await readScript("doctor.ps1");
+  assert.doesNotMatch(pointer, /SetEnvironmentVariable\(\$variableName, \$expected,/);
+  assert.match(configure, /pointerMode = 'process-only'/);
+  assert.match(configure, /-not \$appServerInfo\.Initialized/);
+  assert.match(launcher, /Test-CodexAppServerInitialize -Url \$relayUrl/);
+  assert.match(launcher, /if \(\$relayReady -and \$desktopPath\)/);
+  assert.match(launcher, /local App Server/);
+  assert.match(launcher, /finally \{[\s\S]*\$savedEnvironment/);
+  assert.match(bootstrap, /Disable-OwnedDesktopRelayPointer\s+& \$startupScript/);
+  assert.match(doctor, /processOnlyPointerReady = \[string\]::IsNullOrWhiteSpace/);
+  assert.match(doctor, /pointerMode -eq 'process-only'/);
+});
+
+test("App Server readiness requires bounded WebSocket initialize, not just a listening port", async () => {
+  const starter = await readScript("start-app-server.ps1");
+  const probe = await readScript("scripts/windows/app-server-readiness.ps1");
+  assert.match(starter, /Test-CodexAppServerInitialize -Url \$appServerUri\.AbsoluteUri/);
+  assert.match(starter, /Initialized = \$true/);
+  assert.match(probe, /ClientWebSocket/);
+  assert.match(probe, /CancelAfter\(\$TimeoutMilliseconds\)/);
+  assert.match(probe, /"method":"initialize"/);
+  assert.match(probe, /"method":"initialized"/);
+  assert.match(probe, /Options.Proxy = \$null/);
+  assert.doesNotMatch(probe, /thread\/start|turn\/start/);
 });
 
 test("continuous watchdog publishes heartbeat and keeps Bridge recovery asynchronous", async () => {
@@ -279,6 +312,7 @@ test("Bridge status exposes the continuous watchdog health", async () => {
 test("updater preserves and strictly verifies an enabled Desktop relay", async () => {
   const source = await readScript("update.ps1");
   assert.match(source, /\$desktopRelayWasEnabled/);
+  assert.match(source, /savedDesktopRelayState\.pointerMode -eq 'process-only'[\s\S]*savedDesktopRelayState\.bridgeEnabled[\s\S]*\$desktopRelayWasEnabled = \$true/);
   assert.match(source, /\$targetInstallerSource -notmatch '\(\?i\)SkipDesktopRelayMigration'/);
   assert.match(source, /\$installParameters\['SkipDesktopRelayMigration'\] = \$true/);
   assert.match(

@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'scripts\windows\app-server-readiness.ps1')
 
 $configPath = Join-Path $PSScriptRoot 'bridge.config.json'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
@@ -503,17 +504,22 @@ try {
     }
 
     $appServerDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    $initialized = $false
     while ([DateTime]::UtcNow -lt $appServerDeadline) {
         $appServerProcess.Refresh()
         if ($appServerProcess.HasExited) {
             Remove-Item -LiteralPath $appServerPidPath -Force -ErrorAction SilentlyContinue
             throw "Shared Codex App Server exited during startup. Check $appServerStderrPath"
         }
-        if (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port) { break }
+        if ((Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port) -and
+            (Test-CodexAppServerInitialize -Url $appServerUri.AbsoluteUri)) {
+            $initialized = $true
+            break
+        }
         Start-Sleep -Milliseconds 200
     }
-    if (-not (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port)) {
-        throw "Shared Codex App Server did not listen within 15 seconds. Check $appServerStderrPath"
+    if (-not $initialized) {
+        throw 'Shared Codex App Server did not complete WebSocket initialize within the startup deadline.'
     }
 
     [IO.File]::WriteAllText($appServerPidPath, [string]$appServerProcess.Id)
@@ -531,11 +537,21 @@ try {
             AppServerUrl = $appServerUri.AbsoluteUri
             Started = $started
             NetworkMode = $networkMode
+            Initialized = $true
         }
     } else {
         $verb = if ($started) { 'started' } else { 'is already running' }
         Write-Output "Shared Codex App Server $verb (PID $($appServerProcess.Id), network mode $networkMode)."
     }
+} catch {
+    # Do not leave a newly spawned, uninitialized server without an ownership record.
+    # Reused servers and their tool descendants are deliberately left untouched.
+    if ($started -and -not $initialized -and $appServerProcess) {
+        $verified = Get-VerifiedAppServerProcess -ProcessId $appServerProcess.Id `
+            -Executable $codexExecutable -Port $appServerUri.Port
+        if ($verified) { Stop-Process -Id $verified.Id -ErrorAction SilentlyContinue }
+    }
+    throw
 } finally {
     if ($lockTaken) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
