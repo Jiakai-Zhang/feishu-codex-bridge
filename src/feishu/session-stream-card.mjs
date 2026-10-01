@@ -5,10 +5,7 @@ import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs"
 const MAX_STORED_PROGRESS = 12;
 
 export function buildSessionStreamCardFollowups(baseRecord, attachments) {
-  return Object.freeze([
-    Object.freeze({ ...baseRecord }),
-    ...buildNativeAttachmentDeliveries(baseRecord, attachments),
-  ]);
+  return buildNativeAttachmentDeliveries(baseRecord, attachments);
 }
 
 function recordKey(threadId, turnId) {
