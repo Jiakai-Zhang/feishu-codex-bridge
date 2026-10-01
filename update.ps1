@@ -317,6 +317,15 @@ if (Test-Path -LiteralPath $desktopRelayStatePath -PathType Leaf) {
     }
 }
 
+# Process-only relay activation intentionally has no user-level URL. Preserve its
+# configured recovery and strict Doctor checks across subsequent upgrades.
+if ($savedDesktopRelayState -and
+    [string]$savedDesktopRelayState.pointerMode -eq 'process-only' -and
+    [bool]$savedDesktopRelayState.enabled -and [bool]$savedDesktopRelayState.bridgeEnabled -and
+    [string]$savedDesktopRelayState.expectedUrl -eq $expectedDesktopRelayUrl) {
+    $desktopRelayWasEnabled = $true
+}
+
 $desktopNetworkMode = $null
 $desktopProxyUrl = $null
 if ($PSBoundParameters.ContainsKey('Proxy')) {

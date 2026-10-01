@@ -222,7 +222,23 @@ if (@(Get-RunningDesktopProcesses -ExecutablePaths $knownDesktopPaths).Count -gt
 $configureParameters = @{}
 if ($desktopProxyUrl) { $configureParameters['Proxy'] = $desktopProxyUrl }
 elseif ($NoProxy -or -not (Test-Path -LiteralPath $relayStatePath -PathType Leaf)) { $configureParameters['NoProxy'] = $true }
-& (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1') @configureParameters
+$relayReady = $false
+try {
+    & (Join-Path $PSScriptRoot 'configure-codex-desktop-relay.ps1') @configureParameters
+    # Managed updates can rotate the endpoint; never hand Desktop the old URL.
+    $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $relayUrl = [string]$config.sessionRelay.appServerUrl
+    . (Join-Path $PSScriptRoot 'scripts\windows\app-server-readiness.ps1')
+    $relayReady = Test-CodexAppServerInitialize -Url $relayUrl
+} catch {
+    Write-Warning 'Shared relay activation failed; launching Desktop with its own local App Server.'
+}
+# Also clear a legacy owned pointer on failure, without touching other setups.
+try {
+    & (Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1') -Url $relayUrl -Preparing | Out-Null
+} catch {
+    Write-Warning 'Could not migrate the owned legacy pointer; this Desktop child will still use a process-isolated environment.'
+}
 
 $environmentNames = @('CODEX_APP_SERVER_WS_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
 $savedEnvironment = @{}
@@ -232,7 +248,9 @@ try {
         if ($item) { $savedEnvironment[$name] = [string]$item.Value }
         Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
     }
-    Set-Item -LiteralPath 'Env:CODEX_APP_SERVER_WS_URL' -Value $relayUrl
+    if ($relayReady -and $desktopPath) {
+        Set-Item -LiteralPath 'Env:CODEX_APP_SERVER_WS_URL' -Value $relayUrl
+    }
     $desktopArguments = @()
     if ($desktopProxyUrl) {
         foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')) {
@@ -248,6 +266,9 @@ try {
             Start-Process -FilePath $desktopPath | Out-Null
         }
     } else {
+        # Explorer/MSIX activation is brokered; child environment inheritance is
+        # not guaranteed. Never temporarily mutate the user's registry to bridge it.
+        $relayReady = $false
         Start-Process -FilePath 'explorer.exe' -ArgumentList "shell:AppsFolder\$packagedAppId" | Out-Null
     }
 } finally {
@@ -263,7 +284,8 @@ $deadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $deadline) {
     if (@(Get-RunningDesktopProcesses -ExecutablePaths $knownDesktopPaths).Count -gt 0) {
         $networkMode = if ($desktopProxyUrl) { 'local proxy' } else { 'direct' }
-        Write-Output "ChatGPT/Codex Desktop launched with the verified shared App Server relay in $networkMode mode."
+        $serverMode = if ($relayReady) { 'verified shared App Server relay' } else { 'local App Server (fail-open)' }
+        Write-Output "ChatGPT/Codex Desktop launched with $serverMode in $networkMode mode."
         exit 0
     }
     Start-Sleep -Milliseconds 250
