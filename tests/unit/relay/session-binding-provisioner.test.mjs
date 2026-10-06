@@ -60,6 +60,21 @@ test("creates, verifies, labels, persists, and welcomes a session group in order
   assert.deepEqual(calls.at(-1)[2], { inputMode: "queue", publicProgress: true, finalMention: true });
 });
 
+test("binds an existing group without creating or renaming it", async () => {
+  const { provisioner, calls } = fixture();
+
+  const result = await provisioner.provision("thread-a", {
+    session,
+    targetGroup: { chatId: "oc_existing", name: "Research helpers" },
+  });
+
+  assert.equal(result.groupName, "Research helpers");
+  assert.equal(result.binding.groupChatId, "oc_existing");
+  assert.deepEqual(calls.map(([name]) => name), [
+    "label-ready", "verify", "label", "settings", "persist",
+  ]);
+});
+
 test("is idempotent when a task is already bound", async () => {
   const binding = { threadId: "thread-a", groupChatId: "oc_existing", ownerOpenId: "ou_owner" };
   const { provisioner, calls } = fixture({ bindings: [binding] });

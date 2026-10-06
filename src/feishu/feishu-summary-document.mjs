@@ -2,7 +2,22 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { parseJsonEnvelope, requiredString } from "./lark-cli-json.mjs";
 
 export const SUMMARY_SECTION_MARKER = "Feishu Codex Bridge 自动维护（摘要区标识 v1）";
-const EMPTY_SUMMARY = "暂时还没有可总结的内容。";
+const EMPTY_SUMMARY = [
+  "【项目目标】",
+  "- （暂无）",
+  "【当前状态】",
+  "- （暂无）",
+  "【关键决策】",
+  "- （暂无）",
+  "【待办事项】",
+  "- （暂无）",
+  "【阻塞与未决问题】",
+  "- （暂无）",
+  "【已完成里程碑】",
+  "- （暂无）",
+  "【重要资料】",
+  "- （暂无）",
+].join("\n");
 
 function documentError(code, message, options = {}) {
   const error = new Error(message, options);
@@ -37,9 +52,9 @@ function escapeXml(value) {
 export function buildSummaryDocumentXml(title) {
   return [
     `<title>${escapeXml(requiredString(title, "title"))}</title>`,
-    "<h1>持续摘要</h1>",
+    "<h1>项目档案</h1>",
     `<p>${SUMMARY_SECTION_MARKER}</p>`,
-    `<p>${EMPTY_SUMMARY}</p>`,
+    buildSummaryBlockXml(EMPTY_SUMMARY),
   ].join("\n");
 }
 
@@ -167,9 +182,9 @@ export class FeishuSummaryDocumentManager {
         "--content", "-",
         "--format", "json",
       ], [
-        "<h1>持续摘要</h1>",
+        "<h1>项目档案</h1>",
         `<p>${SUMMARY_SECTION_MARKER}</p>`,
-        `<p>${EMPTY_SUMMARY}</p>`,
+        buildSummaryBlockXml(EMPTY_SUMMARY),
       ].join("\n"));
       section = await this.locate(url);
     }

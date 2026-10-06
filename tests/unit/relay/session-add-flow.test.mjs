@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { SessionAddFlow } from "../../../src/relay/session-add-flow.mjs";
+import {
+  isSessionGroupBindCommand,
+  SessionAddFlow,
+  SessionGroupBindFlow,
+} from "../../../src/relay/session-add-flow.mjs";
 
 const projectSession = {
   id: "thread-project",
@@ -18,6 +23,57 @@ const catalog = {
   projects: [{ id: "project-a", name: "Alpha", sessions: [projectSession] }],
   independent: [independentSession],
 };
+
+test("recognizes only the exact existing-group bind command", () => {
+  assert.equal(isSessionGroupBindCommand("/bind"), true);
+  assert.equal(isSessionGroupBindCommand("/bind@relay_bot"), true);
+  assert.equal(isSessionGroupBindCommand("/bind reuse something"), false);
+  assert.equal(isSessionGroupBindCommand("please /bind"), false);
+});
+
+test("creates a fresh independent context and binds the current group", async () => {
+  const calls = [];
+  const flow = new SessionGroupBindFlow({
+    inspectGroup: async (input) => {
+      calls.push(["inspect", input]);
+      return { name: "Research helpers" };
+    },
+    createIndependent: async (input) => {
+      calls.push(["create", input]);
+      return { id: "thread-new", title: input.name, kind: "independent" };
+    },
+    provision: async (threadId, options) => {
+      calls.push(["provision", threadId, options]);
+      return { alreadyBound: false, groupName: options.targetGroup.name };
+    },
+  });
+
+  const result = await flow.execute({ chatId: "oc_group", actorOpenId: "ou_owner" });
+
+  assert.equal(result.restart, false);
+  assert.deepEqual(calls.map(([name]) => name), ["inspect", "create", "provision"]);
+  assert.deepEqual(calls[1][1], { name: "Research helpers", actorOpenId: "ou_owner", chatId: "oc_group" });
+  assert.deepEqual(calls[2][2].targetGroup, { chatId: "oc_group", name: "Research helpers" });
+});
+
+test("admits unbound groups only for the exact bind bootstrap command", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  const handler = source.slice(
+    source.indexOf("async function handleChannelMessage"),
+    source.indexOf('channel.on("message"'),
+  );
+  const inbound = source.slice(
+    source.indexOf("async function processInboundMessage"),
+    source.indexOf("async function handleChannelMessage"),
+  );
+
+  assert.match(source, /groupAllowlist:\s*\[\]/);
+  assert.match(source, /pendingBoundSessions\.set\(result\.binding\.threadId, result\.session\)/);
+  assert.match(source, /sessionStore\.get\(binding\.threadId\) \|\| pendingBoundSessions\.get\(binding\.threadId\)/);
+  assert.match(source, /chatId\s*\? await createSessionControllerTarget/);
+  assert.match(handler, /!binding[\s\S]+msg\.chatType === "group"[\s\S]+isSessionGroupBindCommand\(msg\.content\)/);
+  assert.ok(inbound.indexOf("isSessionGroupBindCommand(rawContent)") < inbound.indexOf("if (!binding)"));
+});
 
 function fixture() {
   const provisions = [];

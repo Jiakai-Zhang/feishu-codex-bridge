@@ -9,6 +9,12 @@ export class SessionRelayError extends Error {
 const RELAY_MESSAGE_TYPES = new Set(["text", "post", "image", "file", "audio", "video", "media"]);
 const RELAY_RESOURCE_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media"]);
 
+export function shouldIgnoreSessionGroupMessage(msg) {
+  // User cards have a separate member-registration handler, not a Turn input.
+  return msg?.chatType === "group" && msg.rawContentType !== "share_user"
+    && !RELAY_MESSAGE_TYPES.has(String(msg.rawContentType || ""));
+}
+
 export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?.ownerOpenId] } = {}) {
   if (!msg || msg.chatId !== binding.groupChatId) {
     throw new SessionRelayError("wrong_group", "Message is outside the bound group");
@@ -31,7 +37,16 @@ export function assertRelayMessage(msg, binding, { authorizedOpenIds = [binding?
   return content;
 }
 
-export function assertSessionGroup({ chatInfo, members, bots, binding, connectedBotOpenId, activeOpenIds }) {
+export function assertSessionGroup({
+  chatInfo,
+  members,
+  bots,
+  binding,
+  connectedBotOpenId,
+  activeOpenIds,
+  inactiveOpenIds,
+  allowGroupMembers = true,
+}) {
   if (chatInfo?.chatType !== "group") {
     throw new SessionRelayError("not_group", "The binding target is not an ordinary group");
   }
@@ -42,11 +57,15 @@ export function assertSessionGroup({ chatInfo, members, bots, binding, connected
     throw new SessionRelayError("unexpected_bot", "The group must contain exactly this Bridge Bot as its only bot");
   }
   const active = new Set(activeOpenIds || [binding.ownerOpenId]);
+  const inactive = new Set(inactiveOpenIds || []);
   if (!active.has(binding.ownerOpenId)) {
     throw new SessionRelayError("owner_inactive", "The Session owner is not an active Bridge user");
   }
+  if (members.some(({ id }) => inactive.has(id))) {
+    throw new SessionRelayError("inactive_member", "A disabled Bridge user remains in the Session group");
+  }
   const unauthorizedMembers = members.filter(({ id }) => !active.has(id));
-  if (unauthorizedMembers.length > 0) {
+  if (!allowGroupMembers && unauthorizedMembers.length > 0) {
     throw new SessionRelayError(
       "unregistered_member",
       "Every human member of a Session group must be an active Bridge user",
@@ -80,9 +99,19 @@ export function isSessionPromptAddressed(msg, {
   humanMemberCount = 1,
   replyToBot = false,
 } = {}) {
-  if (msg?.chatType !== "group" || Number(humanMemberCount) <= 1) return true;
-  const hasAttachment = Array.isArray(msg?.resources) && msg.resources.length > 0;
-  return Boolean(msg?.mentionedBot || replyToBot || hasAttachment);
+  if (msg?.chatType !== "group") return true;
+  if (msg?.mentionedBot || replyToBot) return true;
+  const hasImageOrVideo = Array.isArray(msg?.resources) && msg.resources.some((resource) => {
+    const type = String(resource?.type || "").trim().toLowerCase();
+    return type === "image" || type === "video" || type === "media";
+  });
+  if (hasImageOrVideo) return false;
+  if (Number(humanMemberCount) <= 1) return true;
+  const hasStagedAttachment = Array.isArray(msg?.resources) && msg.resources.some((resource) => {
+    const type = String(resource?.type || "").trim().toLowerCase();
+    return type !== "image" && type !== "video" && type !== "media";
+  });
+  return hasStagedAttachment;
 }
 
 export function assertMatchingNames(groupName, sessionTitle) {

@@ -2,6 +2,7 @@ node_modules/
 # Deprecated pre-Channel prototype retained only in the original local workspace.
 bridge.mjs
 bridge.config.json
+bridge.config.json.bak
 .env
 .env.*
 work/

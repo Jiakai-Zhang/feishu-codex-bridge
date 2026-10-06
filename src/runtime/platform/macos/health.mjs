@@ -166,6 +166,7 @@ export async function runDoctorCommand(args) {
       "docx:document:readonly",
       "docx:document:write_only",
       "drive:file:upload",
+      "task:task:write",
       "im:chat.tabs:read",
       "im:chat.tabs:write_only",
     ];

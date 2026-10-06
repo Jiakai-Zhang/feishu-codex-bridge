@@ -299,24 +299,23 @@ function Get-VerifiedAppServerProcess {
     return Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
 }
 
-function Stop-VerifiedAppServerProcessTree {
+function Stop-VerifiedAppServerProcess {
     param([Diagnostics.Process]$Process, [string]$Reason)
 
     $Process.Refresh()
     if ($Process.HasExited) { return }
-    $taskkillPath = Join-Path $env:SystemRoot 'System32\taskkill.exe'
-    $taskkill = Start-Process -FilePath $taskkillPath `
-        -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') `
-        -WindowStyle Hidden `
-        -Wait `
-        -PassThru
-    $taskkillExitCode = $taskkill.ExitCode
-    $Process.Refresh()
-    if ($taskkillExitCode -ne 0 -and -not $Process.HasExited) {
-        throw "Failed to stop the verified shared App Server process tree for $Reason."
+    # Tool runners and Bridge helpers can be descendants of this App Server.
+    # A recursive taskkill can terminate their state writes or the upgrade itself.
+    # Recheck PID reuse, then stop only the listener previously verified by caller.
+    $currentProcess = Get-Process -Id $Process.Id -ErrorAction SilentlyContinue
+    if (-not $currentProcess) { return }
+    if ($currentProcess.StartTime -ne $Process.StartTime -or
+        $currentProcess.Path -ine $Process.Path) {
+        throw 'The verified App Server process identity changed; refusing to stop it.'
     }
+    Stop-Process -InputObject $currentProcess -Force
     if (-not $Process.WaitForExit(15000)) {
-        throw "The verified shared App Server process tree did not stop for $Reason."
+        throw "The verified shared App Server did not stop for $Reason."
     }
 }
 
@@ -433,9 +432,9 @@ try {
                 $previousAppServerProcess = Get-VerifiedAppServerProcess -ProcessId $savedAppServerPid `
                     -Executable $configuredCodexExecutable -Port $appServerUri.Port
                 if ($previousAppServerProcess) {
-                    Stop-VerifiedAppServerProcessTree -Process $previousAppServerProcess `
+                    Stop-VerifiedAppServerProcess -Process $previousAppServerProcess `
                         -Reason 'a managed Codex upgrade'
-                    $portDeadline = [DateTime]::UtcNow.AddSeconds(5)
+                    $portDeadline = [DateTime]::UtcNow.AddSeconds(15)
                     while ([DateTime]::UtcNow -lt $portDeadline -and
                         (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port)) {
                         Start-Sleep -Milliseconds 200
@@ -459,8 +458,8 @@ try {
         if ($savedAppServerPid -ne $appServerProcess.Id) {
             throw 'The running shared App Server was not started by this installation; refusing to restart it for a proxy change.'
         }
-        Stop-VerifiedAppServerProcessTree -Process $appServerProcess -Reason 'proxy reconfiguration'
-        $portDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        Stop-VerifiedAppServerProcess -Process $appServerProcess -Reason 'proxy reconfiguration'
+        $portDeadline = [DateTime]::UtcNow.AddSeconds(15)
         while ([DateTime]::UtcNow -lt $portDeadline -and
             (Test-LoopbackPort -HostName $appServerUri.Host -Port $appServerUri.Port)) {
             Start-Sleep -Milliseconds 200

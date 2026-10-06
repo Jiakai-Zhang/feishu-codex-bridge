@@ -1,4 +1,5 @@
 import { runLarkCliJson } from "./feishu-feed-group.mjs";
+import { createFeishuGroupAvatar } from "./feishu-group-avatar.mjs";
 
 const CHAT_ID = /^oc_[A-Za-z0-9_-]+$/;
 const OPEN_ID = /^ou_[A-Za-z0-9_-]+$/;
@@ -13,7 +14,15 @@ export class FeishuSessionChatError extends Error {
 }
 
 export class FeishuSessionChatManager {
-  constructor({ nodeExecutable, larkCliEntry, ownerOpenId, cwd = process.cwd(), runCommand = runLarkCliJson }) {
+  constructor({
+    nodeExecutable,
+    larkCliEntry,
+    ownerOpenId,
+    cwd = process.cwd(),
+    runCommand = runLarkCliJson,
+    uploadAvatar,
+    onWarning = () => {},
+  }) {
     if (!nodeExecutable) throw new TypeError("nodeExecutable is required");
     if (!larkCliEntry) throw new TypeError("larkCliEntry is required");
     if (ownerOpenId != null && !OPEN_ID.test(String(ownerOpenId || ""))) throw new TypeError("A valid ownerOpenId is required");
@@ -22,23 +31,48 @@ export class FeishuSessionChatManager {
     this.ownerOpenId = ownerOpenId;
     this.cwd = cwd;
     this.runCommand = runCommand;
+    this.uploadAvatar = uploadAvatar;
+    this.onWarning = onWarning;
   }
 
   async createSessionGroup({ name, ownerOpenId = this.ownerOpenId }) {
     const groupName = String(name || "").trim();
     if (!groupName || groupName.length > 60) throw new TypeError("Feishu group name must contain 1-60 characters");
     if (!OPEN_ID.test(String(ownerOpenId || ""))) throw new TypeError("A valid Session ownerOpenId is required");
+    let avatar;
+    if (typeof this.uploadAvatar === "function") {
+      try {
+        avatar = await this.uploadAvatar({
+          name: groupName,
+          image: createFeishuGroupAvatar(groupName),
+        });
+        if (typeof avatar !== "string" || !avatar.trim()) throw new Error("Avatar upload returned no Image Key");
+      } catch (error) {
+        avatar = undefined;
+        this.onWarning(new FeishuSessionChatError(
+          "chat_avatar_failed",
+          "The Bridge Bot could not set a generated Feishu group avatar",
+          { cause: error },
+        ));
+      }
+    }
     let response;
     try {
       response = await this.runCommand(this.nodeExecutable, this.larkCliEntry, [
-        "im", "+chat-create",
-        "--name", groupName,
-        "--description", "一个飞书群固定绑定一个本机 Codex 任务",
-        "--users", ownerOpenId,
-        "--owner", ownerOpenId,
-        "--set-bot-manager",
-        "--type", "private",
-        "--chat-mode", "group",
+        "im", "chats", "create",
+        "--params", JSON.stringify({
+          user_id_type: "open_id",
+          set_bot_manager: true,
+        }),
+        "--data", JSON.stringify({
+          name: groupName,
+          description: "一个飞书群固定绑定一个本机 Codex 任务",
+          user_id_list: [ownerOpenId],
+          owner_id: ownerOpenId,
+          chat_type: "private",
+          chat_mode: "group",
+          ...(avatar ? { avatar } : {}),
+        }),
         "--as", "bot",
         "--format", "json",
       ], { cwd: this.cwd });

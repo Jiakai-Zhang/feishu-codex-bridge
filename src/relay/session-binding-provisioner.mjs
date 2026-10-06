@@ -1,5 +1,7 @@
 import { buildSessionGroupName } from "../codex/codex-desktop-catalog.mjs";
 
+const CHAT_ID = /^oc_[A-Za-z0-9_-]+$/;
+
 export class SessionBindingProvisionError extends Error {
   constructor(code, message, options = {}) {
     super(message, options);
@@ -34,7 +36,7 @@ export class SessionBindingProvisioner {
     this.tail = Promise.resolve();
   }
 
-  provision(threadId, { session: suppliedSession, ownerOpenId } = {}) {
+  provision(threadId, { session: suppliedSession, ownerOpenId, targetGroup } = {}) {
     const work = async () => {
       const bindingOwnerOpenId = String(ownerOpenId || this.defaultOwnerOpenId || "");
       if (!/^ou_[A-Za-z0-9_-]+$/.test(bindingOwnerOpenId)) {
@@ -63,8 +65,18 @@ export class SessionBindingProvisioner {
           "The Codex task is unavailable or is not assigned to a local Desktop Project/independent list",
         );
       }
+      const existingTarget = targetGroup == null ? undefined : {
+        chatId: String(targetGroup.chatId || ""),
+        name: String(targetGroup.name || "").trim(),
+      };
+      if (existingTarget && (!CHAT_ID.test(existingTarget.chatId) || !existingTarget.name)) {
+        throw new SessionBindingProvisionError(
+          "target_group_invalid",
+          "An existing Feishu group requires a valid chat identity and name",
+        );
+      }
       const projectName = session.kind === "project" ? session.projectName : "独立";
-      const groupName = buildSessionGroupName(projectName, session.title);
+      const groupName = existingTarget?.name || buildSessionGroupName(projectName, session.title);
 
       let feedGroupReady = false;
       try {
@@ -74,14 +86,16 @@ export class SessionBindingProvisioner {
         if (bindingOwnerOpenId === this.defaultOwnerOpenId) throw error;
         this.onWarning(error);
       }
-      let chat;
-      try {
-        chat = await this.chatManager.createSessionGroup({ name: groupName, ownerOpenId: bindingOwnerOpenId });
-      } catch (error) {
-        throw new SessionBindingProvisionError(error?.code || "chat_create_failed", error?.message || "Group creation failed", {
-          cause: error,
-          missingScopes: error?.missingScopes,
-        });
+      let chat = existingTarget;
+      if (!chat) {
+        try {
+          chat = await this.chatManager.createSessionGroup({ name: groupName, ownerOpenId: bindingOwnerOpenId });
+        } catch (error) {
+          throw new SessionBindingProvisionError(error?.code || "chat_create_failed", error?.message || "Group creation failed", {
+            cause: error,
+            missingScopes: error?.missingScopes,
+          });
+        }
       }
 
       const candidateBinding = Object.freeze({
@@ -93,8 +107,10 @@ export class SessionBindingProvisioner {
         await this.verifyGroup({ binding: candidateBinding, groupName });
       } catch (error) {
         throw new SessionBindingProvisionError(
-          "created_group_verification_failed",
-          "The newly created group did not pass the solo owner/Bot safety check",
+          existingTarget ? "target_group_verification_failed" : "created_group_verification_failed",
+          existingTarget
+            ? "The existing group did not pass the registered-member and Bot safety check"
+            : "The newly created group did not pass the solo owner/Bot safety check",
           { cause: error },
         );
       }
@@ -106,8 +122,10 @@ export class SessionBindingProvisioner {
         } catch (error) {
           if (bindingOwnerOpenId === this.defaultOwnerOpenId) {
             throw new SessionBindingProvisionError(
-              "created_group_tag_failed",
-              "The new group was created but the agent Feed label could not be applied",
+              existingTarget ? "target_group_tag_failed" : "created_group_tag_failed",
+              existingTarget
+                ? "The existing group could not be assigned to the agent Feed label"
+                : "The new group was created but the agent Feed label could not be applied",
               { cause: error, missingScopes: error?.missingScopes },
             );
           }
@@ -143,17 +161,19 @@ export class SessionBindingProvisioner {
         );
       }
 
-      try {
-        await this.sendWelcome?.({
-          chatId: chat.chatId,
-          groupName,
-          session,
-          binding,
-          settings: initializedSettings?.settings,
-          feedGroupName: feedGroupApplied ? this.feedGroupManager.groupName : undefined,
-        });
-      } catch (error) {
-        this.onWarning(error);
+      if (!existingTarget) {
+        try {
+          await this.sendWelcome?.({
+            chatId: chat.chatId,
+            groupName,
+            session,
+            binding,
+            settings: initializedSettings?.settings,
+            feedGroupName: feedGroupApplied ? this.feedGroupManager.groupName : undefined,
+          });
+        } catch (error) {
+          this.onWarning(error);
+        }
       }
       return Object.freeze({
         alreadyBound: false,

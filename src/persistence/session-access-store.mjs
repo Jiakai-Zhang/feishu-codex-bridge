@@ -70,12 +70,16 @@ function normalizeState(raw, ownerOpenId) {
     const openId = requiredOpenId(item?.openId, "user.openId");
     if (usersById.has(openId)) throw new TypeError("Session access users must have unique open_ids");
     const role = openId === ownerId ? "owner" : "member";
+    const accessScope = openId === ownerId || item?.accessScope !== "group"
+      ? "full"
+      : "group";
     const directoryName = item?.directoryName == null || String(item.directoryName).trim() === ""
       ? undefined
       : normalizeDirectoryName(item.directoryName, "user.directoryName");
     const user = {
       openId,
       role,
+      accessScope,
       status: item?.status === "inactive" ? "inactive" : "active",
       directoryName,
       displayName: normalizeDisplayName(item?.displayName),
@@ -88,6 +92,7 @@ function normalizeState(raw, ownerOpenId) {
     const owner = {
       openId: ownerId,
       role: "owner",
+      accessScope: "full",
       status: "active",
       directoryName: undefined,
       displayName: undefined,
@@ -98,6 +103,7 @@ function normalizeState(raw, ownerOpenId) {
   }
   const owner = usersById.get(ownerId);
   owner.role = "owner";
+  owner.accessScope = "full";
   owner.status = "active";
 
   const directoryOwners = new Map();
@@ -189,6 +195,12 @@ export class SessionAccessStore {
     return this.state.users.filter(({ status }) => status === "active").map((user) => ({ ...user }));
   }
 
+  listDirectUsers() {
+    return this.state.users
+      .filter(({ status, accessScope }) => status === "active" && accessScope === "full")
+      .map((user) => ({ ...user }));
+  }
+
   getUser(openId) {
     const user = this.state.users.find((item) => item.openId === String(openId));
     return user ? Object.freeze({ ...user }) : undefined;
@@ -198,9 +210,19 @@ export class SessionAccessStore {
     return this.getUser(openId)?.status === "active";
   }
 
+  canDirectMessage(openId) {
+    const user = this.getUser(openId);
+    return user?.status === "active" && user.accessScope === "full";
+  }
+
   getUserRoot(openId) {
     const user = this.getUser(openId);
-    if (!this.state.projectRoot || !user?.directoryName || user.status !== "active") return undefined;
+    if (
+      !this.state.projectRoot ||
+      !user?.directoryName ||
+      user.status !== "active" ||
+      user.accessScope !== "full"
+    ) return undefined;
     const root = normalizeFsPath(path.join(this.state.projectRoot, user.directoryName));
     return isPathInside(this.state.projectRoot, root) ? root : undefined;
   }
@@ -288,11 +310,37 @@ export class SessionAccessStore {
       const replacement = {
         openId: memberOpenId,
         role: "member",
+        accessScope: "full",
         status: "active",
         directoryName: safeDirectory,
         displayName: normalizeDisplayName(displayName) || existing?.displayName,
         createdAt: existing?.createdAt || Date.now(),
       };
+      const index = next.users.findIndex(({ openId: id }) => id === memberOpenId);
+      if (index >= 0) next.users[index] = replacement;
+      else next.users.push(replacement);
+      await this.#persist(next);
+      return Object.freeze({ ...replacement });
+    });
+  }
+
+  addGroupMember({ openId, displayName }) {
+    return this.#serialize(async () => {
+      const memberOpenId = requiredOpenId(openId, "member.openId");
+      if (memberOpenId === this.ownerOpenId) {
+        throw new SessionAccessStoreError("member_is_owner", "The Bridge owner is already registered");
+      }
+      const existing = this.state.users.find(({ openId: id }) => id === memberOpenId);
+      const replacement = {
+        openId: memberOpenId,
+        role: "member",
+        accessScope: "group",
+        status: "active",
+        directoryName: existing?.directoryName,
+        displayName: normalizeDisplayName(displayName) || existing?.displayName,
+        createdAt: existing?.createdAt || Date.now(),
+      };
+      const next = cloneState(this.state);
       const index = next.users.findIndex(({ openId: id }) => id === memberOpenId);
       if (index >= 0) next.users[index] = replacement;
       else next.users.push(replacement);

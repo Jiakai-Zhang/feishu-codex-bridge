@@ -339,6 +339,12 @@ if ($config) {
         Add-Check -Name 'Feishu oversized-file Drive OAuth scope' -Passed $driveReady `
             -Detail $(if ($driveReady) { 'upload scope granted' } else { "missing: $($missingDriveScopes -join ', ')" })
 
+        $requiredTaskScopes = @('task:task:write')
+        $missingTaskScopes = @($requiredTaskScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
+        $tasksReady = $missingTaskScopes.Count -eq 0
+        Add-Check -Name 'Feishu task OAuth scope' -Passed $tasksReady `
+            -Detail $(if ($tasksReady) { 'task write scope granted' } else { "missing: $($missingTaskScopes -join ', ')" })
+
         $requiredChatTabScopes = @('im:chat.tabs:read', 'im:chat.tabs:write_only')
         $missingChatTabScopes = @($requiredChatTabScopes | Where-Object { -not $scopeSet.ContainsKey($_) })
         $chatTabsReady = $missingChatTabScopes.Count -eq 0

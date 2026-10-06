@@ -9,7 +9,19 @@ import {
   KeyedSerialQueue,
   planSessionNameSync,
   resolveCompletedTurnRoute,
+  shouldIgnoreSessionGroupMessage,
 } from "../../../src/relay/session-relay-core.mjs";
+
+test("silently ignores unsupported group message types while preserving supported input and member cards", () => {
+  for (const rawContentType of ["sticker", "system", "merge_forward", "share_chat", "interactive", "unknown", undefined]) {
+    assert.equal(shouldIgnoreSessionGroupMessage({ chatType: "group", rawContentType }), true);
+    assert.equal(shouldIgnoreSessionGroupMessage({ chatType: "p2p", rawContentType }), false);
+  }
+  for (const rawContentType of ["text", "post", "image", "file", "audio", "video", "media", "share_user"]) {
+    assert.equal(shouldIgnoreSessionGroupMessage({ chatType: "group", rawContentType }), false);
+  }
+  assert.equal(shouldIgnoreSessionGroupMessage(undefined), false);
+});
 
 const binding = {
   groupChatId: "oc_bound",
@@ -149,25 +161,70 @@ test("authorizes active group members while keeping the Session owner and Bot ma
   assert.throws(() => assertSessionGroup({
     ...valid,
     members: [...valid.members, { id: "ou_unregistered" }],
+    allowGroupMembers: false,
   }), /active Bridge user/);
+  assert.deepEqual(assertSessionGroup({
+    ...valid,
+    members: [...valid.members, { id: "ou_group_guest" }],
+    allowGroupMembers: true,
+  }), {
+    participantOpenIds: ["ou_owner", "ou_member", "ou_group_guest"],
+    humanMemberCount: 3,
+  });
+  assert.throws(() => assertSessionGroup({
+    ...valid,
+    members: [...valid.members, { id: "ou_disabled" }],
+    inactiveOpenIds: ["ou_disabled"],
+    allowGroupMembers: true,
+  }), /disabled Bridge user/);
   assert.throws(() => assertSessionGroup({ ...valid, bots: [{ id: "ou_wrong" }] }), /exactly this Bridge Bot/);
 });
 
-test("requires an explicit Bot address after a second human joins but permits attachment staging", () => {
+test("requires an explicit Bot address for group image and video messages", () => {
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 1 }), true);
+  assert.equal(isSessionPromptAddressed({
+    chatType: "group",
+    mentionedBot: false,
+    resources: [{ type: "image", fileKey: "image_key" }],
+  }, { humanMemberCount: 1 }), false);
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, { humanMemberCount: 2 }), false);
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: true }, { humanMemberCount: 2 }), true);
   assert.equal(isSessionPromptAddressed({ chatType: "group", mentionedBot: false }, {
     humanMemberCount: 2,
     replyToBot: true,
   }), true);
-  for (const type of ["image", "file", "audio", "video"]) {
+  for (const type of ["file", "audio"]) {
     assert.equal(isSessionPromptAddressed({
       chatType: "group",
       mentionedBot: false,
       resources: [{ type, fileKey: `${type}_key` }],
     }, { humanMemberCount: 2 }), true);
   }
+  for (const type of ["image", "video", "media"]) {
+    assert.equal(isSessionPromptAddressed({
+      chatType: "group",
+      mentionedBot: false,
+      resources: [{ type, fileKey: `${type}_key` }],
+    }, { humanMemberCount: 2 }), false);
+  }
+  assert.equal(isSessionPromptAddressed({
+    chatType: "group",
+    mentionedBot: false,
+    resources: [
+      { type: "file", fileKey: "file_key" },
+      { type: "image", fileKey: "image_key" },
+    ],
+  }, { humanMemberCount: 2 }), false);
+  assert.equal(isSessionPromptAddressed({
+    chatType: "group",
+    mentionedBot: true,
+    resources: [{ type: "image", fileKey: "image_key" }],
+  }, { humanMemberCount: 2 }), true);
+  assert.equal(isSessionPromptAddressed({
+    chatType: "group",
+    mentionedBot: false,
+    resources: [{ type: "video", fileKey: "video_key" }],
+  }, { humanMemberCount: 2, replyToBot: true }), true);
 });
 
 test("requires the Feishu group and Codex session names to match exactly", () => {

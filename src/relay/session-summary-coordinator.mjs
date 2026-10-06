@@ -1,5 +1,6 @@
 const DEFAULT_DEBOUNCE_MS = 60_000;
 const DEFAULT_RETRY_MS = 5 * 60_000;
+const PASSIVE_CONTEXT_EXCLUDED_RESOURCE_TYPES = new Set(["image", "video", "media"]);
 
 function requiredText(value, field) {
   const text = String(value || "").trim();
@@ -20,6 +21,49 @@ function compact(value, maxChars) {
   return `${text.slice(0, Math.max(0, maxChars - 16))}\n[内容已截断]`;
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripPassiveMediaMarkers(value, resources) {
+  let text = String(value || "");
+  for (const resource of resources) {
+    const fileKey = String(resource?.fileKey || "").trim();
+    if (!fileKey) continue;
+    const key = escapeRegExp(fileKey);
+    text = text
+      .replace(new RegExp(`!\\[[^\\]]*\\]\\(${key}\\)`, "g"), "")
+      .replace(new RegExp(`<(?:image|video|media)\\b[^>]*\\bkey=(?:"${key}"|'${key}')[^>]*/?>`, "gi"), "");
+  }
+  if (resources.length > 0) {
+    text = text
+      .replace(/!\[[^\]]*\]\([^\r\n)]*\)/g, "")
+      .replace(/<(?:image|video|media)\b[^>]*\/?>/gi, "");
+  }
+  return text
+    .replace(/[ \t]+\r?\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function sanitizePassiveGroupMessage(record) {
+  const resources = Array.isArray(record?.resources) ? record.resources : [];
+  const excludedResources = resources.filter((resource) => (
+    PASSIVE_CONTEXT_EXCLUDED_RESOURCE_TYPES.has(String(resource?.type || "").trim().toLowerCase())
+  ));
+  const retainedResources = resources.filter((resource) => !excludedResources.includes(resource));
+  const contentType = String(record?.contentType || "").trim().toLowerCase();
+  const content = PASSIVE_CONTEXT_EXCLUDED_RESOURCE_TYPES.has(contentType)
+    ? ""
+    : stripPassiveMediaMarkers(record?.content, excludedResources);
+  if (!content && retainedResources.length === 0) return undefined;
+  return Object.freeze({
+    ...record,
+    content,
+    resources: Object.freeze([...retainedResources]),
+  });
+}
+
 export function buildCompletedTurnSummaryDelta(record, { maxChars = 12_000 } = {}) {
   const limit = Math.max(1_000, Number(maxChars) || 12_000);
   const promptBudget = Math.max(400, Math.floor(limit * 0.4));
@@ -35,6 +79,22 @@ export function buildCompletedTurnSummaryDelta(record, { maxChars = 12_000 } = {
   const prompts = compact(lines.join("\n\n"), promptBudget);
   const answer = compact(requiredText(record?.answer, "answer"), answerBudget);
   return compact(`${prompts}\n\n助手：${answer}`, limit);
+}
+
+export function buildPassiveGroupMessageSummaryDelta(record, { maxChars = 12_000 } = {}) {
+  const passiveRecord = sanitizePassiveGroupMessage(record);
+  if (!passiveRecord) return "";
+  const limit = Math.max(1_000, Number(maxChars) || 12_000);
+  const content = String(passiveRecord.content || "").trim();
+  const resources = passiveRecord.resources;
+  const resourceTypes = resources
+    .map((resource) => String(resource?.type || "附件").trim() || "附件")
+    .slice(0, 10);
+  const parts = [];
+  if (content) parts.push(content);
+  if (resourceTypes.length > 0) parts.push(`（包含 ${resourceTypes.length} 个资源：${resourceTypes.join("、")}）`);
+  const body = parts.join("\n") || `（${String(record?.contentType || "消息").trim() || "消息"}，无可提取文字）`;
+  return compact(`群聊记录（未请求 Bot 回答）：\n群成员：${body}`, limit);
 }
 
 export class SessionSummaryCoordinator {
@@ -91,7 +151,7 @@ export class SessionSummaryCoordinator {
       throw summaryError("summary_document_already_linked", "The group already has a summary document");
     }
     const document = await this.documentManager.create({
-      title: `${requiredText(title, "title")} · 持续摘要`,
+      title: `${requiredText(title, "title")} · 项目档案`,
     });
     await this.store.link({
       groupChatId,
@@ -213,7 +273,7 @@ export class SessionSummaryCoordinator {
       const result = await this.tabManager.ensure({
         chatId: record.groupChatId,
         documentUrl: record.documentUrl,
-        tabName: "持续摘要",
+        tabName: "项目档案",
       });
       return this.store.setTab(record.groupChatId, result.tabId);
     } catch (error) {
@@ -233,6 +293,21 @@ export class SessionSummaryCoordinator {
       completedAtMs: record.completedAtMs,
     });
     if (appended) this.schedule(record.chatId, this.debounceMs);
+    return appended;
+  }
+
+  async recordGroupMessage(record) {
+    if (!this.store.get(record?.groupChatId)) return false;
+    const passiveRecord = sanitizePassiveGroupMessage(record);
+    if (!passiveRecord) return false;
+    const appended = await this.store.appendTurn({
+      groupChatId: passiveRecord.groupChatId,
+      threadId: passiveRecord.threadId,
+      turnId: `message:${requiredText(passiveRecord.messageId, "messageId")}`,
+      content: buildPassiveGroupMessageSummaryDelta(passiveRecord),
+      completedAtMs: passiveRecord.receivedAtMs,
+    });
+    if (appended) this.schedule(passiveRecord.groupChatId, this.debounceMs);
     return appended;
   }
 

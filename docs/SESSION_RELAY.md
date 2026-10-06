@@ -4,6 +4,10 @@
 
 > 当前 `main` 包含固定版 `v0.3.1-beta.1` 之后合并的 Bridge pointer 生命周期、单张持久流式卡片、长回答云文档和完整媒体转发。标有“当前 `main`”的行为在下一个固定 tag 发布前不属于 `v0.3.1-beta.1` 的发布保证。
 
+开启公开进度时，默认排队和 `/queue <正文>` 的确认提示是流式卡片的初始状态：显示排位，任务开始后在原卡片上替换为执行进度和结果，不再单独发送排队确认。排位变化和取消也会更新原卡片；写入权限冲突的等待提示会并入其中。关闭公开进度或首次发卡失败时保留文本确认兜底。完成卡片更新成功后不再补发全文或独立完成提醒，附件转发保持不变；卡片更新失败时仍兜底投递最终答案。
+
+子 agent 的启动、工作中和完成状态只更新流式卡片里的协作区域，不另发带时间戳的状态消息；即使卡片更新失败，也不会把子 agent 状态降级为独立通知。
+
 ## 绑定模型
 
 ```text
@@ -21,9 +25,24 @@
 
 ## 消息如何进入 Session
 
-群内只有一名人类用户时，可直接发送文本、图片或附件，无需 `@Bot`。有两名或更多人类用户时，只有 `@Bot`、回复 Bot 的消息和 Bridge 斜杠命令会进入 Session；其他消息按普通群聊忽略。Bridge 去除真实 Bot mention 和飞书内部资源 key 后，把内容作为该 Session 的输入：
+### Desktop 空白草稿兼容
+
+Bridge 创建的新任务显式使用 `historyMode: legacy`，保证首条消息前就能在断开、重载后恢复。部分 Desktop 版本会把新窗口保存为 `paginated` 草稿，却尚未生成可恢复的历史；原生服务可能对它返回 `no rollout found` 或分页历史来源缺失。
+
+首次绑定时，只有同时确认草稿从未收到用户输入、没有 token 使用、预览、历史标题、附件、父子任务关系，更新时间仍在创建时的同一秒内且历史文件不存在，Bridge 才会保留原草稿并建立同名、同工作目录的可执行上下文。毫秒时间戳允许 Desktop 首次初始化元数据的微小差异，但不能跨过创建秒。新上下文不会自动获得原生 Project 分组。缺失历史文件或 RPC 报错本身不足以证明聊天为空；已有执行记录的聊天不会被替换。
+
+已绑定且卡在首条消息的空白草稿可由维护者在停止 Bridge 和 supervisor 后运行 `node scripts/dev/recover-empty-session.mjs "公开任务名称"`。工具会再次核验空白状态，创建并验证原生恢复能力，私下备份后迁移同一群的绑定、队列、设置、输入账本与现有卡片；原始消息、顺序、附件和权限保持不变，不自行重发模型请求。写入失败会回滚；若报告回滚不完整，保持 Bridge 停止并先恢复备份。任务名称必须唯一；已有历史或证据不足时拒绝操作。随后按平台启动 Bridge 并运行严格 doctor。
+
+Channel SDK 的 HTTP 接口和消息 WebSocket 默认启用 Bridge 进程内的 DoH DNS 备援：飞书/Lark 公共域名先使用系统 DNS；报错或等待超过 750ms 时，改用经过 TLS 校验的阿里 DoH 服务（按顺序尝试 `223.5.5.5`、`223.6.6.6` 的 HTTPS 端点）。备用解析结果按 TTL 缓存，最长 5 分钟；不固定飞书业务 IP，不改变系统 DNS、VPN、HTTP 代理、Codex Desktop 或本地 App Server。备用请求只包含公共域名，不携带飞书 App Secret、token 或消息正文。`FEISHU_DOH_BACKUP=off` 可在启动 Bridge 时关闭备援；独立运行或子进程中的飞书 CLI 不会自动继承这套 SDK 解析器。DoH 不能修复 HTTPS 本身断网、权限不足或群成员校验错误。
+
+群成员核验遇到明确的网络故障时，Bridge 保留自动重试，但不再发送“飞书网络暂时不稳定”的通知。重试后仍无法核验的消息不会进入 Codex，也不会在恢复后自动补交；需要处理的权限或成员安全错误仍会提示。网络恢复后可重新发送消息。
+
+群里的表情包、系统通知、合并转发等不支持的消息类型会直接静默忽略，不回复“不支持”的提示，不核验群成员，也不加入 Codex 输入或群聊摘要。文本、富文本、图片及普通附件照常处理，成员名片登记功能不受影响。
+
+群内只有一名人类用户时，可直接发送文本或普通文件；图片、视频仍需明确 `@Bot` 或回复 Bot。多人群中的文本需 `@Bot` 或回复 Bot；Bridge 命令与普通文件暂存按各自规则处理。未明确交给 Bot 的群图片、视频不会进入上下文。Bridge 去除真实 Bot mention 和飞书内部资源 key 后，把内容作为该 Session 的输入：
 
 - 图片使用 App Server 原生 `localImage` 输入，可与同一条富文本中的说明一起发送；
+- 可以先发送图片，再**回复/引用那条图片并 `@Bot` 写问题**。Bridge 会读取同一会话中被直接引用的消息，把其文字、图片或普通附件与本次问题一起提交；视频和音频按文件输入。仅取直接引用的一条消息，不递归读取引用链或扫描群历史。原消息的表情包、卡片和合并转发不展开；引用读取失败时不会提交缺失资料的 Prompt。当前附件与引用附件共同受资源数量、大小上限约束。
 - PDF、Office 文档、压缩包、音视频和其他普通文件先流式下载到 Bridge 受控缓存，再按 Codex Desktop 自身持久化文件 Prompt 的格式加入输入：`Files mentioned by the user`、安全文件名、受控缓存绝对路径和 `My request for Codex`。模型因此可以直接读取原文件，Desktop 可按原生文件消息呈现；
 - 纯普通文件消息不会立即启动 Codex，而是成为“当前 Session + 当前发送者”的附件草稿；不同协作者的暂存附件不会混合。可以连续上传多个文件，发送者的第一条普通文字 Prompt 会原子地取走自己的全部草稿附件并提交一次；
 - 已有附件草稿时，后续纯图片消息也加入同一草稿；没有草稿时，单独图片仍按原行为立即成为 Prompt；同一条富文本中的文字和图片仍立即一起提交；
@@ -41,6 +60,16 @@
 
 `/queue <Prompt>` 总是显式创建独立新 Turn，不受当前普通消息模式影响。多条队列不会合并；Bridge 或共享 App Server 重启后仍会恢复，并通过原飞书消息 ID 对账，避免重复启动。
 
+如果上一轮已因模型连接中断终止失败（包括 `stream disconnected before completion: error sending request` 或原生 transport 错误），而 Session 留在 `systemError`，Bridge 会允许后续新消息开始独立 Turn，避免队列永久等待。恢复仍使用原上下文、权限设置和消息 ID，不重放失败的旧输入；活动 Turn 或活动 Goal 仍会等待。其他系统错误（包括鉴权、额度或无法确认的错误）不会自动恢复。
+
+断线状态优先更新原流式卡片，不额外发送结束提醒：本机 App Server WebSocket 中断时 Bridge 自动重连并对账；原生模型错误的 `willRetry=true` 事件显示“正在重试”；`turn/completed` 的 `failed` 或 `interrupted` 状态显示“本轮未完成”或“本轮已停止”，保留最后公开进度和继续方式，不再显示运行计时。模型重试次数由 Codex 的原生策略限制；Bridge 不在重试耗尽后擅自重放旧指令。没有卡片时会尝试创建一张状态卡片，即使普通公开进度已关闭。卡片更新失败会保留状态，连接恢复后重试原卡片，而不是补发一条重复通知。
+
+Bridge 对有待维护卡片的 Session 最多每 30 秒读取一次共享 App Server 状态，补发现重连或 Bridge 重载期间遗漏的失败事件，不调用语言模型。若读状态请求超时、WebSocket 却还显示连接，Bridge 会重连自己的客户端连接，不重启共享 App Server 或原任务。卡片 JSON 新增可选 `executionStatus`（只存状态枚举、原因枚举及时间），旧记录可直接读取，无需迁移；不保存或转发原生错误正文、凭据或私有路径。
+
+状态核对也会补收已有卡片对应的完成结果，并沿用原有结果去重及投递流程；不会扫描补发无卡片的旧聊天。已投递结果不重复发送；已结束但没有正文的任务会明确显示“本轮已结束（无正文）”，避免留下永远运行的卡片。
+
+过期旧卡片若被飞书永久拒绝更新（`230031`），保留本地未投递状态及可选 `executionStatus.uneditable=true` 标记，停止反复请求，不把它记为已通知，也不另发重复消息。此标记与旧记录兼容，无需迁移；新卡片不受影响。
+
 多人群的普通 Prompt 固定按 `queue` 处理，避免不同成员的自然语言互相插入当前回答。需要调整活动回答时使用 `/steer <调整方向>`；只有 Session owner 或当前 Turn 的初始发起者可以执行。这个发起者身份会写入输入账本，Bridge 重启后仍可恢复授权。
 
 Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群的长期绑定保持不变，但 `/chat [首条 Prompt]` 可以在当前群或 Bot 私聊中创建独立临时 Session；`/endchat` 结束后，群内返回原绑定 Session。除了精确识别的 Session、临时 Chat 与绑定管理命令，其他文本（包括未知的 `/xxx`）都按当前 `queue|steer` 设置交给 Codex。
@@ -50,6 +79,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 - `/chat`：持久记录一个临时 Chat；首条 Prompt 到达时才创建 Codex Session，普通消息随后持续进入该 Session。这样空 Chat 跨 Bridge 重启时无需恢复不存在的 rollout。
 - `/chat <Prompt>`：创建临时 Session，并把后面的正文直接作为第一条 Prompt，不把它当作任务标题。
 - `/schedule <Prompt>`：Owner 可在尚未进入临时 Chat 的 Bot 私聊中直接发送；Bridge 自动创建临时 Session，并把完整 `/schedule` 命令作为第一条 Prompt 提交，无需先发送 `/chat`。
+- `/todo [日期] <事项>`：Owner 可在 Bot 私聊中直接创建分配给自己的原生飞书任务；命令不进入 Codex，也不调用模型。日期由 Bridge 按 `displayTimeZone` 确定性解析，支持“今天/明天/后天”、具体日期和本周/下周星期；省略日期则创建无截止日期任务。
 - `/endchat`：结束当前临时上下文。绑定群恢复原 Session；Bot 私聊等待下一次 `/chat`。临时内容会先写入本机复盘归档，再从 Codex 永久删除。
 - 绑定群中的临时 Chat 继承原 Session 的 cwd；Bot 私聊使用 Bridge 启动时的 Codex 工作目录。
 - 临时 Chat 状态持久化。Bridge 重启后仍能继续；`/endchat` 不取消已经提交的 Turn，其最终结果仍投递到原飞书会话。全部 Turn 和待投递结果完成后，Bridge 将公开的用户/Codex 对话保存为 UTF-8 Markdown 到 `<workspace>/work/feishu-codex-bridge/temporary-chat-archives/`，随后调用 Codex App Server `thread/delete`。归档或删除失败会保留退休记录并自动重试；归档失败时绝不会删除 Codex 对话。
@@ -67,7 +97,7 @@ Session Relay 不提供 `/new`、`/use` 或全局长期任务切换。每个群�
 
 ## 公开进度与最终回答
 
-Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary` 的公开阶段说明。以下内容始终不会发送到飞书：
+Bridge 实时转发 App Server 明确标记为 `agentMessage.phase=commentary` 的公开阶段说明，并将 `collabAgentToolCall` / `subAgentActivity` 的公开生命周期事件汇总到同一张流式卡片的“子 agent 协作”区域。子 agent 以本轮内的匿名编号展示启动、工作中、完成、中断、失败或关闭状态；协作调用结束不等于子 agent 工作完成，只有明确的完成状态才显示“已完成”。没有收到状态时显示“等待状态”。这些事件不调用语言模型，不修改子 agent 的执行或授权策略。以下内容始终不会发送到飞书：
 
 - 隐藏思维链；
 - `reasoning` 或 raw reasoning；
@@ -78,7 +108,7 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 
 当前 `main` 中，一个 Turn 只创建一张可更新卡片：
 
-1. commentary 到达时，在原卡片追加公开进度并刷新“已处理”时长；
+1. commentary 到达时，在原卡片追加公开进度并刷新“已处理”时长；子 agent 状态从启动事件开始更新，不必等工具调用结束，并在公开进度增多时保留；
 2. Turn 完成后，最终答案原位替换进度；
 3. 卡片底部显示回答完成时间、整轮用时和本轮真实 Token；
 4. 卡片更新成功后只持久投递图片、视频和文件附件，不再另发完整答案、完成提醒或独立 `@` 消息；
@@ -98,11 +128,12 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 - 超过 30 MiB 的 MP4 在 FFmpeg 可用时先以 H.264/AAC 双遍压缩到约 27 MiB，并继续作为群内原生视频发送；原文件不会被修改。
 - 压缩失败、质量预算过低或其他超过 30 MiB 的文件会以当前用户身份上传原文件到飞书云盘并返回链接；上传结果按源文件指纹持久化，重试不会重复创建文件。
 - `::visualize` 指向的本地 HTML 也作为附件发送。
+- Codex Desktop 的 `:codex-file-citation{path="..."}` 文件引用也会转为原生附件，包括正文内的引用；群内只显示文件名，不显示本机路径。旧版 Markdown 文件链接继续支持，同一路径不会重复发送。
 - 生产路径不限制媒体条目数；重复路径只投递一次。
 - 空文件、符号链接或排队后发生变化的文件不会上传，原文件仍保留在 Codex Session 中。
 - 飞书消息不会包含本机绝对路径；附件消息也不会额外 `@` 任何人。
 
-文档能力需要用户 OAuth `docx:document:create`、`docx:document:readonly` 与 `docx:document:write_only`；自动固定到群顶部还需要 `im:chat.tabs:read` 与 `im:chat.tabs:write_only`。只读文档权限用于局部定位持续摘要受控区块，不会把整份文档提交给模型。超限附件云盘兜底需要用户 OAuth `drive:file:upload`。把 Codex 媒体上传回飞书消息需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
+文档能力需要用户 OAuth `docx:document:create`、`docx:document:readonly` 与 `docx:document:write_only`；自动固定到群顶部还需要 `im:chat.tabs:read` 与 `im:chat.tabs:write_only`。只读文档权限用于局部定位持续摘要受控区块，不会把整份文档提交给模型。超限附件云盘兜底需要用户 OAuth `drive:file:upload`；私聊 `/todo` 需要用户 OAuth `task:task:write`。把 Codex 媒体上传回飞书消息需要应用权限 `im:resource`；下载已授权群成员的消息资源由现有 `im:message` 权限覆盖。
 
 ## Session 命令
 
@@ -113,6 +144,16 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 ### `/capacity`
 
 查看当前 Session 的上下文窗口已用/剩余 token、账户主/次额度窗口的剩余百分比和重置时间，以及账户计划。数据直接来自 Codex App Server 的 token 状态和 `account/rateLimits/read`，不调用模型、不启动 Turn，也不会消费 Prompt 队列或暂存附件。若 Codex 尚未上报 token 用量，或当前 App Server 不提供账户额度，命令会保留其余可用结果并将对应部分标为“暂不可用”。
+
+### `/todo`
+
+```text
+/todo 明天要给xxx老师写报告
+/todo 2026-10-08 提交材料
+/todo 整理实验记录
+```
+
+仅 Bridge Owner 与 Bot 私聊时可用。Bridge 使用用户身份创建原生飞书任务并把 Owner 设为执行人；重复投递同一条飞书消息使用稳定幂等键，不会重复创建任务。群聊和其他成员私聊不会创建 Owner 的个人任务。
 
 ### `/stop`
 
@@ -152,9 +193,11 @@ Bridge 只实时转发 App Server 明确标记为 `agentMessage.phase=commentary
 /doc unbind
 ```
 
-每个固定绑定群最多关联一份独立 Docx/Wiki 文档。`/doc create` 新建文档，`/doc bind` 会在已有文档末尾创建一个由 Bridge 管理的“持续摘要”区块；随后按文档 URL 查重并自动添加到群顶部的“持续摘要”标签页。其他手写内容不会被覆盖。Bridge 会保存 `tab_id` 并在重启后补齐缺失标签页；`/doc unbind` 只移除 Bridge 管理的标签页、本地关联与待处理增量，不删除飞书文档。
+每个固定绑定群最多关联一份独立 Docx/Wiki 项目档案。`/doc create` 新建文档，`/doc bind` 会在已有文档末尾创建一个由 Bridge 管理的“项目档案”区块；随后按文档 URL 查重并自动添加到群顶部的“项目档案”标签页。其他手写内容不会被覆盖。Bridge 会保存 `tab_id` 并在重启后补齐缺失标签页；`/doc unbind` 只移除 Bridge 管理的标签页、本地关联与待处理增量，不删除飞书文档。
 
-每个完成 Turn 以 `threadId + turnId` 幂等写入本地待处理队列。默认等待 60 秒，把相邻新回合合并为一次摘要请求；请求只包含上次滚动摘要和未处理的新回合，不读取完整 Session 历史。摘要在后台 ephemeral App Server 线程中固定使用 Luna（`gpt-5.6-luna`，`low` effort），不会出现在 Codex Desktop 任务列表，也不会改变群聊主 Session 的模型设置。文档更新前只按标识局部读取受控区块并执行 `block_replace`。模型或飞书文档暂时不可用时，新回合保持待处理并按投递重试周期自动重试；`/doc summarize` 可立即触发。
+每个完成 Turn 以 `threadId + turnId` 幂等写入本地待处理队列；多人群中未 `@Bot`、未回复 Bot 的普通讨论则以飞书消息标识幂等写入同一队列，只更新项目档案，不触发回复或 Codex 主 Session Turn。被动记录保存消息文字和非图片/视频资源的类型、数量，不下载未请求处理的附件内容；未 `@Bot`、未回复 Bot 的纯图片或视频消息会被忽略，图文混合消息也会先移除图片和视频。记录从项目档案关联成功后开始，不读取或回填此前群历史。
+
+默认等待 60 秒，把相邻新内容合并为一次档案更新；请求只包含上次项目档案和未处理的新内容，不读取完整 Session 历史。项目档案固定包含“项目目标、当前状态、关键决策、待办事项、阻塞与未决问题、已完成里程碑、重要资料”七部分。只有明确承诺、请求或已确定下一步才进入待办；未完成待办必须跨轮次保留，直到新增内容明确说明完成、取消或替代。档案更新在后台 ephemeral App Server 线程中固定使用 Luna（`gpt-5.6-luna`，`low` effort），不会出现在 Codex Desktop 任务列表，也不会改变群聊主 Session 的模型设置。文档更新前只按标识局部读取受控区块并执行 `block_replace`。模型或飞书文档暂时不可用时，新内容保持待处理并按投递重试周期自动重试；`/doc summarize` 可立即触发。
 
 低 Token 默认值位于 `sessionRelay.rollingSummary`：`debounceSeconds=60`、`maxSummaryChars=4000`、`maxBatchChars=24000`。更长的等待时间可以进一步合并相邻回合，降低摘要调用次数。
 
@@ -263,6 +306,20 @@ Goal 自动续跑产生的每轮最终结果会以“Goal 进展”发送回群�
 
 ## 创建绑定
 
+### 直接绑定已有群
+
+把当前 Bot 加入一个尚未绑定的已有群后，由已启用的 Bridge 用户在该群发送：
+
+```text
+/bind
+```
+
+Bridge 先用 Bot 身份读取完整群成员，要求 `/bind` 发送者是 Owner 或完整成员、发送者本人在群内，并且群内只有当前 Bridge Bot；其他当前群成员无需预先登记。校验通过后，Bridge 使用当前群名创建一个全新的独立 Codex Session，以发送者的个人 Project 根目录作为工作目录，复制新绑定默认设置、应用 Agent Feed 标签并持久化绑定。绑定会在当前进程中立即生效，不会在首条 Prompt 前重载空 Session。该命令不会选择或复用已有 Session，也不会继承其他聊天记录。未配置个人 Project 根目录时会拒绝创建，并引导用户先完成目录配置或改用 Bot 私聊 `/add`。
+
+为允许新群完成引导，Channel 层会接收 Bot 所在群的事件；应用层只放行未绑定群中来自已启用用户的精确 `/bind`，其他消息全部静默丢弃，不会进入 Codex，也不会写入绑定。已绑定群再次发送 `/bind` 只返回当前状态，不会重复创建上下文。
+
+### 从 Bot 私聊选择任务
+
 向 Bot 私聊发送 `/add`。为避免在共享群泄露个人任务列表，绑定群中的 `/add` 会引导用户回到 Bot 私聊。向导 15 分钟有效：
 
 1. 选择 Codex Desktop Project，或选择“独立”；
@@ -279,9 +336,24 @@ Owner 自己的绑定仍要求 Feed 标签成功后才持久化。Feed 标签属
 
 也可以在目标 Codex Session 中调用 `$feishu-session-bind`。Skill 只把当前环境提供的 Session 标识交给 Bridge，不接受手填 Session ID，也不会读取或输出 App Secret。
 
-## 多用户目录与成员登记
+## 群协作者与多用户目录
 
-多用户是显式启用的兼容扩展。旧安装不运行下列设置时继续保持 Owner-only。
+群内参与者按三种权限范围区分：
+
+- **群内访客**：只要仍是已绑定群的当前成员，就能在群里 `@Bot` 或回复 Bot；无需登记，不能私聊 Bot、使用 Bridge 管理命令，也没有个人 Project、`/add` 或独立 Session 权限。
+- **仅群聊成员**：由 Owner 显式登记，在群内访客能力上增加受限的参与者命令；仍不能私聊 Bot，也没有个人 Project、`/add` 或独立 Session 权限。
+- **完整成员**：除共享群上下文外，还可私聊 Bot，并在自己的目录中使用 `/add`；需要先配置 Project 根目录。
+
+Owner 可在 Bot 私聊或已有绑定群中发送用户名片。回复 `/group` 会登记为仅群聊成员；回复安全的一级目录名会登记为完整成员。也可以使用命令：
+
+```text
+/members
+/members allow @成员
+/members add <一级目录名> @成员
+/members remove @成员
+```
+
+群内访客和仅群聊成员都不会收到 Bot 私聊欢迎消息，也不会进入 Channel SDK 的私聊白名单。若要启用完整成员目录，运行：
 
 macOS：
 
@@ -297,34 +369,29 @@ Windows：
 
 该本机交互脚本由 Bridge Owner 设置一个全局 Project 根目录和 Owner 自己的一级目录。绝对路径只经 stdin 进入本机配置器，不出现在飞书命令、进程参数、仓库或 Bot 回复中。已启用的根目录不能通过自动流程改指向别处。
 
-Owner 可在 Bot 私聊查看成员，在 Bot 私聊或已有绑定群中发送一张飞书用户名片登记成员：Bot 读取名片后会询问一级目录名，Owner 回复一个安全目录名即可完成登记。也可继续使用 mention 命令登记或停用成员：
-
-```text
-/members
-/members add <一级目录名> @成员
-/members remove @成员
-```
-
 - 新成员目录必须不存在或为空；Bridge 不接管非空目录，也不改分配过的目录名。
-- 用户名片流程一次只接受一张名片，等待目录名 15 分钟；可发送 `/cancel` 取消，或发送另一张名片替换目标。该流程仍只有 Owner 可用，不会把用户标识、Project 根目录或成员路径回显到飞书。
-- 在实际绑定群中登记很实用：Owner 先把新人加入群，再发送 `/members add ... @成员`。登记成功后 Bot 会主动私聊新成员，提示其在该私聊发送 `/add`；Bridge 自动重载后，该成员才获得这个 Session 的使用权。
+- 用户名片流程一次只接受一张名片，等待 `/group` 或目录名 15 分钟；可发送 `/cancel` 取消，或发送另一张名片替换目标。该流程仍只有 Owner 可用，不会把用户标识、Project 根目录或成员路径回显到飞书。
+- `/members allow @成员` 会把成员设置为仅群聊；如果其仍拥有绑定 Session，则拒绝降级，必须先解除或转移绑定。
+- 在实际绑定群中登记很实用：Owner 先把新人加入群，再发送 `/members add ... @成员`。登记成功后 Bot 会主动私聊新成员，提示其在该私聊发送 `/add`；Bridge 自动重载后开放该成员的私聊和个人任务能力，群内普通共享 Prompt 不依赖这次登记。
 - 也可以在 Bot 私聊中发送目标用户的名片先完成登记；发送名片和登记成员都不会自动把该用户邀请进任何 Session 群。
 - 主动私聊失败不会回滚已经持久化的成员与目录；Owner 回复会提示核对应用可用范围，并让成员手动搜索 Bot 后发送 `/add`。
-- 群内存在未登记或已停用的人时，所有 Session 内容收发 fail closed；Owner 仍可执行成员登记命令完成恢复。
+- 未登记的当前群成员可以发送普通 `@Bot` Prompt；显式停用的成员仍在群内时，所有 Session 内容收发 fail closed。
 - 停用成员不删除文件。成员仍拥有绑定 Session 时拒绝停用；应先解除这些绑定。停用后也应把成员移出共享群。
 - Owner `/add` 只看到 Owner 目录内的任务，以及不属于任何成员目录的旧 Project/独立任务；普通成员只看到自己目录内的任务。共享别人的 Session 不会让它出现在自己的 `/add` Project 列表中。
 - 飞书应用的可用范围必须包含新成员；否则其消息不会到达 Bot。
 
 ## 安全门禁
 
-- 入站 Prompt 先验证不可变 `chat_id`，发送者必须是当前群内已启用 Bridge 用户。
+- 入站 Prompt 先验证不可变 `chat_id`，发送者必须是经实时核验的当前群成员；参与者命令和管理命令仍按登记权限分别限制。
 - 任何可能包含任务信息的出站消息，在发送前都用 Bot 身份重新读取完整群成员。
-- Session owner 必须仍在群内且处于启用状态；所有其他人类成员也必须已启用。群内只能有当前 Bridge Bot，不能加入第三方 Bot。
-- 未登记/已停用成员、Session 被归档或成员无法完整核验时，敏感入站和出站内容全部 fail closed。
+- Session owner 必须仍在群内且处于启用状态；其他当前人类成员可自动作为群内访客。群内只能有当前 Bridge Bot，不能加入第三方 Bot。
+- 显式停用成员、Session 被归档或成员无法完整核验时，敏感入站和出站内容全部 fail closed。
 - `im.message.receive_v1` 与 `im:message.group_msg` 都必须发布；只有群内 `@Bot` 权限时，平台不会投递普通未 @ 消息。
 - 默认沙盒是 `workspace-write`。Session owner 可通过 `/permissions` 为自己的 Session 设置持久覆盖；`danger-full-access` 会扩大所有该群已授权 Prompt 可触发的本机访问范围，只应在完全可信的个人环境中使用。
 
 ## 持久状态与投递
+
+Windows 更新恢复：受管 Codex 可执行文件升级时，Bridge 只停止已核验的旧 App Server 本身，不递归终止其工具或后台任务子进程。状态快照使用同目录临时文件、落盘后原子替换，并保留上一份有效 `.bak`；读取损坏的数组状态时先隔离为 `.corrupt-*` 并警告，再回退到有效备份。没有有效备份时才警告后以空数组恢复；合法的非数组仍报格式错误，不会被静默清空。若旧安装的项目档案文件已损坏且没有备份，可在安装目录运行 `node scripts/dev/recover-summary-documents.mjs --apply`，从现有群顶部的 Bridge 项目档案恢复本地关联与摘要。该恢复只读取飞书，保存损坏文件副本，不能还原已经丢失的待处理队列；输出只包含数量和安全错误类别。
 
 - 用户目录/成员状态、每个 Session 的设置与权限覆盖、按发送者隔离的附件草稿、Prompt FIFO、输入账本、临时 Chat 状态和最终投递状态保存在本机运行目录。
 - 无卡片或最终卡片更新失败时，最终答案先写入持久发件箱再发送；卡片更新成功时记录完成状态，不重复发送正文，附件仍通过持久发件箱投递。

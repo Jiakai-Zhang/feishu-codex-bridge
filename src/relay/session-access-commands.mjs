@@ -20,7 +20,7 @@ export function parseMembersCommand(value) {
   if (!match) return undefined;
   const args = String(match[1] || "").trim();
   if (!args || args.toLowerCase() === "status") return Object.freeze({ action: "status" });
-  const actionMatch = /^(add|remove)(?:\s+([\s\S]*))?$/i.exec(args);
+  const actionMatch = /^(add|allow|remove)(?:\s+([\s\S]*))?$/i.exec(args);
   if (!actionMatch) return Object.freeze({ action: "invalid" });
   return Object.freeze({ action: actionMatch[1].toLowerCase(), args: String(actionMatch[2] || "").trim() });
 }
@@ -44,13 +44,14 @@ function formatMembers(accessStore, { changed, includeRoster = true } = {}) {
     `- 已登记普通成员：${members.length}`,
   ];
   if (members.length > 0) {
-    lines.push("", ...members.map((member, index) => (
-      `${index + 1}. ${cleanMentionName(member.displayName || member.directoryName)} · ${member.status === "active" ? "已启用" : "已停用"}`
-    )));
+    lines.push("", ...members.map((member, index) => {
+      const scope = member.accessScope === "group" ? "仅群聊" : "完整成员";
+      return `${index + 1}. ${cleanMentionName(member.displayName || member.directoryName)} · ${scope} · ${member.status === "active" ? "已启用" : "已停用"}`;
+    }));
   }
   lines.push(
     "",
-    "命令：发送用户名片后回复目录名，或使用 `/members add <目录名> @成员`、`/members remove @成员`",
+    "命令：发送用户名片后回复 `/group` 或目录名，也可使用 `/members allow @成员`、`/members add <目录名> @成员`、`/members remove @成员`",
     "",
     "> Project 绝对路径只允许在本机设置，不会显示在飞书中。成员目录停用后不会删除本地文件。",
   );
@@ -75,13 +76,30 @@ export async function executeMembersCommand(command, {
   if (!command || !accessStore) throw new TypeError("Members command requires an access store");
   if (command.action === "status") return { markdown: formatMembers(accessStore), restart: false };
   if (command.action === "invalid") {
-    return { markdown: "用法：发送用户名片后回复目录名，或使用 `/members`、`/members add <目录名> @成员`、`/members remove @成员`。", restart: false };
+    return { markdown: "用法：发送用户名片后回复 `/group` 或目录名，也可使用 `/members`、`/members allow @成员`、`/members add <目录名> @成员`、`/members remove @成员`。", restart: false };
   }
   const targets = humanMentions(mentions, botOpenId);
   if (targets.length !== 1) {
     return { markdown: "请在命令中准确 @ 一名飞书成员。", restart: false };
   }
   const target = targets[0];
+  if (command.action === "allow") {
+    const ownedBindings = (await listBindings()).filter(({ ownerOpenId }) => ownerOpenId === target.openId);
+    if (ownedBindings.length > 0) {
+      throw new SessionAccessStoreError(
+        "member_owns_bindings",
+        "A group-only member cannot own bound Sessions",
+      );
+    }
+    await accessStore.addGroupMember({
+      openId: target.openId,
+      displayName: target.name,
+    });
+    return {
+      markdown: `${formatMembers(accessStore, { changed: true, includeRoster })}\n\n> 该成员只能在已绑定群中 @Bot；不能私聊 Bot，也不能使用个人 Project 或 \`/add\`。`,
+      restart: true,
+    };
+  }
   if (command.action === "add") {
     if (typeof sendMemberOnboarding !== "function") {
       throw new TypeError("Members add requires a member onboarding sender");

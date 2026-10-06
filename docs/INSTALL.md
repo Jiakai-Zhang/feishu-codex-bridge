@@ -85,12 +85,12 @@ Lark CLI 输出 verification URL 后，无论浏览器是否自动打开，都�
 .\configure-feishu-app.ps1
 ```
 
-该脚本通过私有 loopback 跳转打开飞书官方应用模板，一次确认 7 项应用/Bot 权限、4 项用户权限与 `im.message.receive_v1`，不在终端或浏览器启动进程参数中暴露 App ID。它会先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试打开浏览器；自动打开失败时直接打开该 URL。Lark CLI 创建的新应用通常已默认启用 Bot、长连接和消息事件，不需要再逐页重复设置。完整清单与故障回退见 [飞书应用配置](FEISHU_APP_SETUP.md)。
+该脚本通过私有 loopback 跳转打开飞书官方应用模板，一次确认 7 项应用/Bot 权限、9 项用户权限与 `im.message.receive_v1`，不在终端或浏览器启动进程参数中暴露 App ID。它会先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试打开浏览器；自动打开失败时直接打开该 URL。Lark CLI 创建的新应用通常已默认启用 Bot、长连接和消息事件，不需要再逐页重复设置。完整清单与故障回退见 [飞书应用配置](FEISHU_APP_SETUP.md)。
 
 若飞书要求可用范围、版本发布或管理员审批，可用范围只加入当前安装用户，由用户本人提交，并等待状态明确生效。然后完成 OAuth 与安全校验：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload,task:task:write"
 .\verify-feishu-app.ps1
 ```
 

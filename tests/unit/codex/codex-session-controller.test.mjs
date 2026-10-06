@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 import { CodexSessionController } from "../../../src/codex/codex-session-controller.mjs";
+import { SessionPromptQueue } from "../../../src/persistence/session-prompt-queue.mjs";
 
 const threadId = "019ff5b8-decb-7ca3-802c-f115f2f196de";
 const repoCwd = path.join(os.tmpdir(), "bridge-controller-repo");
@@ -35,6 +37,7 @@ function fakeControllerServer({
     acceptThenDisconnectNextSteer: false,
     acceptThenDisconnectNextStart: false,
     raceNextStartWithDesktop: false,
+    ignoreNextRead: false,
     settings: {
       cwd: repoCwd,
       model: "model-one",
@@ -122,6 +125,10 @@ function fakeControllerServer({
         reasoningEffort: server.settings.effort,
       });
     } else if (request.method === "thread/read") {
+      if (server.ignoreNextRead) {
+        server.ignoreNextRead = false;
+        return;
+      }
       respond(socket, request.id, {
         thread: threadSnapshot(request.params.includeTurns, request.params.threadId),
       });
@@ -645,6 +652,7 @@ test("creates a fresh Chat on the persistent connection without resuming an empt
   const start = server.requests.find(({ method }) => method === "thread/start");
   assert.equal(start.params.dynamicTools[0].tools[0].name, "automation_update");
   assert.equal(start.params.sandbox, "danger-full-access");
+  assert.equal(start.params.historyMode, "legacy");
 
   const submitted = await client.submitPrompt({
     threadId: "thread-created",
@@ -877,6 +885,269 @@ test("queues behind an active Turn without steering and starts only after the Se
   const queuedTurn = server.turns.find(({ id }) => id === "turn-1");
   assert.equal(queuedTurn.items[0].clientId, "om_queued");
   await client.stop();
+});
+
+function failModelTransport(server, error = {
+  codexErrorInfo: "other",
+  message: "stream disconnected before completion: error sending request",
+}) {
+  const failed = { id: "turn-failed", status: "failed", error, items: [userItem("old-input", "original work")] };
+  server.turns.push(failed);
+  server.status = { type: "systemError" };
+  return structuredClone(failed);
+}
+
+test("starts only the queued new input after a terminal model connection failure and preserves history", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  const failed = failModelTransport(server);
+  const prompt = {
+    threadId, text: "continue from saved work", clientUserMessageId: "om_failure_queue",
+    attachments: [{ kind: "image", localPath: attachmentPath("reference.png"), name: "reference.png" }],
+  };
+  const result = await client.startQueuedPrompt(prompt);
+  assert.equal(result.kind, "started");
+  assert.deepEqual(server.turns[0], failed);
+  const start = server.requests.find(({ method }) => method === "turn/start");
+  assert.equal(start.params.clientUserMessageId, prompt.clientUserMessageId);
+  assert.equal(start.params.cwd, repoCwd);
+  assert.equal(start.params.approvalPolicy, "never");
+  assert.equal(start.params.sandboxPolicy.type, "workspaceWrite");
+  assert.deepEqual(start.params.input.at(-1), { type: "localImage", path: attachmentPath("reference.png") });
+  assert.match(start.params.input[0].text, /continue from saved work/);
+  assert.equal(start.params.model, undefined);
+  const replay = await client.startQueuedPrompt(prompt);
+  assert.equal(replay.kind, "accepted");
+  assert.equal(server.requests.filter(({ method }) => method === "turn/start").length, 1);
+  assert.equal(server.requests.some(({ method }) => ["turn/interrupt", "thread/delete", "thread/unload"].includes(method)), false);
+  await client.stop();
+});
+
+test("ordinary new prompts also recover a terminal model connection failure", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  failModelTransport(server);
+  assert.equal((await client.submitPrompt({ threadId, text: "continue", clientUserMessageId: "om_failure_direct" })).kind, "started");
+  await client.stop();
+});
+
+test("a persisted recovery queue drains only after acceptance and stays drained after reopening", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "controller-recovery-queue-"));
+  const server = fakeControllerServer();
+  const client = controller(server);
+  try {
+    await client.start();
+    failModelTransport(server, { codexErrorInfo: "unauthorized", message: "authentication failed" });
+    const file = path.join(directory, "queue.json");
+    const accepted = [];
+    const queue = await SessionPromptQueue.open(file, {
+      getController: () => client,
+      onAccepted: async (record) => accepted.push(record.messageId),
+    });
+    await queue.enqueue({ messageId: "om_persisted_recovery", sessionThreadId: threadId, chatId: "oc_group", text: "continue" });
+    assert.equal((await queue.dispatch(threadId)).reason, "session_system_error");
+    assert.equal(queue.count(threadId), 1);
+    assert.equal((await SessionPromptQueue.open(file)).count(threadId), 1);
+    server.turns.length = 0;
+    failModelTransport(server);
+    assert.equal((await queue.dispatch(threadId)).kind, "started");
+    assert.deepEqual(accepted, ["om_persisted_recovery"]);
+    assert.equal((await SessionPromptQueue.open(file)).count(threadId), 0);
+    assert.equal((await queue.dispatch(threadId)).kind, "empty");
+    assert.equal(server.requests.filter(({ method }) => method === "turn/start").length, 1);
+  } finally {
+    await client.stop();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not recover unknown, authentication or quota system errors or older failed turns", async () => {
+  const cases = [
+    { error: { codexErrorInfo: "other", message: "unexpected internal error" } },
+    { error: { codexErrorInfo: "unauthorized", message: "stream disconnected before completion: error sending request" } },
+    { error: { codexErrorInfo: "usageLimitExceeded", message: "stream disconnected before completion: error sending request" } },
+    { error: null },
+    { error: undefined, newerCompleted: true },
+    { error: undefined, unfinished: true },
+  ];
+  for (const scenario of cases) {
+    const server = fakeControllerServer();
+    const client = controller(server);
+    try {
+      await client.start();
+      failModelTransport(server, scenario.error);
+      if (scenario.error === null) server.turns[0].error = null;
+      if (scenario.newerCompleted) server.turns.push({ id: "newer", status: "completed", items: [] });
+      if (scenario.unfinished) server.turns[0].status = "interrupted";
+      const prompt = { threadId, text: "wait", clientUserMessageId: "om_failure_blocked" };
+      await assert.rejects(client.startQueuedPrompt(prompt), { code: "session_system_error" });
+      await assert.rejects(client.submitPrompt(prompt), { code: "session_system_error" });
+      assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
+    } finally {
+      await client.stop();
+    }
+  }
+});
+
+test("does not start a recovery turn while a turn or native Goal is still active", async () => {
+  for (const active of ["turn", "goal"]) {
+    const server = fakeControllerServer();
+    const client = controller(server);
+    try {
+      await client.start();
+      failModelTransport(server);
+      if (active === "turn") server.turns.push({ id: "still-running", status: "inProgress", items: [] });
+      else server.goal = { threadId, status: "active", objective: "still running" };
+      const result = await client.startQueuedPrompt({ threadId, text: "wait", clientUserMessageId: "om_failure_active" });
+      assert.equal(result.kind, "waiting");
+      assert.equal(result.reason, active === "turn" ? "turn_active" : "goal_active");
+      assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
+    } finally {
+      await client.stop();
+    }
+  }
+});
+
+test("reconciles an accepted recovery prompt after disconnect without replaying it", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  failModelTransport(server);
+  server.acceptThenDisconnectNextStart = true;
+  const result = await client.startQueuedPrompt({ threadId, text: "continue", clientUserMessageId: "om_failure_reconnect" });
+  assert.equal(result.kind, "accepted");
+  assert.equal(result.recoveredAfterReconnect, true);
+  assert.equal(server.requests.filter(({ method }) => method === "turn/start").length, 1);
+  await client.stop();
+});
+
+test("keeps a recovery prompt queued if Desktop starts another turn first", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  await client.start();
+  failModelTransport(server);
+  server.raceNextStartWithDesktop = true;
+  const result = await client.startQueuedPrompt({ threadId, text: "continue", clientUserMessageId: "om_failure_race" });
+  assert.equal(result.kind, "waiting");
+  assert.equal(result.reason, "turn_active");
+  assert.equal(server.requests.some(({ method }) => method === "turn/steer"), false);
+  await client.stop();
+});
+
+test("reports native retry then terminal failure once without restarting the failed input", async () => {
+  const server = fakeControllerServer({ activeTurn: { id: "turn-failure-status", status: "inProgress", items: [userItem("om_initial", "work")] } });
+  const statuses = [];
+  const client = controller(server, { onTurnStatus: (record) => statuses.push(record) });
+  try {
+    await client.start();
+    const error = { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } }, message: "sensitive native error", additionalDetails: "private details" };
+    server.notify("error", { threadId, turnId: "turn-failure-status", error, willRetry: true });
+    server.notify("error", { threadId, turnId: "turn-failure-status", error, willRetry: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0].executionStatus.type, "retrying");
+    server.turns[0].status = "failed";
+    server.turns[0].error = error;
+    server.notify("turn/completed", { threadId, turn: server.turns[0] });
+    server.notify("turn/completed", { threadId, turn: server.turns[0] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(statuses.map(({ executionStatus }) => executionStatus.type), ["retrying", "failed"]);
+    assert.equal(statuses[1].executionStatus.reason, "network");
+    assert.doesNotMatch(JSON.stringify(statuses), /sensitive|private details|additionalDetails/);
+    assert.equal((await client.getStatus(threadId, { refresh: false })).status.type, "systemError");
+    assert.equal(server.requests.some(({ method }) => ["turn/start", "turn/steer", "turn/interrupt"].includes(method)), false);
+  } finally { await client.stop(); }
+});
+
+test("reconnects automatically and catches a failed turn during the disconnect window", async () => {
+  const server = fakeControllerServer({ activeTurn: { id: "turn-reconnect-failure", status: "inProgress", items: [userItem("om_initial", "work")] } });
+  const statuses = [];
+  const client = controller(server, { onTurnStatus: (record) => statuses.push(record) });
+  try {
+    await client.start();
+    server.disconnect();
+    server.turns[0].status = "failed";
+    server.turns[0].error = { codexErrorInfo: "other", message: "stream disconnected before completion: error sending request" };
+    server.status = { type: "systemError" };
+    for (let i = 0; i < 100 && !statuses.some(x => x.executionStatus.type === "failed"); i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.deepEqual(statuses.map(x => x.executionStatus.type), ["reconnecting", "failed"]);
+    assert.equal(client.connected, true);
+    assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
+  } finally { await client.stop(); }
+});
+
+test("shows recovery after reconnect and intentional stop does not report a disconnect", async () => {
+  const server = fakeControllerServer({ activeTurn: { id: "turn-reconnect-running", status: "inProgress", items: [] } });
+  const statuses = [];
+  const client = controller(server, { onTurnStatus: (record) => statuses.push(record) });
+  await client.start();
+  server.disconnect();
+  for (let i = 0; i < 100 && statuses.length < 2; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(statuses.map(x => x.executionStatus.type), ["reconnecting", "running"]);
+  await client.stop();
+  assert.equal(statuses.length, 2);
+});
+
+test("read-only turn reconciliation shares snapshots and catches a missed failure", async () => {
+  const server = fakeControllerServer();
+  const client = controller(server);
+  try {
+    await client.start();
+    failModelTransport(server);
+    const before = server.requests.filter(({ method }) => method === "thread/read").length;
+    const first = await client.readTurnExecutionStatus(threadId, "turn-failed", { maxAgeMs: 30_000 });
+    const second = await client.readTurnExecutionStatus(threadId, "turn-failed", { maxAgeMs: 30_000 });
+    assert.equal(first.type, "failed");
+    assert.equal(second.reason, "network");
+    assert.equal(server.requests.filter(({ method }) => method === "thread/read").length - before, 1);
+    assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
+  } finally { await client.stop(); }
+});
+
+test("a half-open read timeout reconnects only the client without interrupting or replaying work", async () => {
+  const server = fakeControllerServer({ activeTurn: { id: "turn-half-open", status: "inProgress", items: [] } });
+  const statuses = [];
+  const client = controller(server, { requestTimeoutMs: 20, onTurnStatus: record => statuses.push(record.executionStatus.type) });
+  const keepAlive = setInterval(() => {}, 100);
+  try {
+    await client.start();
+    server.ignoreNextRead = true;
+    await assert.rejects(client.readTurnExecutionStatus(threadId, "turn-half-open"), { code: "codex_app_server_timeout" });
+    for (let i = 0; i < 100 && statuses.length < 2; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(statuses, ["reconnecting", "running"]);
+    assert.equal(client.connected, true);
+    assert.equal(server.turns[0].status, "inProgress");
+    assert.equal(server.requests.some(({ method }) => ["turn/start", "turn/interrupt", "turn/steer"].includes(method)), false);
+  } finally { clearInterval(keepAlive); await client.stop(); }
+});
+
+test("card reconciliation catches up only the requested completed turn, once, without a new model request", async () => {
+  const server = fakeControllerServer();
+  const delivered = [];
+  const client = controller(server, { onTurnCompleted: value => delivered.push(value) });
+  try {
+    await client.start();
+    server.turns.push(
+      { id: "unrelated-old", status: "completed", items: [userItem("desktop-old", "old work"), { type: "agentMessage", phase: "final_answer", text: "old result" }] },
+      { id: "missed-final", status: "completed", items: [userItem("om_card", "work"), { type: "agentMessage", phase: "final_answer", text: "saved result" }] },
+    );
+    const result = await client.readTurnExecutionStatus(threadId, "missed-final", { maxAgeMs: 30_000 });
+    await client.readTurnExecutionStatus(threadId, "missed-final", { maxAgeMs: 30_000 });
+    assert.equal(result.hasAnswer, true);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].answer, "saved result");
+    assert.equal(delivered[0].turnId, "missed-final");
+    assert.equal(server.requests.some(({ method }) => method === "turn/start"), false);
+    server.turns.push({ id: "empty-completed", status: "completed", items: [] });
+    const empty = await client.readTurnExecutionStatus(threadId, "empty-completed");
+    assert.equal(empty.type, "completed");
+    assert.equal(empty.hasAnswer, false);
+    assert.equal(delivered.length, 1);
+  } finally { await client.stop(); }
 });
 
 test("keeps a queued prompt waiting while a native Goal is active", async () => {

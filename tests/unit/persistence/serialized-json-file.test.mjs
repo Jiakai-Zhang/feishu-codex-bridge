@@ -27,9 +27,11 @@ test("serializes writes and recovers after a rejected write", async () => {
   const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
   const write = createSerializedFileWriter("state.json", {
     open: async () => ({ sync: async () => {}, close: async () => {} }),
+    readFile: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
     rename: async () => {},
     rm: async () => {},
     writeFile: async (_filePath, snapshot) => {
+      if (_filePath.endsWith(".bak")) return;
       calls.push(snapshot);
       if (snapshot === "first") await firstBlocked;
       if (snapshot === "failed") throw new Error("write failed");
@@ -69,7 +71,7 @@ for (const content of ["", "  \n", '[{"id":']) {
     assert.deepEqual(await readJsonArrayFile(file, "State store"), []);
     await createSerializedFileWriter(file)('[{"id":2}]');
     assert.deepEqual(await readJsonArrayFile(file, "State store"), [{ id: 2 }]);
-    assert.equal((await fs.readdir(directory)).length, 2);
+    assert.equal((await fs.readdir(directory)).length, 3);
   });
 }
 
@@ -80,7 +82,7 @@ test("valid non-array JSON is never quarantined or silently cleared", async (t) 
     await fs.writeFile(file, content);
     await assert.rejects(readJsonArrayFile(file, "Versioned store"), /Versioned store must contain an array/);
     assert.equal(await fs.readFile(file, "utf8"), content);
-    assert.deepEqual(await fs.readdir(directory), ["state.json"]);
+    assert.deepEqual((await fs.readdir(directory)).filter((name) => name !== "state.json.bak"), ["state.json"]);
   }
 });
 
@@ -119,11 +121,11 @@ for (const stage of ["write", "sync", "rename"]) {
     });
     await assert.rejects(writer('[{"id":2}]'), /injected/);
     assert.equal(await fs.readFile(file, "utf8"), '[{"id":1}]');
-    assert.deepEqual(await fs.readdir(directory), ["state.json"]);
+    assert.deepEqual((await fs.readdir(directory)).filter((name) => name !== "state.json.bak"), ["state.json"]);
     fail = false;
     await writer('[{"id":3}]');
     assert.deepEqual(await readJsonArrayFile(file, "State"), [{ id: 3 }]);
-    assert.deepEqual(await fs.readdir(directory), ["state.json"]);
+    assert.deepEqual((await fs.readdir(directory)).filter((name) => name !== "state.json.bak"), ["state.json"]);
   });
 }
 
@@ -134,17 +136,85 @@ test("concurrent atomic writes are committed in order with unique cleaned-up tem
   const committed = [];
   const write = createSerializedFileWriter(file, {
     writeFile: async (temporaryPath, snapshot, options) => {
-      paths.push(temporaryPath);
+      if (!temporaryPath.endsWith(".bak")) paths.push(temporaryPath);
       await fs.writeFile(temporaryPath, snapshot, options);
     },
     rename: async (source, target) => {
       await fs.rename(source, target);
-      committed.push(await fs.readFile(target, "utf8"));
+      if (target === file) committed.push(await fs.readFile(target, "utf8"));
     },
   });
   const snapshots = ["[1]", "[2]", "[3]"];
   await Promise.all(snapshots.map(write));
   assert.deepEqual(committed, snapshots);
   assert.equal(new Set(paths).size, snapshots.length);
-  assert.deepEqual(await fs.readdir(directory), ["state.json"]);
+  assert.deepEqual((await fs.readdir(directory)).filter((name) => name !== "state.json.bak"), ["state.json"]);
+});
+
+test("a failed state replacement leaves the live JSON intact and writes recoverable backups", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-json-state-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "state.json");
+  const writer = createSerializedFileWriter(filePath);
+  await writer('[{"version":1}]');
+  await writer('[{"version":2}]');
+  assert.deepEqual(JSON.parse(await fs.readFile(`${filePath}.bak`, "utf8")), [{ version: 1 }]);
+  const interrupted = createSerializedFileWriter(filePath, {
+    rename: async (source, destination) => {
+      if (destination === filePath) throw new Error("replacement interrupted");
+      await fs.rename(source, destination);
+    },
+  });
+  await assert.rejects(interrupted('[{"version":3}]'), /replacement interrupted/);
+  assert.deepEqual(await readJsonArrayFile(filePath, "State"), [{ version: 2 }]);
+  assert.equal((await fs.readdir(directory)).some((name) => name.endsWith(".tmp")), false);
+  await fs.writeFile(filePath, "");
+  assert.deepEqual(await readJsonArrayFile(filePath, "State"), [{ version: 2 }]);
+  await writer('[{"version":4}]');
+  assert.deepEqual(JSON.parse(await fs.readFile(`${filePath}.bak`, "utf8")), [{ version: 2 }]);
+});
+
+test("a partial temporary write cannot truncate live state", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "partial-json-state-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "state.json");
+  await createSerializedFileWriter(filePath)("[1]");
+  const writer = createSerializedFileWriter(filePath, {
+    writeFile: async (temporaryPath, _snapshot, options) => {
+      await fs.writeFile(temporaryPath, "", options);
+      throw new Error("process interrupted during write");
+    },
+  });
+  await assert.rejects(writer("[2]"), /process interrupted during write/);
+  assert.deepEqual(await readJsonArrayFile(filePath, "State"), [1]);
+});
+
+test("missing live state can recover a valid last-known-good backup", async (t) => {
+  const directory = await stateDirectory(t);
+  const file = path.join(directory, "state.json");
+  await fs.writeFile(`${file}.bak`, "[7]");
+  assert.deepEqual(await readJsonArrayFile(file, "State"), [7]);
+});
+
+test("corruption is quarantined even when a valid backup restores the records", async (t) => {
+  const directory = await stateDirectory(t);
+  const file = path.join(directory, "state.json");
+  await fs.writeFile(file, "{");
+  await fs.writeFile(`${file}.bak`, "[7]");
+  const warnings = [];
+  assert.deepEqual(await readJsonArrayFile(file, "State", { warn: x => warnings.push(x) }), [7]);
+  const quarantined = (await fs.readdir(directory)).find(name => name.startsWith("state.json.corrupt-"));
+  assert.equal(await fs.readFile(path.join(directory, quarantined), "utf8"), "{");
+  assert.match(warnings[0], /invalid JSON preserved/);
+  assert.deepEqual(await readJsonArrayFile(file, "State"), [7]);
+});
+
+test("a non-array backup is a format error, not permission to clear the store", async (t) => {
+  const directory = await stateDirectory(t);
+  const file = path.join(directory, "state.json");
+  await fs.writeFile(`${file}.bak`, "{}");
+  await assert.rejects(readJsonArrayFile(file, "State"), /must contain an array/);
+  await fs.writeFile(file, "{");
+  await assert.rejects(readJsonArrayFile(file, "State", { warn: () => {} }), /must contain an array/);
+  assert.equal(await fs.readFile(`${file}.bak`, "utf8"), "{}");
 });

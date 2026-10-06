@@ -6,6 +6,8 @@ import test from "node:test";
 import { SessionSummaryDocumentStore } from "../../../src/persistence/session-summary-document-store.mjs";
 import {
   buildCompletedTurnSummaryDelta,
+  buildPassiveGroupMessageSummaryDelta,
+  sanitizePassiveGroupMessage,
   SessionSummaryCoordinator,
 } from "../../../src/relay/session-summary-coordinator.mjs";
 
@@ -35,6 +37,131 @@ test("keeps both the user input and assistant answer when a turn is truncated", 
   assert.equal(delta.length <= 1_000, true);
   assert.match(delta, /^用户：问题/);
   assert.match(delta, /助手：回答/);
+});
+
+test("formats an unaddressed group message as passive project context", () => {
+  assert.equal(
+    buildPassiveGroupMessageSummaryDelta({
+      content: "下周先完成接口联调",
+      contentType: "text",
+      resources: [],
+    }),
+    "群聊记录（未请求 Bot 回答）：\n群成员：下周先完成接口联调",
+  );
+  const attachment = buildPassiveGroupMessageSummaryDelta({
+    content: "设计稿在这里\n![image](img_key)",
+    contentType: "post",
+    resources: [{ type: "image", fileKey: "img_key" }, { type: "file", fileKey: "file_key" }],
+  });
+  assert.match(attachment, /设计稿在这里/);
+  assert.match(attachment, /1 个资源：file/);
+  assert.doesNotMatch(attachment, /image|img_key/);
+});
+
+test("removes unaddressed image and video from passive project context", () => {
+  assert.equal(sanitizePassiveGroupMessage({
+    content: "![image](img_key)",
+    contentType: "image",
+    resources: [{ type: "image", fileKey: "img_key" }],
+  }), undefined);
+  assert.equal(sanitizePassiveGroupMessage({
+    content: '<video key="video_key" duration="00:03"/>',
+    contentType: "video",
+    resources: [{ type: "video", fileKey: "video_key" }],
+  }), undefined);
+  assert.deepEqual(sanitizePassiveGroupMessage({
+    content: '请按这个方向调整\n![image](img_key)\n<video key="video_key"/>',
+    contentType: "post",
+    resources: [
+      { type: "image", fileKey: "img_key" },
+      { type: "video", fileKey: "video_key" },
+      { type: "file", fileKey: "file_key" },
+    ],
+  }), {
+    content: "请按这个方向调整",
+    contentType: "post",
+    resources: [{ type: "file", fileKey: "file_key" }],
+  });
+});
+
+test("persists each passive group message once without starting a Codex turn", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "summary-passive-message-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await SessionSummaryDocumentStore.open(path.join(directory, "summaries.json"));
+  await store.link({
+    groupChatId: "oc_group",
+    threadId: "thread_fixed",
+    documentUrl: "https://example.feishu.cn/docx/doc_test",
+  });
+  const requests = [];
+  const coordinator = new SessionSummaryCoordinator({
+    store,
+    debounceMs: 60_000,
+    documentManager: { update: async () => {} },
+    summarizer: {
+      summarize: async (value) => {
+        requests.push(value);
+        return "项目档案";
+      },
+    },
+  });
+  const message = {
+    groupChatId: "oc_group",
+    threadId: "thread_fixed",
+    messageId: "om_passive",
+    content: "决定先做移动端",
+    contentType: "text",
+    resources: [],
+    receivedAtMs: Date.now(),
+  };
+  assert.equal(await coordinator.recordGroupMessage(message), true);
+  assert.equal(await coordinator.recordGroupMessage(message), false);
+  await coordinator.syncNow("oc_group");
+  coordinator.stop();
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].newContent, /未请求 Bot 回答/);
+  assert.match(requests[0].newContent, /决定先做移动端/);
+});
+
+test("does not persist an unaddressed image-only group message", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "summary-passive-image-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = await SessionSummaryDocumentStore.open(path.join(directory, "summaries.json"));
+  await store.link({
+    groupChatId: "oc_group",
+    threadId: "thread_fixed",
+    documentUrl: "https://example.feishu.cn/docx/doc_test",
+  });
+  const coordinator = new SessionSummaryCoordinator({
+    store,
+    debounceMs: 60_000,
+    documentManager: { update: async () => {} },
+    summarizer: { summarize: async () => "项目档案" },
+  });
+  assert.equal(await coordinator.recordGroupMessage({
+    groupChatId: "oc_group",
+    threadId: "thread_fixed",
+    messageId: "om_image",
+    content: "![image](img_key)",
+    contentType: "image",
+    resources: [{ type: "image", fileKey: "img_key" }],
+    receivedAtMs: Date.now(),
+  }), false);
+  assert.equal(store.get("oc_group").pending.length, 0);
+  coordinator.stop();
+});
+
+test("routes unaddressed group conversation into the project archive branch", async () => {
+  const source = await fs.readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  const passiveStart = source.indexOf("if (!addressed)");
+  const passiveEnd = source.indexOf("if (quoteError) throw quoteError;", passiveStart);
+  assert.ok(passiveStart >= 0 && passiveEnd > passiveStart);
+  const passiveBranch = source.slice(passiveStart, passiveEnd);
+  assert.match(passiveBranch, /sanitizePassiveGroupMessage/);
+  assert.match(passiveBranch, /summaryCoordinator\?\.recordGroupMessage/);
+  assert.match(passiveBranch, /return;/);
+  assert.doesNotMatch(passiveBranch, /processPreparedPrompt/);
+  assert.doesNotMatch(passiveBranch, /channel\.reply/);
 });
 
 test("rolls old summary plus only unsummarized turns into each update", async (t) => {
@@ -79,10 +206,14 @@ test("pins a linked summary document to the group and removes only that tab on u
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = await SessionSummaryDocumentStore.open(path.join(directory, "summaries.json"));
   const tabCalls = [];
+  const createdTitles = [];
   const coordinator = new SessionSummaryCoordinator({
     store,
     documentManager: {
-      create: async () => ({ url: "https://example.feishu.cn/docx/doc_test" }),
+      create: async ({ title }) => {
+        createdTitles.push(title);
+        return { url: "https://example.feishu.cn/docx/doc_test" };
+      },
       update: async () => {},
     },
     tabManager: {
@@ -100,12 +231,13 @@ test("pins a linked summary document to the group and removes only that tab on u
     title: "英语学习",
   });
   assert.equal(linked.tabId, "tab_summary");
+  assert.deepEqual(createdTitles, ["英语学习 · 项目档案"]);
   assert.deepEqual(tabCalls[0], {
     action: "ensure",
     value: {
       chatId: "oc_group",
       documentUrl: "https://example.feishu.cn/docx/doc_test",
-      tabName: "持续摘要",
+      tabName: "项目档案",
     },
   });
   await coordinator.unbind("oc_group");

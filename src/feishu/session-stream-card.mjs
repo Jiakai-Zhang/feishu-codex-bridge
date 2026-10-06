@@ -3,6 +3,37 @@ import { heartbeatMetadataText, unwrapHeartbeatEnvelope } from "../codex/codex-t
 import { buildNativeAttachmentDeliveries } from "./feishu-native-attachment.mjs";
 
 const MAX_STORED_PROGRESS = 12;
+const EXECUTION_STATUS_TYPES = new Set(["running", "reconnecting", "retrying", "failed", "interrupted", "completed"]);
+const FAILURE_REASONS = new Set(["network", "authentication", "capacity", "context", "unknown"]);
+
+function normalizeExecutionStatus(status) {
+  if (!EXECUTION_STATUS_TYPES.has(status?.type)) return undefined;
+  return {
+    type: status.type,
+    ...(FAILURE_REASONS.has(status.reason) ? { reason: status.reason } : {}),
+    updatedAtMs: Number(status.updatedAtMs) || Date.now(),
+    ...(status.uneditable === true ? { uneditable: true } : {}),
+  };
+}
+
+function executionStatusNotice(status) {
+  if (status?.type === "reconnecting") return "与本机 Codex 的连接暂时中断，Bridge 正在自动重连。原任务可能仍在运行，不会重复提交旧指令。";
+  if (status?.type === "retrying") return "模型请求暂时失败，Codex 正在按原生策略自动重试。重试耗尽后会在本卡片明确显示失败。";
+  if (status?.type === "interrupted") return "本轮已停止，未生成完整结果。已完成的操作和上下文保留；如需继续，请发送“继续”。";
+  if (status?.type === "completed") return "Codex 本轮已结束，但未返回正文。已完成的操作和上下文保留；可在原任务查看结果，或发送“继续”。";
+  if (status?.type !== "failed") return undefined;
+  const reasons = {
+    network: "模型连接中断，原生重试后本轮仍未完成。",
+    authentication: "Codex 登录或授权异常，本轮未完成。请先在 Codex 处理登录或授权。",
+    capacity: "Codex 额度或限流异常，本轮未完成。请用 `/capacity` 查看额度并等待恢复。",
+    context: "当前上下文超出模型限制，本轮未完成。请先在 Codex 处理上下文容量。",
+    unknown: "Codex 本轮执行失败，未生成完整结果。请在 Codex 查看错误详情。",
+  };
+  const action = status.reason === "network"
+    ? "连接恢复后发送“继续”，会在原上下文开启新一轮，不重放旧输入。"
+    : "处理后可发送“继续”；Bridge 不会自动绕过此错误。";
+  return `${reasons[status.reason] || reasons.unknown}\n\n已完成的操作和上下文保留。${action}`;
+}
 
 export function buildSessionStreamCardFollowups(baseRecord, attachments) {
   return buildNativeAttachmentDeliveries(baseRecord, attachments);
@@ -99,6 +130,8 @@ function finalElements({ answer, answerSegments, maxAnswerChars }) {
 
 export function buildSessionStreamCard({
   progress = [],
+  queued,
+  executionStatus,
   startedAtMs,
   nowMs = Date.now(),
   answer,
@@ -133,6 +166,33 @@ export function buildSessionStreamCard({
     summarySource = unwrapHeartbeatEnvelope(
       answer || answerSegments?.find((segment) => segment?.type === "text")?.text || "Codex 回复完成",
     );
+  } else if (["failed", "interrupted", "completed"].includes(executionStatus?.type)) {
+    const title = { failed: "本轮未完成", interrupted: "本轮已停止", completed: "本轮已结束（无正文）" }[executionStatus.type];
+    elements = [{ tag: "markdown", content: `**${title}**\n\n${executionStatusNotice(executionStatus)}` }];
+    const lastProgress = progress.filter((item) => item.kind !== "subagent").at(-1);
+    if (lastProgress?.text) elements.push({ tag: "markdown", content: `**中断前的公开进度**\n\n${String(lastProgress.text).slice(0, 4_000)}` });
+    elements.push({ tag: "markdown", text_size: "notation", content: `停止时间：${formatTimestamp(executionStatus.updatedAtMs, timeZone)}` });
+    summarySource = title;
+  } else if (queued && progress.length === 0) {
+    const title = queued.cancelled ? "已取消排队" : "已加入下一轮队列";
+    const details = queued.cancelled
+      ? "这条消息不会进入 Codex。"
+      : `当前排位：${Math.max(1, Number(queued.position) || 1)}\n\n任务空闲后作为独立的新 Turn 开始。`;
+    elements = [{
+      tag: "column_set",
+      flex_mode: "none",
+      columns: [{
+        tag: "column", width: "weighted", weight: 1,
+        background_style: "blue-50", padding: "12px", vertical_spacing: "4px",
+        elements: [{ tag: "markdown", content: `**${title}**\n\n${details}` }],
+      }],
+    }, {
+      tag: "markdown", text_size: "notation",
+      content: queued.notice || (queued.cancelled
+        ? "可发送新消息重新排队。"
+        : "如需调整当前方向：使用 `/settings input steer` 后再发送。任务开始后，本卡片会直接显示执行进度。"),
+    }];
+    summarySource = title;
   } else {
     const elapsedMs = Number.isFinite(Number(startedAtMs))
       ? Math.max(0, Number(nowMs) - Number(startedAtMs))
@@ -140,7 +200,8 @@ export function buildSessionStreamCard({
     const elapsedText = elapsedMs === undefined
       ? ""
       : ` · 已处理：${formatDuration(elapsedMs)}`;
-    const items = [...progress]
+    const subagentProgress = progress.filter((item) => item.kind === "subagent").at(-1);
+    const items = [...progress].filter((item) => item.kind !== "subagent")
       .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0))
       .slice(-6);
     const progressMarkdown = items.length > 0
@@ -153,9 +214,12 @@ export function buildSessionStreamCard({
       : "正在等待 Codex 返回公开进度…";
     elements = [{
       tag: "markdown",
-      content: `**Codex 正在处理${elapsedText}**\n\n${progressMarkdown}\n\n*这里只展示公开进度，不包含隐藏思考过程。*`,
+      content: `**Codex 正在处理${elapsedText}**\n\n${progressMarkdown}${subagentProgress ? `\n\n---\n\n**子 agent 协作**\n\n${subagentProgress.text}` : ""}\n\n*这里只展示公开进度，不包含隐藏思考过程。*`,
     }];
-    summarySource = items.at(-1)?.text || "Codex 正在处理";
+    const statusNotice = executionStatusNotice(executionStatus);
+    if (statusNotice) elements.unshift({ tag: "markdown", content: `**${executionStatus.type === "reconnecting" ? "正在重新连接" : "正在重试"}**\n\n${statusNotice}` });
+    summarySource = items.at(-1)?.text || subagentProgress?.text || "Codex 正在处理";
+    if (statusNotice) summarySource = executionStatus.type === "reconnecting" ? "正在重新连接 Codex" : "Codex 正在重试";
   }
 
   return {
@@ -170,10 +234,17 @@ export function buildSessionStreamCard({
 
 function normalizeProgress(item) {
   return {
+    ...(item?.kind === "subagent" ? { kind: "subagent", activityKey: "subagents" } : {}),
     sequence: Math.max(0, Number(item?.sequence) || 0),
     text: String(item?.text || "").slice(0, 4_000),
     createdAtMs: Number(item?.createdAtMs) || Date.now(),
   };
+}
+
+function retainedProgress(progress) {
+  const activity = progress.filter((item) => item.kind === "subagent").at(-1);
+  const commentary = progress.filter((item) => item.kind !== "subagent").slice(-MAX_STORED_PROGRESS);
+  return [...commentary, ...(activity ? [activity] : [])].sort((left, right) => left.sequence - right.sequence);
 }
 
 function normalizeRecord(record) {
@@ -190,9 +261,10 @@ function normalizeRecord(record) {
     turnId,
     chatId,
     messageId,
-    progress: (Array.isArray(record.progress) ? record.progress : [])
-      .map(normalizeProgress)
-      .slice(-MAX_STORED_PROGRESS),
+    ...(record.sourceMessageId ? { sourceMessageId: String(record.sourceMessageId) } : {}),
+    ...(record.queued ? { queued: { ...record.queued } } : {}),
+    ...(normalizeExecutionStatus(record.executionStatus) ? { executionStatus: normalizeExecutionStatus(record.executionStatus) } : {}),
+    progress: retainedProgress((Array.isArray(record.progress) ? record.progress : []).map(normalizeProgress)),
     createdAt: Number(record.createdAt) || Date.now(),
   };
 }
@@ -240,9 +312,50 @@ export class SessionStreamCardStore {
     if (current.progress.some((entry) => entry.sequence === progress.sequence && entry.text === progress.text)) {
       return structuredClone(current);
     }
-    current.progress = [...current.progress, progress]
-      .sort((left, right) => left.sequence - right.sequence)
-      .slice(-MAX_STORED_PROGRESS);
+    current.progress = retainedProgress([...current.progress, progress]);
+    await this.persist();
+    return structuredClone(current);
+  }
+
+  async handoffQueued(threadId, sourceMessageId, turnId, { startedAtMs = Date.now() } = {}) {
+    if (!sourceMessageId || !turnId || String(turnId).startsWith("queued:")) return undefined;
+    const existing = this.get(threadId, turnId);
+    if (existing) return existing;
+    const queuedKey = recordKey(threadId, `queued:${sourceMessageId}`);
+    const queued = this.records.get(queuedKey);
+    if (!queued) return undefined;
+    const active = { ...queued, turnId: String(turnId), createdAt: startedAtMs };
+    delete active.queued;
+    this.records.delete(queuedKey);
+    this.records.set(recordKey(threadId, turnId), active);
+    await this.persist();
+    return structuredClone(active);
+  }
+
+  async updateQueued(threadId, turnId, queued) {
+    const current = this.records.get(recordKey(threadId, turnId));
+    if (!current || !current.turnId.startsWith("queued:")) return undefined;
+    current.queued = { ...queued };
+    await this.persist();
+    return structuredClone(current);
+  }
+
+  async updateExecutionStatus(threadId, turnId, status) {
+    const current = this.records.get(recordKey(threadId, turnId));
+    if (!current) return undefined;
+    const normalized = normalizeExecutionStatus(status);
+    if (!normalized) throw new TypeError("Unsupported stream card execution status");
+    if (["failed", "interrupted", "completed"].includes(current.executionStatus?.type)) return structuredClone(current);
+    if (normalized.type === "running") delete current.executionStatus;
+    else current.executionStatus = normalized;
+    await this.persist();
+    return structuredClone(current);
+  }
+
+  async markExecutionStatusUneditable(threadId, turnId) {
+    const current = this.records.get(recordKey(threadId, turnId));
+    if (!current?.executionStatus) return undefined;
+    current.executionStatus.uneditable = true;
     await this.persist();
     return structuredClone(current);
   }

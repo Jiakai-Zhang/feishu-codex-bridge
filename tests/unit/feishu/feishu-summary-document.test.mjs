@@ -12,7 +12,12 @@ const URL = "https://example.feishu.cn/docx/doc_summary_test";
 const LOCATED = `<fragment><p id="marker_block">${SUMMARY_SECTION_MARKER}</p><p id="summary_block">暂无</p></fragment>`;
 
 test("builds valid single-block XML for rolling summaries", () => {
-  assert.match(buildSummaryDocumentXml("英语 & 学习"), /<title>英语 &amp; 学习<\/title>/);
+  const document = buildSummaryDocumentXml("英语 & 学习");
+  assert.match(document, /<title>英语 &amp; 学习<\/title>/);
+  assert.match(document, /<h1>项目档案<\/h1>/);
+  assert.match(document, /【项目目标】/);
+  assert.match(document, /【待办事项】/);
+  assert.match(document, /【重要资料】/);
   assert.equal(buildSummaryBlockXml("第一行\n第二行 <x>"), "<p>第一行<br/>第二行 &lt;x&gt;</p>");
   assert.deepEqual(locateSummarySection(LOCATED), {
     markerBlockId: "marker_block",
@@ -57,6 +62,8 @@ test("binding an existing document appends the managed section only when absent"
   const append = calls.find((call) => call.args.includes("+update"));
   assert.equal(append.args.includes("append"), true);
   assert.match(append.input, new RegExp(SUMMARY_SECTION_MARKER));
+  assert.match(append.input, /<h1>项目档案<\/h1>/);
+  assert.match(append.input, /【待办事项】/);
 });
 
 test("updates only the managed summary block", async () => {

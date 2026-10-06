@@ -33,6 +33,7 @@ import {
   uploadFeishuNativeAttachment,
 } from "../feishu/feishu-native-attachment.mjs";
 import { FeishuFeedGroupManager } from "../feishu/feishu-feed-group.mjs";
+import { fetchFeishuQuotedMessage } from "../feishu/feishu-quoted-message.mjs";
 import {
   FeishuInboundAttachmentStore,
   prepareFeishuPrompt,
@@ -50,15 +51,22 @@ import {
   fingerprintDriveFile,
 } from "../feishu/feishu-drive-file.mjs";
 import { FeishuChannelConnectivity } from "../feishu/feishu-channel-connectivity.mjs";
+import { createFeishuDohBackup } from "../feishu/feishu-doh-backup.mjs";
 import { FeishuSummaryDocumentManager } from "../feishu/feishu-summary-document.mjs";
 import { FeishuChatTabManager } from "../feishu/feishu-chat-tab.mjs";
 import { FeishuSessionChatManager } from "../feishu/feishu-session-chat.mjs";
+import { FeishuTaskManager } from "../feishu/feishu-task.mjs";
+import { uploadFeishuGroupAvatar } from "../feishu/feishu-group-avatar.mjs";
 import { sendFeishuMemberOnboarding } from "../feishu/feishu-member-onboarding.mjs";
 import {
   publicFeishuUserCardFailure,
   resolveFeishuUserCardOpenId,
 } from "../feishu/feishu-user-card.mjs";
-import { SessionAddFlow } from "../relay/session-add-flow.mjs";
+import {
+  isSessionGroupBindCommand,
+  SessionAddFlow,
+  SessionGroupBindFlow,
+} from "../relay/session-add-flow.mjs";
 import {
   SessionAttachmentDraftStore,
   shouldStageAttachmentPrompt,
@@ -83,15 +91,21 @@ import {
   isSessionPromptAddressed,
   planSessionNameSync,
   resolveCompletedTurnRoute,
+  shouldIgnoreSessionGroupMessage,
   SessionRelayError,
 } from "../relay/session-relay-core.mjs";
 import { SessionPromptQueue } from "../persistence/session-prompt-queue.mjs";
+import { materializeSessionDraft } from "../relay/session-draft-bootstrap.mjs";
+import { flushSessionTurnStatus, processSessionTurnStatus } from "../relay/session-turn-status.mjs";
 import { SessionSummaryDocumentStore } from "../persistence/session-summary-document-store.mjs";
 import { TemporaryChatArchiveStore } from "../persistence/temporary-chat-archive-store.mjs";
 import { TemporaryChatStore } from "../persistence/temporary-chat-store.mjs";
 import { loadSessionRelayConfig } from "../relay/session-relay-config.mjs";
 import { SessionRelaySettingsStore } from "../persistence/session-relay-settings.mjs";
-import { SessionSummaryCoordinator } from "../relay/session-summary-coordinator.mjs";
+import {
+  sanitizePassiveGroupMessage,
+  SessionSummaryCoordinator,
+} from "../relay/session-summary-coordinator.mjs";
 import {
   fetchFeishuChatRoster,
   summarizeFeishuRosterFailure,
@@ -101,6 +115,13 @@ import {
   resolveDirectPrivateSchedule,
 } from "../relay/temporary-chat-command.mjs";
 import { retireTemporaryChat } from "../relay/temporary-chat-retirement.mjs";
+import {
+  formatTodoSuccess,
+  parseTodoInvocation,
+  parseTodoRequest,
+  publicTodoFailure,
+  todoIdempotencyKey,
+} from "../relay/session-todo-command.mjs";
 import { scopeSessionCatalog } from "../relay/session-access-policy.mjs";
 import {
   effectiveSessionSandboxMode,
@@ -159,6 +180,7 @@ const sessionStore = new CodexSessionStore({
   sessionIndexPath: path.join(userProfile, ".codex", "session_index.jsonl"),
 });
 const bindingsByChat = new Map(config.sessionRelay.bindings.map((binding) => [binding.groupChatId, binding]));
+const pendingBoundSessions = new Map();
 const supportedPromptImageExtensions = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".ico", ".tif", ".tiff", ".heic",
 ]);
@@ -208,6 +230,14 @@ const summaryDocumentManager = config.larkCliEntry
       cwd: repositoryRoot,
     })
   : undefined;
+const feishuTaskManager = config.larkCliEntry
+  ? new FeishuTaskManager({
+      nodeExecutable: config.nodeExecutable,
+      larkCliEntry: config.larkCliEntry,
+      assigneeOpenId: config.agent.ownerOpenId,
+      cwd: repositoryRoot,
+    })
+  : undefined;
 const summaryChatTabManager = config.larkCliEntry
   ? new FeishuChatTabManager({
       nodeExecutable: config.nodeExecutable,
@@ -248,6 +278,7 @@ const attachmentDrafts = await SessionAttachmentDraftStore.open(attachmentDrafts
   legacySenderOpenId: config.agent.ownerOpenId,
 });
 const activeTurnActors = new Map();
+const streamCardStartTails = new Map();
 const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
   getController: () => sessionController,
   onAccepted: async (queued, result) => {
@@ -273,6 +304,7 @@ const promptQueue = await SessionPromptQueue.open(promptQueuePath, {
       threadId: queued.sessionThreadId,
       turnId: result?.turnId,
       chatId: queued.chatId,
+      sourceMessageId: queued.messageId,
     });
   },
   onError: (error, queued) => {
@@ -322,6 +354,8 @@ const sessionChatManager = config.larkCliEntry
       larkCliEntry: config.larkCliEntry,
       ownerOpenId: config.agent.ownerOpenId,
       cwd: repositoryRoot,
+      uploadAvatar: ({ image }) => uploadFeishuGroupAvatar(channel.rawClient, image),
+      onWarning: (error) => log(`generated group avatar unavailable: ${safeError(error)}`),
     })
   : undefined;
 
@@ -349,6 +383,16 @@ function log(message) {
 
 function activeBridgeOpenIds() {
   return sessionAccess.listActiveUsers().map(({ openId }) => openId);
+}
+
+function inactiveBridgeOpenIds() {
+  return sessionAccess.snapshot().users
+    .filter(({ status }) => status === "inactive")
+    .map(({ openId }) => openId);
+}
+
+function directBridgeOpenIds() {
+  return sessionAccess.listDirectUsers().map(({ openId }) => openId);
 }
 
 async function loadScopedCatalog(actorOpenId) {
@@ -456,6 +500,7 @@ function createSessionController(targets) {
     ),
     dynamicToolRequestHandler: createCodexAppToolRequestHandler({ log }),
     onTurnCompleted: async (record) => {
+      pendingBoundSessions.delete(record.threadId);
       const actor = activeTurnActors.get(record.threadId);
       const initiatorOpenId = actor?.turnId === record.turnId ? actor.openId : undefined;
       if (initiatorOpenId) activeTurnActors.delete(record.threadId);
@@ -475,6 +520,7 @@ function createSessionController(targets) {
       record.threadId,
       () => processTurnProgress(record),
     ),
+    onTurnStatus: async (record) => enqueueTurnOutput(record.threadId, () => processTurnStatus(record)),
     log,
   });
 }
@@ -558,13 +604,56 @@ function scheduleStreamCardClockRefresh(record) {
       if (!channelConnectivity.connected || !sessionController) return;
       const current = streamCards.get(record.threadId, record.turnId);
       if (!current || current.messageId !== record.messageId) return;
-      if (!relaySettings.get(current.threadId).publicProgress) return;
+      if (current.executionStatus?.uneditable) return;
       if (!resolveRelayBinding(current.chatId, current.threadId)) return;
+      if (current.turnId.startsWith("queued:")) {
+        if (!relaySettings.get(current.threadId).publicProgress) return;
+        await serializeStreamCardStart(current.threadId, async () => {
+          const pending = streamCards.get(current.threadId, current.turnId);
+          if (!pending) return;
+          const entries = promptQueue.list(current.threadId);
+          const position = entries.findIndex((item) => item.messageId === pending.sourceMessageId) + 1;
+          // Acceptance may be persisted before the handoff callback gets its lock.
+          if (!position && inputLedger.get(pending.sourceMessageId)?.turnId) return;
+          const queued = { ...pending.queued, position, cancelled: position === 0 };
+          if (position && JSON.stringify(queued) === JSON.stringify(pending.queued)) return;
+          await channel.updateCard(pending.messageId, buildSessionStreamCard({ queued }));
+          if (!position) await streamCards.remove(current.threadId, current.turnId);
+          else await streamCards.updateQueued(current.threadId, current.turnId, queued);
+        });
+        return;
+      }
+      const finalDeliveryId = externalTurnDeliveryId(current.threadId, current.turnId);
+      if (completed.has(finalDeliveryId) || deliveryOutbox.has(finalDeliveryId)) {
+        await streamCards.remove(current.threadId, current.turnId);
+        return;
+      }
+      if (["failed", "interrupted", "completed"].includes(current.executionStatus?.type)) {
+        await flushSessionTurnStatus({ current, ...turnStatusPorts() });
+        return;
+      }
+      if (sessionController.connected) {
+        // One read-only snapshot per Session per 30s, shared across its cards.
+        // This also catches failure events missed across Bridge restarts.
+        const executionStatus = await sessionController.readTurnExecutionStatus(
+          current.threadId, current.turnId, { maxAgeMs: 30_000 },
+        );
+        if (["failed", "interrupted"].includes(executionStatus?.type)) {
+          await processTurnStatus({ ...current, executionStatus });
+          return;
+        }
+        if (executionStatus?.type === "completed") {
+          if (!executionStatus.hasAnswer) await processTurnStatus({ ...current, executionStatus });
+          return;
+        }
+      }
+      if (!relaySettings.get(current.threadId).publicProgress && !current.executionStatus) return;
       const status = await sessionController.getStatus(current.threadId, { refresh: false })
         .catch(() => undefined);
       if (status?.activeTurnId !== current.turnId) return;
       await channel.updateCard(current.messageId, buildSessionStreamCard({
         progress: current.progress,
+        executionStatus: current.executionStatus,
         startedAtMs: current.createdAt,
         nowMs: Date.now(),
       }));
@@ -572,7 +661,7 @@ function scheduleStreamCardClockRefresh(record) {
     } catch (error) {
       if (!streamCardClockFailures.has(key)) {
         streamCardClockFailures.add(key);
-        log(`stream card clock refresh deferred: ${safeError(error)}`);
+        log(`stream card clock refresh deferred: ${error instanceof Error ? error.name : "unknown"}`);
       }
     } finally {
       streamCardClockRefreshes.delete(key);
@@ -582,7 +671,6 @@ function scheduleStreamCardClockRefresh(record) {
 
 function refreshActiveStreamCardClocks() {
   for (const record of streamCards.list()) {
-    if (record.turnId.startsWith("queued:")) continue;
     scheduleStreamCardClockRefresh(record);
   }
 }
@@ -827,7 +915,7 @@ async function inspectBinding(binding, { syncName = true } = {}) {
       chatInfo: undefined,
     };
   }
-  const session = await sessionStore.get(binding.threadId);
+  const session = await sessionStore.get(binding.threadId) || pendingBoundSessions.get(binding.threadId);
   if (!session) {
     throw new SessionRelayError("session_unavailable", "The bound Codex session is missing or archived");
   }
@@ -858,6 +946,8 @@ async function inspectBinding(binding, { syncName = true } = {}) {
     binding,
     connectedBotOpenId,
     activeOpenIds: activeBridgeOpenIds(),
+    inactiveOpenIds: inactiveBridgeOpenIds(),
+    allowGroupMembers: true,
   });
 
   const groupName = String(chatInfo.name || "").trim();
@@ -883,7 +973,7 @@ async function inspectBinding(binding, { syncName = true } = {}) {
   return { session, chatInfo, ...roster };
 }
 
-async function createIndependentSession({ name, cwd, actorOpenId = config.agent.ownerOpenId }) {
+async function createIndependentSession({ name, cwd, actorOpenId = config.agent.ownerOpenId, chatId }) {
   const actorRoot = sessionAccess.getUserRoot(actorOpenId);
   const requested = String(cwd || actorRoot || "").trim();
   if (!path.isAbsolute(requested)) {
@@ -904,13 +994,20 @@ async function createIndependentSession({ name, cwd, actorOpenId = config.agent.
   if (sessionAccess.isConfigured() && (!actorRoot || !isPathInside(actorRoot, realCwd))) {
     throw new SessionRelayError("member_cwd_outside_root", "The new task cwd is outside the user's Project directory");
   }
-  const thread = await startCodexProjectThread({
-    codexExecutable: config.codexExecutable,
-    cwd: realCwd,
-    name,
-    sandboxMode: config.sandboxMode,
-    appServerUrl: config.sessionRelay.appServerUrl,
-  });
+  const thread = chatId
+    ? await createSessionControllerTarget({
+        chatId,
+        cwd: realCwd,
+        name,
+        sandboxMode: config.sandboxMode,
+      })
+    : await startCodexProjectThread({
+        codexExecutable: config.codexExecutable,
+        cwd: realCwd,
+        name,
+        sandboxMode: config.sandboxMode,
+        appServerUrl: config.sessionRelay.appServerUrl,
+      });
   return Object.freeze({
     id: thread.id,
     title: thread.name,
@@ -989,6 +1086,23 @@ async function verifyCreatedGroup({ binding, groupName }) {
   }
 }
 
+async function inspectBindableGroup({ chatId, ownerOpenId }) {
+  const { chatInfo, members, bots } = await fetchFeishuChatRoster(channel, chatId);
+  assertSessionGroup({
+    chatInfo,
+    members,
+    bots,
+    binding: { groupChatId: chatId, ownerOpenId },
+    connectedBotOpenId,
+    activeOpenIds: activeBridgeOpenIds(),
+    inactiveOpenIds: inactiveBridgeOpenIds(),
+    allowGroupMembers: true,
+  });
+  const name = String(chatInfo?.name || "").trim();
+  if (!name) throw new SessionRelayError("group_name_missing", "The Feishu group has no usable name");
+  return Object.freeze({ name });
+}
+
 async function sendBindingWelcome({ chatId, groupName, feedGroupName, settings }) {
   const inputMode = settings?.inputMode === "queue" ? "queue（排队新 Turn）" : "steer（调整当前回答）";
   await channel.send(chatId, {
@@ -1020,16 +1134,18 @@ function publicBindingFailure(error) {
     case "binding_remove_failed":
       return "本机绑定配置写入失败；Bridge 已尝试恢复 Agent 标签，当前群仍按原绑定处理。请检查本机配置后重试。";
     case "feed_group_auth_required":
-      return "自动建群需要当前飞书用户授权 `im:feed_group_v1:read/write`，用于创建并应用 Agent 标签。请完成增量 OAuth 授权后重试 `/add`。";
+      return "绑定群需要当前飞书用户授权 `im:feed_group_v1:read/write`，用于创建并应用 Agent 标签。请完成增量 OAuth 授权后重试 `/add` 或 `/bind`。";
     case "feed_group_name_conflict":
     case "feed_group_name_ambiguous":
-      return "Agent 标签名称存在冲突，尚未创建群。请在飞书中保留唯一的普通标签后重试 `/add`。";
+      return "Agent 标签名称存在冲突。请在飞书中保留唯一的普通标签后重试 `/add` 或 `/bind`。";
     case "feed_group_cli_unavailable":
-      return "本机飞书 CLI 当前不可用，尚未创建群。请先恢复 CLI 后重试 `/add`。";
+      return "本机飞书 CLI 当前不可用。请先恢复 CLI 后重试 `/add` 或 `/bind`。";
     case "chat_create_auth_required":
       return "自动建群尚缺少 Bot 权限 `im:chat:create`。请在飞书开放平台为当前应用开通并发布后重试 `/add`；不需要重新授权用户 Feed 标签权限。";
     case "created_group_tag_failed":
       return "飞书群已创建，但未能自动应用 Agent 标签，因此没有写入 Session 绑定。请检查 `im:feed_group_v1:read/write` 用户授权后重新开始。";
+    case "target_group_tag_failed":
+      return "当前群未能应用 Agent 标签，因此没有写入 Session 绑定。请检查 `im:feed_group_v1:read/write` 用户授权后重试 `/bind`。";
     case "session_not_bindable":
       return "该任务不存在、已归档，或不在 Codex Desktop 的 Project/独立清单中，因此没有建群。";
     case "session_owned_by_another":
@@ -1040,7 +1156,7 @@ function publicBindingFailure(error) {
     case "session_already_bound":
       return "该 Codex 任务已经绑定飞书群，没有重复创建。";
     case "independent_cwd_invalid":
-      return "独立任务的工作目录必须是本机已存在的绝对目录，请重新发送 `/add`。";
+      return "独立任务需要一个本机已存在的工作目录。使用 `/bind` 前请先为该用户配置 Project 根目录；也可通过 Bot 私聊 `/add` 选择现有 Project。";
     case "member_cwd_outside_root":
       return "普通用户只能在 Owner 分配的个人 Project 目录中创建任务。";
     case "member_root_unavailable":
@@ -1055,10 +1171,21 @@ function publicBindingFailure(error) {
       return "所选 Project 没有可用的已登记工作目录，因此没有创建任务或群。请先在 Codex Desktop 修复 Project 目录，再重新发送 `/add`。";
     case "created_group_verification_failed":
       return "新群没有通过“Session Owner + 当前 Bot”的成员校验，因此没有写入绑定。";
+    case "target_group_verification_failed":
+      return publicFailure(error?.cause);
+    case "roster_unavailable":
+    case "owner_missing":
+    case "owner_inactive":
+    case "unregistered_member":
+    case "inactive_member":
+    case "unexpected_bot":
+      return publicFailure(error);
+    case "target_group_invalid":
+      return "当前群缺少可用的群名或群身份，因此没有创建 Codex 上下文。";
     case "binding_persist_failed":
-      return "新群和标签已创建，但本机绑定配置写入失败。Bridge 没有把该群当作可用 Session 群，请在本机检查配置。";
+      return "本机绑定配置写入失败。Bridge 没有把该群当作可用 Session 群，请在本机检查配置后重试。";
     case "settings_persist_failed":
-      return "新群和标签已创建，但新绑定默认设置无法在本机持久化，因此没有继续写入 Session 绑定。请检查本机工作目录后重试。";
+      return "新绑定的默认设置无法在本机持久化，因此没有继续写入 Session 绑定。请检查本机运行状态后重试。";
     default:
       return "创建 Session 群失败，未改投到其他 Codex 任务。请稍后重新发送 `/add`。";
   }
@@ -1097,6 +1224,8 @@ function publicFailure(error) {
       return "已停止转发：Session 所有者不在群内或已停用。为安全起见，本消息没有进入 Codex。";
     case "unregistered_member":
       return "已停止转发：群内存在尚未启用的成员。请由 Bridge Owner 登记该成员，或将其移出群后重试。";
+    case "inactive_member":
+      return "已停止转发：群内存在被 Owner 明确停用的成员。请重新启用该成员或将其移出群后重试。";
     case "unexpected_bot":
       return "已停止转发：群内 Bot 身份与绑定不一致。为安全起见，本消息没有进入 Codex。";
     case "session_unavailable":
@@ -1130,6 +1259,8 @@ function publicFailure(error) {
       return "这条飞书附件消息已经关联到另一份暂存记录，没有重复加入。";
     case "attachment_download_failed":
       return "Bridge 无法下载这条飞书附件。请确认应用已开通并发布 `im:message`（或 `im:message:readonly`），且消息未设为保密、群未开启防泄密模式；然后重新发送附件。";
+    case "quoted_message_unavailable":
+      return "Bridge 暂时无法读取你引用的消息，本消息没有进入 Codex。请稍后重新引用并发送，或把图片/附件直接附在发给机器人的消息中。";
     case "session_busy":
       return "绑定的 Codex 任务在等待时限内没有恢复空闲。请等待当前回答完成或中断后重试。";
     case "codex_app_server_unavailable":
@@ -1141,9 +1272,23 @@ function publicFailure(error) {
   }
 }
 
-async function replyFailure(msg, error) {
+function isSilentRosterNetworkFailure(error) {
+  const failure = error?.code === "target_group_verification_failed" ? error.cause : error;
+  return failure?.code === "roster_unavailable" && failure?.cause?.category === "network";
+}
+
+async function replyFailure(msg, error, { bindingSetup = false } = {}) {
   try {
-    await channel.reply(msg, { text: publicFailure(error) });
+    if (isSilentRosterNetworkFailure(error)) {
+      // Verification still failed closed. Settle only this rejected message's
+      // deduplication marker; do not enqueue it or treat it as a Codex input.
+      await persistCompleted(msg.messageId);
+      log("group roster network failure notification suppressed; message was not forwarded to Codex");
+      return;
+    }
+    await channel.reply(msg, bindingSetup
+      ? { markdown: publicBindingFailure(error) }
+      : { text: publicFailure(error) });
     await persistCompleted(msg.messageId);
   } catch (replyError) {
     log(`failure reply could not be delivered for ${msg.messageId}: ${safeError(replyError)}`);
@@ -1182,11 +1327,34 @@ async function queueDelivery(record, successLog) {
   await queueDeliveryBundle([record], successLog);
 }
 
-async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
+function serializeStreamCardStart(threadId, work) {
+  const previous = streamCardStartTails.get(threadId) || Promise.resolve();
+  const running = previous.catch(() => {}).then(work);
+  const tail = running.catch(() => {}).finally(() => {
+    if (streamCardStartTails.get(threadId) === tail) streamCardStartTails.delete(threadId);
+  });
+  streamCardStartTails.set(threadId, tail);
+  return running;
+}
+
+async function ensureTurnStreamCard(record) {
+  return serializeStreamCardStart(record.threadId, () => startTurnStreamCard(record));
+}
+
+async function startTurnStreamCard({ threadId, turnId, chatId, sourceMessageId, clientId, executionStatus }) {
   if (!threadId || !turnId || !chatId) return undefined;
-  if (!relaySettings.get(threadId).publicProgress || !channelConnectivity.connected) return undefined;
+  if ((!relaySettings.get(threadId).publicProgress && !executionStatus) || !channelConnectivity.connected) return undefined;
   const existing = streamCards.get(threadId, turnId);
   if (existing) return existing;
+  const finalDeliveryId = externalTurnDeliveryId(threadId, turnId);
+  if (completed.has(finalDeliveryId) || deliveryOutbox.has(finalDeliveryId)) return undefined;
+  const source = sourceMessageId || clientId || inputLedger.findTurnInitiator(threadId, turnId)?.messageId;
+  const adopted = await streamCards.handoffQueued(threadId, source, turnId);
+  if (adopted) {
+    await channel.updateCard(adopted.messageId, buildSessionStreamCard({ startedAtMs: adopted.createdAt }))
+      .catch((error) => log(`queue card handoff update deferred: ${safeError(error)}`));
+    return adopted;
+  }
   const binding = resolveRelayBinding(chatId, threadId);
   if (!binding) return undefined;
   await inspectBinding(binding);
@@ -1217,11 +1385,56 @@ async function ensureTurnStreamCard({ threadId, turnId, chatId }) {
   return created;
 }
 
+async function tryEnsureQueuedStreamCard(msg, binding, queued) {
+  if (!relaySettings.get(binding.threadId).publicProgress || !channelConnectivity.connected) return undefined;
+  return serializeStreamCardStart(binding.threadId, async () => {
+    const turnId = `queued:${msg.messageId}`;
+    const existing = streamCards.get(binding.threadId, turnId);
+    if (existing) return existing;
+    const queueState = { position: queued.position };
+    const response = await channel.rawClient.im.message.reply({
+      path: { message_id: msg.messageId },
+      data: {
+        content: JSON.stringify(buildSessionStreamCard({ queued: queueState })),
+        msg_type: "interactive",
+        reply_in_thread: Boolean(msg.threadId),
+        uuid: deliveryIdempotencyKey(`codex-queue-card:${msg.messageId}`),
+      },
+    });
+    if (response?.code !== undefined && response.code !== 0) {
+      throw new Error(`Feishu queue card creation failed with code ${response.code}`);
+    }
+    const messageId = response?.data?.message_id || response?.data?.message?.message_id;
+    if (!messageId) throw new Error("Feishu queue card creation returned no message id");
+    return streamCards.start({
+      threadId: binding.threadId, turnId, chatId: msg.chatId, messageId,
+      sourceMessageId: msg.messageId, queued: queueState,
+    });
+  }).catch((error) => {
+    log(`queue card acknowledgement deferred: ${safeError(error)}`);
+    return undefined;
+  });
+}
+
 async function showQueuedWriterConflict(error, queued) {
   if (!queued?.messageId || !channelConnectivity.connected) return;
   if (queuedWriterConflictNotices.has(queued.messageId)) return;
   queuedWriterConflictNotices.add(queued.messageId);
   try {
+    const queueCard = streamCards.get(queued.sessionThreadId, `queued:${queued.messageId}`);
+    if (queueCard) {
+      await serializeStreamCardStart(queued.sessionThreadId, async () => {
+        const current = streamCards.get(queued.sessionThreadId, queueCard.turnId);
+        if (!current) return;
+        const state = {
+          ...current.queued,
+          notice: `${publicFailure(error)}\n\nPrompt 仍在队列中；写入权限释放后会自动重试。`,
+        };
+        await channel.updateCard(current.messageId, buildSessionStreamCard({ queued: state }));
+        await streamCards.updateQueued(current.threadId, current.turnId, state);
+      });
+      return;
+    }
     const response = await channel.rawClient.im.message.reply({
       data: {
         content: JSON.stringify({
@@ -1251,7 +1464,10 @@ async function tryEnsureTurnStreamCard(record) {
 }
 
 async function tryFinalizeTurnStreamCard(record, answerSegments, heartbeatSchedule) {
-  const current = streamCards.get(record.threadId, record.turnId);
+  let current = streamCards.get(record.threadId, record.turnId);
+  if (!current && record.clientId && streamCards.get(record.threadId, `queued:${record.clientId}`)) {
+    current = await tryEnsureTurnStreamCard(record);
+  }
   if (!current || !channelConnectivity.connected) return false;
   try {
     await channel.updateCard(current.messageId, buildSessionStreamCard({
@@ -1286,7 +1502,8 @@ async function tryCompleteTurnStreamCard(record, baseDelivery, media, heartbeatS
 }
 
 async function enqueuePromptMessage(msg, binding, text, attachments = []) {
-  return promptQueue.enqueue({
+  let queueCard;
+  const result = await promptQueue.enqueue({
     messageId: msg.messageId,
     sessionThreadId: binding.threadId,
     chatId: msg.chatId,
@@ -1296,15 +1513,23 @@ async function enqueuePromptMessage(msg, binding, text, attachments = []) {
     attachments,
     createdAt: Date.now(),
   }, {
-    afterPersist: async (queued) => inputLedger.put({
-      messageId: queued.messageId,
-      chatId: queued.chatId,
-      threadId: queued.feishuThreadId,
-      senderOpenId: queued.senderOpenId,
-      kind: "queued",
-      createdAt: queued.createdAt,
-    }),
+    afterPersist: async (queued) => {
+      await inputLedger.put({
+        messageId: queued.messageId,
+        chatId: queued.chatId,
+        threadId: queued.feishuThreadId,
+        senderOpenId: queued.senderOpenId,
+        kind: "queued",
+        createdAt: queued.createdAt,
+      });
+      // Hold the queue's serialization lock until its acknowledgement is registered.
+      // Dispatch cannot start this input and create a second card in the meantime.
+      queueCard = await tryEnsureQueuedStreamCard(msg, binding, {
+        position: promptQueue.list(binding.threadId).findIndex((item) => item.messageId === msg.messageId) + 1,
+      });
+    },
   });
+  return { ...result, acknowledgedByCard: Boolean(queueCard || streamCards.get(binding.threadId, `queued:${msg.messageId}`)) };
 }
 
 async function processPromptMessage(msg, binding, prompt, { forceQueue = false } = {}) {
@@ -1319,7 +1544,7 @@ async function processPromptMessage(msg, binding, prompt, { forceQueue = false }
       await inspectBinding(binding);
       const queued = await enqueuePromptMessage(msg, binding, content, attachments);
       accepted = true;
-      await queueDelivery({
+      if (!queued.acknowledgedByCard) await queueDelivery({
         kind: "reply",
         deliveryId: `default-queue:${msg.messageId}`,
         messageId: msg.messageId,
@@ -1359,7 +1584,7 @@ async function processPromptMessage(msg, binding, prompt, { forceQueue = false }
       kind: result.kind,
       createdAt: Date.now(),
     });
-    await tryEnsureTurnStreamCard({
+    void tryEnsureTurnStreamCard({
       threadId: binding.threadId,
       turnId: result.turnId,
       chatId: msg.chatId,
@@ -1474,6 +1699,7 @@ async function processPreparedPrompt(msg, binding, prompt, { forceQueue = false 
 
 async function commandAllowedForParticipant(msg, binding, command) {
   if (msg.senderId === binding.ownerOpenId) return true;
+  if (!sessionAccess.isActive(msg.senderId)) return false;
   if (["status", "capacity", "attachments"].includes(command.name)) return true;
   if (command.name === "queue") {
     try {
@@ -1512,7 +1738,7 @@ async function submitExplicitSteer(msg, binding, text, attachments) {
   if (result.kind === "started" && result.turnId) {
     activeTurnActors.set(binding.threadId, { turnId: result.turnId, openId: msg.senderId });
   }
-  await tryEnsureTurnStreamCard({
+  void tryEnsureTurnStreamCard({
     threadId: binding.threadId,
     turnId: result.turnId,
     chatId: msg.chatId,
@@ -1539,6 +1765,7 @@ async function processCommandMessage(msg, binding, command) {
     let queueAction;
     let draftClaim;
     let draftAccepted = false;
+    let queueAcknowledgedByCard = false;
     try {
       queueAction = command.name === "queue" ? parseQueueAction(command.args) : undefined;
       if (queueAction?.action === "enqueue" || command.name === "steer") {
@@ -1564,6 +1791,7 @@ async function processCommandMessage(msg, binding, command) {
         timeZone: config.sessionRelay.displayTimeZone,
         enqueuePrompt: async (text) => {
           const queued = await enqueuePromptMessage(msg, binding, text, draftClaim?.attachments || []);
+          queueAcknowledgedByCard = queued.acknowledgedByCard;
           draftAccepted = true;
           return queued;
         },
@@ -1594,7 +1822,7 @@ async function processCommandMessage(msg, binding, command) {
         createdAt: Date.now(),
       });
     }
-    await queueDelivery({
+    if (!queueAcknowledgedByCard) await queueDelivery({
       kind: "reply",
       deliveryId: `command:${msg.messageId}`,
       messageId: msg.messageId,
@@ -1679,11 +1907,6 @@ async function processMemberCardMessage(msg) {
     await persistCompleted(msg.messageId);
     return;
   }
-  if (!sessionAccess.isConfigured()) {
-    await channel.reply(msg, { markdown: publicMembersFailure({ code: "project_root_missing" }) });
-    await persistCompleted(msg.messageId);
-    return;
-  }
   try {
     const targetOpenId = await resolveFeishuUserCardOpenId(msg, { client: channel.rawClient });
     if (targetOpenId === config.agent.ownerOpenId) {
@@ -1724,29 +1947,18 @@ async function processPendingMemberCardText(msg, content) {
     text: content,
   });
   if (!flowResult.handled) return false;
-  if (flowResult.action !== "add") {
+  if (!["add", "allow"].includes(flowResult.action)) {
     await channel.reply(msg, { markdown: flowResult.reply });
     await persistCompleted(msg.messageId);
     return true;
   }
   const outcome = await executeMembersMessage(
     msg,
-    { action: "add", args: flowResult.directoryName },
+    { action: flowResult.action, args: flowResult.directoryName || "" },
     { mentions: [{ openId: flowResult.target.openId, name: flowResult.target.name, isBot: false }] },
   );
   if (outcome.ok) sessionMemberCardFlow.cancel(conversationId);
   return true;
-}
-
-async function repliesToBridgeBot(msg) {
-  if (!msg.replyToMessageId) return false;
-  try {
-    const parent = await channel.fetchMessage(msg.replyToMessageId);
-    return parent?.senderIsBot === true || parent?.senderId === connectedBotOpenId;
-  } catch (error) {
-    log(`quoted message inspection unavailable: ${safeError(error)}`);
-    return false;
-  }
 }
 
 async function temporaryChatCwd(baseBinding) {
@@ -2122,6 +2334,7 @@ async function finishLongAnswerDocumentDelivery(record, media) {
 }
 
 async function processTurnProgress(record) {
+  if (completed.has(externalTurnDeliveryId(record.threadId, record.turnId))) return;
   if (!relaySettings.get(record.threadId).publicProgress) return;
   if (!channelConnectivity.connected) {
     log("public progress skipped while Feishu channel is disconnected");
@@ -2136,6 +2349,7 @@ async function processTurnProgress(record) {
     const current = await tryEnsureTurnStreamCard(record);
     if (current) {
       const updated = await streamCards.appendProgress(record.threadId, record.turnId, {
+        ...(record.kind === "subagent" ? { kind: "subagent", activityKey: "subagents" } : {}),
         sequence: record.sequence,
         text: record.text,
         createdAtMs: record.createdAtMs,
@@ -2149,9 +2363,15 @@ async function processTurnProgress(record) {
         log("public Codex progress updated in the original stream card");
         return;
       } catch (error) {
-        log(`stream card progress update failed; sending a fallback progress post: ${safeError(error)}`);
+        const recovery = record.kind === "subagent"
+          ? "keeping subagent status in the card only"
+          : "sending a fallback progress post";
+        log(`stream card progress update failed; ${recovery}: ${safeError(error)}`);
       }
     }
+    // Lifecycle status is a card panel, not a separate notification. A failed
+    // update stays durable in the card store for the clock refresh to retry.
+    if (record.kind === "subagent") return;
     await inspectBinding(binding);
     const deliveryId = `codex-progress:${record.threadId}:${record.turnId}:${record.itemId}`;
     const response = await channel.rawClient.im.message.create({
@@ -2178,6 +2398,29 @@ async function processTurnProgress(record) {
   } catch (error) {
     log(`public Codex progress was not delivered: ${safeError(error)}`);
   }
+}
+
+function turnStatusPorts() {
+  return {
+    streamCards,
+    updateCard: async (current) => {
+      if (!channelConnectivity.connected) throw new Error("Feishu status card transport unavailable");
+      await channel.updateCard(current.messageId, buildSessionStreamCard({
+        progress: current.progress,
+        executionStatus: current.executionStatus,
+        startedAtMs: current.createdAt,
+        nowMs: Date.now(),
+        timeZone: config.sessionRelay.displayTimeZone,
+      }));
+    },
+    persistTerminal: (current) => persistCompleted(externalTurnDeliveryId(current.threadId, current.turnId)),
+  };
+}
+
+async function processTurnStatus(record) {
+  if (completed.has(externalTurnDeliveryId(record.threadId, record.turnId))) return;
+  if (!resolveRelayBinding(record.chatId, record.threadId)) return;
+  await processSessionTurnStatus({ record, ensureCard: tryEnsureTurnStreamCard, ...turnStatusPorts() });
 }
 
 async function queueTurnDelivery(record, attachments, successLog) {
@@ -2330,18 +2573,24 @@ async function processCompletedTurn(record) {
   await streamCards.remove(record.threadId, record.turnId);
 }
 
+const feishuDnsBackup = process.env.FEISHU_DOH_BACKUP === "off" ? undefined : createFeishuDohBackup({
+  onEvent: (event) => log(event === "doh_resolved"
+    ? "Feishu DNS resolved via DoH backup"
+    : "Feishu DNS DoH backup unavailable"),
+});
 const channel = createLarkChannel({
   appId: config.appId,
   appSecret,
   transport: "websocket",
   httpTimeoutMs: config.httpTimeoutMs,
   handshakeTimeoutMs: config.handshakeTimeoutMs,
+  agent: feishuDnsBackup?.httpsAgent,
   policy: {
     dmMode: "allowlist",
-    dmAllowlist: activeBridgeOpenIds(),
-    groupAllowlist: config.sessionRelay.bindings.length > 0
-      ? config.sessionRelay.bindings.map(({ groupChatId }) => groupChatId)
-      : ["oc_no_configured_session_groups"],
+    dmAllowlist: directBridgeOpenIds(),
+    // Unbound groups are admitted only so the application layer can accept the
+    // exact /bind bootstrap command. handleChannelMessage drops everything else.
+    groupAllowlist: [],
     requireMention: false,
     respondToMentionAll: false,
     botLoopGuard: {
@@ -2371,6 +2620,10 @@ const channel = createLarkChannel({
   loggerLevel: "info",
   source: "codex-feishu-session-relay",
 });
+if (feishuDnsBackup) {
+  feishuDnsBackup.attachHttpClient(channel.rawClient.httpInstance);
+  log("Feishu DNS DoH backup enabled for Channel SDK HTTP and WebSocket");
+}
 
 const bindingProvisioner = feedGroupManager && sessionChatManager
   ? new SessionBindingProvisioner({
@@ -2404,6 +2657,20 @@ async function provisionSession(threadId, options) {
   if (!session) {
     throw new SessionRelayError("session_not_bindable", "The Codex task is outside the user's Session scope");
   }
+  const existing = (await bindingRegistry.list()).find((binding) => binding.threadId === threadId);
+  if (!existing) {
+    const prepared = await materializeSessionDraft({
+      session,
+      sessionStore,
+      createTarget: createSessionControllerTarget,
+      sandboxMode: effectiveSessionSandboxMode(relaySettings.get(threadId).sandboxMode, config.sandboxMode),
+    });
+    if (prepared.id !== threadId) {
+      session = prepared;
+      threadId = prepared.id;
+      log("initialized an unused Desktop draft as a durable native Session; original draft retained");
+    }
+  }
   return bindingProvisioner.provision(threadId, { ...options, ownerOpenId, session });
 }
 
@@ -2413,6 +2680,11 @@ const sessionAddFlow = new SessionAddFlow({
   createIndependent: createIndependentSession,
   createProject: createProjectSession,
   createWorkspaceProject,
+});
+const sessionGroupBindFlow = new SessionGroupBindFlow({
+  inspectGroup: inspectBindableGroup,
+  createIndependent: createIndependentSession,
+  provision: provisionSession,
 });
 const sessionMemberCardFlow = new SessionMemberCardFlow();
 
@@ -2505,14 +2777,98 @@ async function processBindingSetupMessage(msg, content, binding) {
     sessionAddFlow.cancel(conversationId);
     log(`Session binding setup failed: ${safeError(error)}`);
     try {
-      await channel.reply(msg, { markdown: publicBindingFailure(error) });
-      await persistCompleted(msg.messageId);
+      await replyFailure(msg, error, { bindingSetup: true });
     } catch (replyError) {
       log(`Session binding setup failure reply could not be delivered: ${safeError(replyError)}`);
     }
     return true;
   } finally {
     if (restart) await scheduleSelfRestart();
+  }
+}
+
+async function processSessionGroupBindMessage(msg, binding) {
+  if (msg.chatType !== "group") {
+    await channel.reply(msg, { markdown: "请先把 Bot 加入目标群，然后在该群发送 `/bind`。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (!sessionAccess.canDirectMessage(msg.senderId)) {
+    await channel.reply(msg, { markdown: "只有 Bridge Owner 或完整成员可以为群创建新的 Codex 上下文。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (binding) {
+    await channel.reply(msg, { markdown: "当前群已经有固定的 Codex 上下文，没有重复创建。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  let restart = false;
+  try {
+    const result = await sessionGroupBindFlow.execute({
+      chatId: msg.chatId,
+      actorOpenId: msg.senderId,
+    });
+    restart = result.restart;
+    if (!result.alreadyBound) {
+      bindingsByChat.set(result.binding.groupChatId, result.binding);
+      pendingBoundSessions.set(result.binding.threadId, result.session);
+    }
+    const inputMode = result.settings?.inputMode === "steer"
+      ? "steer（调整当前回答）"
+      : "queue（排队新 Turn）";
+    await channel.reply(msg, {
+      markdown: [
+        "### 已创建上下文并绑定",
+        "",
+        "- 已使用当前群名创建一个全新的独立 Codex Session",
+        "- 本群已成为该 Session 的固定上下文，不会复用其他聊天记录",
+        `- 普通消息默认：${inputMode}`,
+        "",
+        "绑定已立即生效。单人群可直接发消息；多人群请 `@Bot`、回复 Bot 或使用斜杠命令。",
+      ].join("\n"),
+    });
+    await persistCompleted(msg.messageId);
+    log("created and bound a fresh Codex Session for an existing Feishu group");
+  } catch (error) {
+    log(`existing group binding failed: ${safeError(error)}`);
+    await replyFailure(msg, error, { bindingSetup: true });
+  } finally {
+    if (restart) await scheduleSelfRestart();
+  }
+}
+
+async function processTodoMessage(msg, args) {
+  if (msg.chatType !== "p2p") {
+    await channel.reply(msg, { markdown: "请在与 Bot 的私聊中使用 `/todo` 创建个人飞书待办。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (msg.senderId !== config.agent.ownerOpenId) {
+    await channel.reply(msg, { markdown: "当前 Bridge 只连接了 Owner 的飞书任务账户；其他成员暂不能通过私聊创建待办。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  if (!feishuTaskManager) {
+    await channel.reply(msg, { markdown: "本机飞书 CLI 当前不可用，暂时无法创建待办。" });
+    await persistCompleted(msg.messageId);
+    return;
+  }
+  try {
+    const request = parseTodoRequest(args, {
+      timeZone: config.sessionRelay.displayTimeZone,
+    });
+    const task = await feishuTaskManager.create({
+      ...request,
+      idempotencyKey: todoIdempotencyKey(msg.messageId),
+    });
+    await channel.reply(msg, { markdown: formatTodoSuccess(task) });
+    await persistCompleted(msg.messageId);
+    log("created a personal Feishu task from a private todo command");
+  } catch (error) {
+    log(`private todo command failed: ${safeError(error)}`);
+    await channel.reply(msg, { markdown: publicTodoFailure(error) });
+    await persistCompleted(msg.messageId);
   }
 }
 
@@ -2530,6 +2886,15 @@ async function pollSessionBindingInbox() {
 
 async function processInboundMessage(msg, baseBinding) {
   try {
+    if (shouldIgnoreSessionGroupMessage(msg)) {
+      // Ignore before roster/network checks, temporary Chat creation, attachment
+      // downloads or passive archiving. These messages are not Codex inputs.
+      await persistCompleted(msg.messageId).catch((error) => {
+        log(`ignored group content deduplication deferred: ${safeError(error)}`);
+      });
+      log("ignored unsupported group content without replying");
+      return;
+    }
     let binding = resolveRelayBinding(msg.chatId);
     if (msg.rawContentType === "share_user") {
       await processMemberCardMessage(msg);
@@ -2537,6 +2902,15 @@ async function processInboundMessage(msg, baseBinding) {
     }
     if (msg.rawContentType === "text") {
       const rawContent = String(msg.content || "");
+      if (isSessionGroupBindCommand(rawContent)) {
+        await processSessionGroupBindMessage(msg, binding);
+        return;
+      }
+      const todoArgs = parseTodoInvocation(rawContent);
+      if (todoArgs !== undefined) {
+        await processTodoMessage(msg, todoArgs);
+        return;
+      }
       if (await processPendingMemberCardText(msg, rawContent)) return;
       const membersCommand = parseMembersCommand(rawContent);
       if (membersCommand) {
@@ -2613,20 +2987,48 @@ async function processInboundMessage(msg, baseBinding) {
     if (command) await processCommandMessage(msg, binding, command);
     else {
       const humanMemberCount = inspection?.humanMemberCount || 1;
+      let quoteError;
+      const quotedMessage = await fetchFeishuQuotedMessage(msg, channel).catch((error) => {
+        quoteError = error;
+        log("directly quoted message inspection unavailable");
+        return undefined;
+      });
       const addressed = isSessionPromptAddressed(msg, {
         humanMemberCount,
-        replyToBot: await repliesToBridgeBot(msg),
+        replyToBot: Boolean(quotedMessage && (quotedMessage.senderIsBot === true || quotedMessage.senderId === connectedBotOpenId)),
       });
       if (!addressed) {
-        log(`ignored normal group conversation message ${msg.messageId}`);
+        const passiveMessage = sanitizePassiveGroupMessage({
+          groupChatId: binding.groupChatId,
+          threadId: binding.threadId,
+          messageId: msg.messageId,
+          content,
+          contentType: msg.rawContentType,
+          resources: msg.resources,
+          receivedAtMs: Date.now(),
+        });
+        if (!passiveMessage) {
+          log("ignored an unaddressed group image or video");
+          return;
+        }
+        try {
+          const recorded = await summaryCoordinator?.recordGroupMessage(passiveMessage);
+          log(recorded
+            ? "queued an unaddressed group conversation message for the project archive"
+            : "ignored an unaddressed group conversation message because no project archive is linked");
+        } catch (error) {
+          log(`unaddressed group conversation could not be queued for the project archive: ${safeError(error)}`);
+        }
         return;
       }
-      if (hasResources) {
-        await pruneInboundAttachmentCache([msg.messageId])
+      if (quoteError) throw quoteError;
+      if (hasResources || quotedMessage?.resources?.length) {
+        await pruneInboundAttachmentCache([msg.messageId, quotedMessage?.messageId].filter(Boolean))
           .catch((error) => log(`inbound attachment cache cleanup deferred: ${safeError(error)}`));
       }
       const prompt = await prepareFeishuPrompt(msg, channel, inboundAttachmentStore, {
         enabled: config.sessionRelay.inboundAttachments.enabled,
+        quotedMessage,
       });
       if (prompt.text.length > config.maxInputChars) {
         throw new SessionRelayError("input_too_long", "Message exceeds the configured input limit");
@@ -2641,7 +3043,18 @@ async function processInboundMessage(msg, baseBinding) {
 async function handleChannelMessage(msg) {
   recoverChannelFromInbound();
   const binding = bindingsByChat.get(msg.chatId);
-  if (msg.senderIsBot !== false || !sessionAccess.isActive(msg.senderId)) return;
+  if (msg.senderIsBot !== false) return;
+  if (msg.chatType === "p2p" && !sessionAccess.canDirectMessage(msg.senderId)) return;
+  if (
+    msg.chatType === "group"
+    && !binding
+    && !sessionAccess.canDirectMessage(msg.senderId)
+  ) return;
+  if (
+    !binding
+    && msg.chatType === "group"
+    && !(msg.rawContentType === "text" && isSessionGroupBindCommand(msg.content))
+  ) return;
   if (
     completed.has(msg.messageId) ||
     inputLedger.has(msg.messageId) ||
@@ -2781,6 +3194,7 @@ try {
   summaryCoordinator?.stop();
   await sessionController?.stop().catch(() => {});
   await channel.disconnect().catch(() => {});
+  feishuDnsBackup?.close();
   await fs.rm(readyPath, { force: true });
   await fs.rm(pidPath, { force: true });
   await fs.rm(stopPath, { force: true });

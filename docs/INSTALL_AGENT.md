@@ -82,14 +82,14 @@ Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','By
 .\configure-feishu-app.ps1
 ```
 
-脚本从本机 Lark CLI 已验证 profile 取得应用身份，通过随机 loopback 跳转打开飞书官方模板确认页，不会在终端输出或在浏览器启动进程参数中携带 App ID。脚本先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试打开浏览器；自动打开失败时明确让用户打开该 URL。用户在一页确认 7 项应用/Bot 权限、4 项用户权限与 `im.message.receive_v1`；完整清单见 [飞书应用配置](FEISHU_APP_SETUP.md)。
+脚本从本机 Lark CLI 已验证 profile 取得应用身份，通过随机 loopback 跳转打开飞书官方模板确认页，不会在终端输出或在浏览器启动进程参数中携带 App ID。脚本先输出一个最多两分钟有效、不含 App ID 的临时本机 URL，再尝试打开浏览器；自动打开失败时明确让用户打开该 URL。用户在一页确认 7 项应用/Bot 权限、9 项用户权限与 `im.message.receive_v1`；完整清单见 [飞书应用配置](FEISHU_APP_SETUP.md)。
 
 Lark CLI 创建的新应用通常已默认启用 Bot、长连接和 `im.message.receive_v1`。标准流程不要再让用户逐页重复设置这些项。若飞书要求可用范围、版本发布或管理员审批，可用范围只加入当前安装用户，由用户本人提交，并在状态明确生效前暂停。
 
 然后完成当前用户 OAuth 与安全验证：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload,task:task:write"
 .\verify-feishu-app.ps1
 ```
 

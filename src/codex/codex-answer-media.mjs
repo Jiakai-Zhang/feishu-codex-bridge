@@ -5,6 +5,29 @@ import { basenameFsPath } from "../runtime/shared/fs-paths.mjs";
 const MARKDOWN_IMAGE_LINE = /^\s*!\[([^\]\r\n]*)\]\((.+)\)\s*$/;
 const MARKDOWN_LINK = /\[([^\]\r\n]*)\]\(([^)\r\n]+)\)/g;
 const VISUALIZE_DIRECTIVE_LINE = /^\s*::visualize\s*(\{[^\r\n]*\})\s*$/i;
+// Renderer attributes are not JSON. Preserve raw Windows backslashes and allow
+// braces inside quoted filenames; the fallback also hides malformed directives.
+const FILE_CITATION = /:codex-file-citation\{((?:[^{}"'\r\n]|"[^"\r\n]*"|'[^'\r\n]*')*)\}|:codex-file-citation\{[^\r\n]*/gi;
+
+function fileCitationPath(attributes) {
+  if (attributes === undefined) return undefined;
+  const attribute = /\s*([A-Za-z][\w-]*)\s*=\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)')/gy;
+  let cursor = 0;
+  let target;
+  while (cursor < attributes.length) {
+    if (!attributes.slice(cursor).trim()) break;
+    attribute.lastIndex = cursor;
+    const match = attribute.exec(attributes);
+    if (!match) return undefined;
+    if (match[1] === "path") {
+      if (target !== undefined) return undefined;
+      target = match[2] ?? match[3];
+    }
+    cursor = attribute.lastIndex;
+    if (cursor < attributes.length && !/\s/.test(attributes[cursor])) return undefined;
+  }
+  return normalizeCodexLocalAttachmentPath(target);
+}
 
 function safeDecodeURIComponent(value) {
   try { return decodeURIComponent(value); }
@@ -128,10 +151,17 @@ export function extractCodexAnswerMedia(value, { maxImages = 10, maxAttachments 
       continue;
     }
 
-    const imageMatch = line.match(MARKDOWN_IMAGE_LINE);
+    const citationSanitizedLine = line.replace(FILE_CITATION, (_full, attributes) => {
+      const attachmentPath = fileCitationPath(attributes);
+      if (!attachmentPath) return "（文件引用未能识别）";
+      const name = safeAttachmentName(undefined, attachmentPath);
+      addAttachment({ path: attachmentPath, name, source: "file-citation" });
+      return `📎 ${name}`;
+    });
+    const imageMatch = citationSanitizedLine.match(MARKDOWN_IMAGE_LINE);
     const localPath = imageMatch ? normalizeCodexLocalImagePath(imageMatch[2]) : undefined;
     if (!localPath) {
-      const sanitizedLine = line.replace(MARKDOWN_LINK, (full, label, target, offset, source) => {
+      const sanitizedLine = citationSanitizedLine.replace(MARKDOWN_LINK, (full, label, target, offset, source) => {
         if (offset > 0 && source[offset - 1] === "!") return full;
         const attachmentPath = normalizeCodexLocalAttachmentPath(target);
         if (!attachmentPath) return full;
