@@ -61,7 +61,7 @@ test("Desktop relay disable path removes dependency before official tasks", asyn
   assert.match(disableBody, /External guardians were left untouched/);
 });
 
-test("continuous watchdog clears the legacy pointer before restart and never republishes it", async () => {
+test("continuous watchdog clears pointer before restart and restores it after verification", async () => {
   const source = await readScript("start-at-login.ps1");
   const outageIndex = source.indexOf("if (-not $portListening)");
   const clearIndex = source.indexOf(
@@ -80,26 +80,27 @@ test("continuous watchdog clears the legacy pointer before restart and never rep
   assert.match(source, /\[int\]\$CheckIntervalSeconds = 3/);
   assert.match(source, /FeishuCodexBridgeDesktopRelayWatchdog-/);
   assert.match(source, /Another official Desktop relay watchdog[\s\S]*duplicate startup was ignored/);
-  assert.doesNotMatch(source, /SetEnvironmentVariable\(\$variableName, \$ExpectedUrl/);
-  assert.match(source, /launcher-process-only/);
+  assert.match(source, /SetEnvironmentVariable\(\$variableName, \$ExpectedUrl/);
+  assert.match(source, /Restored the Bridge-owned Desktop relay pointer/);
 });
 
-test("relay activation migrates the persistent dependency to process-only launcher handoff", async () => {
+test("relay activation preserves the persistent pointer for ordinary Desktop launches", async () => {
   const pointer = await readScript("desktop-relay-pointer.ps1");
   const configure = await readScript("configure-codex-desktop-relay.ps1");
   const launcher = await readScript("launch-codex-desktop-with-relay.ps1");
   const bootstrap = await readScript("desktop-relay-bootstrap.ps1");
   const doctor = await readScript("doctor.ps1");
-  assert.doesNotMatch(pointer, /SetEnvironmentVariable\(\$variableName, \$expected,/);
-  assert.match(configure, /pointerMode = 'process-only'/);
+  assert.match(pointer, /SetEnvironmentVariable\(\$variableName, \$expected,/);
+  assert.match(configure, /pointerMode = 'legacy-user'/);
   assert.match(configure, /-not \$appServerInfo\.Initialized/);
   assert.match(launcher, /Test-CodexAppServerInitialize -Url \$relayUrl/);
   assert.match(launcher, /if \(\$relayReady -and \$desktopPath\)/);
   assert.match(launcher, /local App Server/);
   assert.match(launcher, /finally \{[\s\S]*\$savedEnvironment/);
   assert.match(bootstrap, /Disable-OwnedDesktopRelayPointer\s+& \$startupScript/);
-  assert.match(doctor, /processOnlyPointerReady = \[string\]::IsNullOrWhiteSpace/);
-  assert.match(doctor, /pointerMode -eq 'process-only'/);
+  assert.match(doctor, /appServerMatches/);
+  assert.doesNotMatch(doctor, /pointerMode -eq 'process-only'/);
+  assert.match(launcher, /if \(-not \$relayReady\) \{[\s\S]*-Preparing/);
 });
 
 test("App Server readiness requires bounded WebSocket initialize, not just a listening port", async () => {

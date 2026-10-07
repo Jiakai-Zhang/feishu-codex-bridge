@@ -61,7 +61,7 @@ function Write-BridgeState {
         [Parameter(Mandatory)][bool]$BridgeEnabled
     )
     $State | Add-Member -NotePropertyName bridgeEnabled -NotePropertyValue $BridgeEnabled -Force
-    $State | Add-Member -NotePropertyName pointerMode -NotePropertyValue 'process-only' -Force
+    $State | Add-Member -NotePropertyName pointerMode -NotePropertyValue 'legacy-user' -Force
     $temporaryPath = "$statePath.$PID.$([guid]::NewGuid().ToString('N')).tmp"
     try {
         [IO.File]::WriteAllText(
@@ -118,8 +118,8 @@ if (-not [string]::IsNullOrWhiteSpace($current) -and $current -ne $expected) {
 }
 
 Write-BridgeState -State $relayState -BridgeEnabled $true
-if ($current -eq $expected) {
-    [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+if ($current -ne $expected) {
+    [Environment]::SetEnvironmentVariable($variableName, $expected, [EnvironmentVariableTarget]::User)
     Send-EnvironmentChanged
 }
-Write-Output 'Desktop relay recovery is enabled; the relay address is launcher-process-only.'
+Write-Output 'Codex Desktop relay pointer enabled for the running Bridge.'

@@ -135,9 +135,9 @@ OAuth 命令同样需要将当次 verification URL 原样交给用户，不输�
 .\launch-codex-desktop-with-relay.ps1 -Proxy http://127.0.0.1:7897
 ```
 
-先让用户完全退出 Desktop，再从仓库目录的独立 PowerShell 运行唯一选定的命令。启动器只将代理应用到 Desktop 和共享 App Server；Bridge、Channel、watchdog 与飞书 CLI 保持直连。它会验证 App Server 拥有权、真实 WebSocket `initialize` 握手、Scheduled Task watchdog 和同一 activation 的新鲜 heartbeat，再仅向 Desktop 子进程传入 relay 地址；共享服务失败时清理旧的 Bridge-owned pointer，并继续以 Desktop 自己的本地 App Server 启动。
+先让用户完全退出 Desktop，再从仓库目录的独立 PowerShell 运行唯一选定的命令。启动器只将代理应用到 Desktop 和共享 App Server；Bridge、Channel、watchdog 与飞书 CLI 保持直连。它会验证 App Server 拥有权、真实 WebSocket `initialize` 握手、Scheduled Task watchdog 和同一 activation 的新鲜 heartbeat，再保存用户级 relay 地址供普通启动使用，并向 Desktop 子进程传入该地址；共享服务失败时清理旧的 Bridge-owned pointer，并继续以 Desktop 自己的本地 App Server 启动。
 
-用户级 `CODEX_APP_SERVER_WS_URL` 不再长期保存，避免 Store 更新/系统自动启动 Desktop 早于 watchdog 时无法打开。开始菜单或 Store 自动重启使用 Desktop 自己的本地服务；需要与飞书连接同一活动 Session 时，退出 Desktop 后使用上述 Bridge launcher。不会暂时修改用户级环境变量来影响 Explorer/MSIX 激活：有可验证的包内可执行文件时直接注入子进程环境，否则 Explorer 回退只保证本地启动，不保证共享 relay 连接。
+共享服务验证通过后，用户级 `CODEX_APP_SERVER_WS_URL` 会持久保存，普通启动 Codex Desktop 也可接入同一 shared relay。首次恢复此设置后需完整退出 Desktop，再从原入口重新打开；已运行的进程不会自动切换。watchdog 在服务故障或 Bridge 停止时清理本安装的地址，恢复并验证服务后重新发布；不会覆盖其他安装的地址。专用启动器仍可使用，健康启动不会清除持久地址。
 
 隔离的 `-Proxy` 模式需要可验证的 Desktop 可执行文件。Win32 安装直接使用其可执行文件；packaged Desktop 则从 `Get-AppxPackage OpenAI.Codex` 与 `AppxManifest.xml` 动态解析当前包内的真实 `ChatGPT.exe`，并仅向该进程注入 loopback 代理。清单或可执行文件无法验证时安全停止，不修改系统或用户全局代理。
 

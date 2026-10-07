@@ -233,11 +233,13 @@ try {
 } catch {
     Write-Warning 'Shared relay activation failed; launching Desktop with its own local App Server.'
 }
-# Also clear a legacy owned pointer on failure, without touching other setups.
-try {
-    & (Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1') -Url $relayUrl -Preparing | Out-Null
-} catch {
-    Write-Warning 'Could not migrate the owned legacy pointer; this Desktop child will still use a process-isolated environment.'
+# Clear the owned pointer only if activation failed.
+if (-not $relayReady) {
+    try {
+        & (Join-Path $PSScriptRoot 'desktop-relay-pointer.ps1') -Url $relayUrl -Preparing | Out-Null
+    } catch {
+        Write-Warning 'Could not clear the unavailable relay pointer; this Desktop child will still use a process-isolated environment.'
+    }
 }
 
 $environmentNames = @('CODEX_APP_SERVER_WS_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
