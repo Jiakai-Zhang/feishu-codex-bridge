@@ -428,6 +428,21 @@ test("emits only completed commentary items as public progress and deduplicates 
   assert.equal(JSON.stringify(progress).includes("secret"), false);
 });
 
+test("public progress carries its initial prompt identity for queue-card handoff", async () => {
+  const progress = [];
+  const collector = new CodexTurnCollector({ targets: [target], onTurnProgress: (record) => progress.push(record) });
+  collector.handleNotification("turn/started", {
+    threadId: "thread-id",
+    turn: { id: "turn-queue", status: "inProgress", items: [userItem("om_queued")] },
+  });
+  collector.handleNotification("item/completed", {
+    threadId: "thread-id", turnId: "turn-queue",
+    item: { id: "commentary-queued", type: "agentMessage", phase: "commentary", text: "正在处理" },
+  });
+  assert.equal(progress.length, 1);
+  assert.equal(progress[0].clientId, "om_queued");
+});
+
 test("continues progress numbering from commentary already present in an active reconnect snapshot", async () => {
   const progress = [];
   const collector = new CodexTurnCollector({

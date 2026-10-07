@@ -83,7 +83,7 @@
 
 6. 在创建应用前，向用户一次性说明并取得明确批准。批准范围包括：
    - 创建一个新的专用企业自建应用，应用展示名称精确使用第 1 步取得的系统电脑名称；
-   - 用官方应用模板添加 7 项应用/Bot 权限、4 项用户权限和 im.message.receive_v1；
+   - 用官方应用模板添加 7 项应用/Bot 权限、9 项用户权限和 im.message.receive_v1；
    - 在飞书要求时提交应用版本并等待管理员审批。
 
    用户明确回复“批准创建并配置”后，运行：
@@ -128,6 +128,7 @@
    - docx:document:create
    - drive:file:upload
    - docx:document:write_only
+   - task:task:write
    - docx:document:readonly
 
    事件（1 项）：
@@ -141,12 +142,12 @@
    - 在状态明确为已发布/已生效前暂停等待。
 
 9. 完成当前用户 OAuth：
-   ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
+   ./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload,task:task:write"
 
    浏览器授权必须由用户本人确认。与第 6 步相同，CLI 一旦输出 verification URL，必须将该 URL 原样作为可点击备用链接交给用户并暂停；不输出 device code 或原始 JSON，不重跑令已交付 URL 失效的登录命令。授权完成后运行：
    ./verify-feishu-app.sh
 
-   该验证器只输出不含身份标识的安全摘要。macOS 飞书 CLI 入口必须自动移除当前 Codex/Desktop 进程继承的 HTTP/HTTPS/ALL proxy 变量，使飞书身份与事件校验保持直连；不得要求用户临时修改已保存的 Desktop 代理。只有输出 ok=true，且应用、Bot、用户身份、七项用户 OAuth scope、消息事件发布状态和消息事件所需权限均通过，才能继续。不得运行后再把原始 auth status 或 event dry-run JSON 粘贴到聊天、Issue 或日志。
+   该验证器只输出不含身份标识的安全摘要。macOS 飞书 CLI 入口必须自动移除当前 Codex/Desktop 进程继承的 HTTP/HTTPS/ALL proxy 变量，使飞书身份与事件校验保持直连；不得要求用户临时修改已保存的 Desktop 代理。只有输出 ok=true，且应用、Bot、用户身份、九项用户 OAuth scope、消息事件发布状态和消息事件所需权限均通过，才能继续。不得运行后再把原始 auth status 或 event dry-run JSON 粘贴到聊天、Issue 或日志。
 
 10. 运行：
     ./install.sh --skip-dependency-install

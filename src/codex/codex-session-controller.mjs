@@ -1,5 +1,6 @@
 import { CodexTurnCollector } from "./codex-turn-collector.mjs";
 import { CodexAppServerConnection } from "./codex-app-server-connection.mjs";
+import { codexTurnFailureReason } from "./codex-turn-failure.mjs";
 import { buildCodexPromptInput } from "../feishu/feishu-inbound-attachment.mjs";
 import {
   createCodexAppAutomationToolConfig,
@@ -49,6 +50,17 @@ function findActiveTurn(thread) {
     if (turns[index]?.status === "inProgress" && turns[index]?.id) return turns[index];
   }
   return undefined;
+}
+
+function isReadyForNewPrompt(thread) {
+  const type = statusType(thread?.status);
+  if (type === "idle") return true;
+  if (type !== "systemError" || findActiveTurn(thread)) return false;
+  const lastTurn = thread?.turns?.at(-1);
+  // A terminal model transport failure is not an active turn. Only start a
+  // new user input here; never replay the failed input or reset its history.
+  // Keep unknown, authentication, quota and other system errors fail-closed.
+  return lastTurn?.status === "failed" && codexTurnFailureReason(lastTurn.error) === "network";
 }
 
 function findClientInput(thread, clientUserMessageId) {
@@ -181,6 +193,7 @@ export class CodexSessionController {
     sandboxModeForThread,
     onTurnCompleted,
     onTurnProgress,
+    onTurnStatus,
     WebSocketImpl = globalThis.WebSocket,
     requestTimeoutMs = 30_000,
     reconnectDelayMs = 2_000,
@@ -197,6 +210,9 @@ export class CodexSessionController {
     this.sandboxModeForThread = sandboxModeForThread;
     this.onTurnCompleted = onTurnCompleted;
     this.onTurnProgress = onTurnProgress;
+    this.onTurnStatus = onTurnStatus;
+    this.turnStatuses = new Map();
+    this.statusSnapshots = new Map();
     this.WebSocketImpl = WebSocketImpl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.reconnectDelayMs = reconnectDelayMs;
@@ -274,6 +290,10 @@ export class CodexSessionController {
       cwd: normalizedCwd,
       approvalPolicy: "never",
       sandbox: sandboxMode,
+      // Desktop draft rows may use a paginated history contract that cannot
+      // yet be resumed without a source rollout. Bridge-created tasks must
+      // have a durable, compatible native history before binding/reloading.
+      historyMode: "legacy",
       serviceName: "feishu-codex-session-relay",
       ...(dynamicTools ? { dynamicTools } : {}),
     });
@@ -405,7 +425,19 @@ export class CodexSessionController {
     }
     const state = this.states.get(String(params?.threadId || ""));
     if (state?.hydrationError) await this.#hydrateState(connection, state);
-    return connection.request(method, params);
+    try {
+      return await connection.request(method, params);
+    } catch (error) {
+      if (method === "thread/read" && error?.code === "codex_app_server_timeout" &&
+          this.connection === connection && !this.stopped) {
+        // A half-open socket can remain "ready" while reads never answer.
+        // Reconnect only this client; never restart the server or its tasks.
+        this.connection = undefined;
+        connection.close(error);
+        this.#markDisconnected();
+      }
+      throw error;
+    }
   }
 
   async #requestPrompt(method, params, prompt) {
@@ -426,6 +458,16 @@ export class CodexSessionController {
       }
     }, this.reconnectDelayMs);
     this.reconnectTimer.unref?.();
+  }
+
+  #markDisconnected() {
+    this.statusSnapshots.clear();
+    this.disconnectedAtMs = this.disconnectedAtMs || Date.now();
+    this.log("Codex session controller disconnected; reconnect scheduled");
+    for (const state of this.states.values()) {
+      if (state.activeTurnId) this.#publishTurnStatus(state, state.activeTurnId, { type: "reconnecting" });
+    }
+    this.#scheduleReconnect();
   }
 
   async #connect() {
@@ -452,9 +494,7 @@ export class CodexSessionController {
       onClose: ({ intentional }) => {
         if (this.connection === connection) this.connection = undefined;
         if (!intentional && !this.stopped && this.hasConnected) {
-          this.disconnectedAtMs = Date.now();
-          this.log("Codex session controller disconnected; reconnect scheduled");
-          this.#scheduleReconnect();
+          this.#markDisconnected();
         }
       },
     });
@@ -522,6 +562,7 @@ export class CodexSessionController {
   }
 
   async #hydrateStateOnce(connection, state, { catchUpAfterMs } = {}) {
+    const observedTurnId = state.activeTurnId;
     const result = await connection.request("thread/resume", this.#sandboxResumeParams(state));
     if (result?.thread?.id !== state.target.threadId) {
       throw new Error("Codex session controller resumed a different task than its binding");
@@ -539,6 +580,17 @@ export class CodexSessionController {
       this.log(`could not hydrate goal state for ${state.target.threadId}: ${error instanceof Error ? error.name : "unknown"}`);
     }
     this.collector.seedThread(snapshot?.thread, { catchUpAfterMs });
+    if (observedTurnId) {
+      const turn = snapshot?.thread?.turns?.find(({ id }) => id === observedTurnId);
+      if (turn?.status === "failed" || turn?.status === "interrupted") {
+        this.#publishTurnStatus(state, turn.id, {
+          type: turn.status,
+          reason: codexTurnFailureReason(turn.error),
+        });
+      } else if (turn?.status === "inProgress") {
+        this.#publishTurnStatus(state, turn.id, { type: "running" });
+      }
+    }
   }
 
   #applyResume(state, result) {
@@ -582,15 +634,32 @@ export class CodexSessionController {
         state.activeTurnStartedAt = undefined;
       }
     } else if (method === "turn/started") {
+      this.statusSnapshots.delete(params.threadId);
       state.activeTurnId = params.turn?.id || state.activeTurnId;
       state.activeTurnStartedAt = params.turn?.startedAt ?? state.activeTurnStartedAt;
       state.status = { type: "active", activeFlags: [] };
     } else if (method === "turn/completed") {
+      this.statusSnapshots.delete(params.threadId);
       state.lastTurn = clone(params.turn);
       if (!state.activeTurnId || state.activeTurnId === params.turn?.id) {
         state.activeTurnId = undefined;
         state.activeTurnStartedAt = undefined;
-        state.status = { type: "idle" };
+        state.status = { type: params.turn?.status === "failed" ? "systemError" : "idle" };
+      }
+      if (["failed", "interrupted"].includes(params.turn?.status)) {
+        this.#publishTurnStatus(state, params.turn.id, {
+          type: params.turn.status,
+          reason: codexTurnFailureReason(params.turn.error),
+        });
+      }
+    } else if (method === "error" && params.willRetry === true) {
+      this.#publishTurnStatus(state, params.turnId || state.activeTurnId, {
+        type: "retrying", reason: codexTurnFailureReason(params.error),
+      });
+    } else if (method === "item/started" || method === "item/completed" || method.endsWith("/delta")) {
+      // Public status only: never copy reasoning text or tool payloads.
+      if (params.turnId === state.activeTurnId) {
+        this.#publishTurnStatus(state, params.turnId, { type: "running" });
       }
     } else if (method === "thread/settings/updated") {
       state.settings = clone(params.threadSettings) || state.settings;
@@ -602,6 +671,51 @@ export class CodexSessionController {
     } else if (method === "thread/goal/cleared") {
       state.goal = null;
     }
+  }
+
+  #publishTurnStatus(state, turnId, status) {
+    if (!turnId || typeof this.onTurnStatus !== "function") return;
+    const key = `${state.target.threadId}:${turnId}`;
+    const previous = this.turnStatuses.get(key);
+    if (previous?.type === "failed" || previous?.type === "interrupted") return;
+    if (previous?.type === status.type && previous?.reason === status.reason) return;
+    this.turnStatuses.set(key, status);
+    if (this.turnStatuses.size > 10_000) this.turnStatuses.delete(this.turnStatuses.keys().next().value);
+    const record = Object.freeze({
+      threadId: state.target.threadId, turnId, chatId: state.target.chatId,
+      executionStatus: Object.freeze({ ...status, updatedAtMs: Date.now() }),
+    });
+    Promise.resolve(this.onTurnStatus(record)).catch((error) => {
+      this.log(`turn status callback deferred: ${error instanceof Error ? error.name : "unknown"}`);
+    });
+  }
+
+  async readTurnExecutionStatus(threadId, turnId, { maxAgeMs = 0 } = {}) {
+    let cached = this.statusSnapshots.get(threadId);
+    if (!cached || Date.now() - cached.createdAtMs >= maxAgeMs) {
+      cached = { createdAtMs: Date.now(), promise: this.#readThread(threadId, true) };
+      this.statusSnapshots.set(threadId, cached);
+      // Cache failures too: multiple stale cards must not create a tight RPC
+      // retry loop for a missing or temporarily unavailable Session.
+      cached.promise.catch(() => {});
+    }
+    const thread = await cached.promise;
+    const turn = thread.turns?.find(({ id }) => id === turnId);
+    if (!turn || !["failed", "interrupted", "inProgress", "completed"].includes(turn.status)) return undefined;
+    const hasAnswer = (turn.items || []).some((item) =>
+      String(item?.text || "").trim() &&
+      (item.type === "plan" || (item.type === "agentMessage" && item.phase !== "commentary")));
+    if (turn.status === "completed" && hasAnswer) {
+      // Catch up only this existing card's turn, not unrelated old history.
+      // The collector and output ledger retain their normal deduplication.
+      this.collector.handleNotification("turn/completed", { threadId, turn });
+    }
+    return Object.freeze({
+      type: turn.status === "inProgress" ? "running" : turn.status,
+      ...(turn.status === "completed" ? { hasAnswer } : {}),
+      ...(["failed", "interrupted"].includes(turn.status) ? { reason: codexTurnFailureReason(turn.error) } : {}),
+      updatedAtMs: Date.now(),
+    });
   }
 
   async #emitCompletedTurn(record) {
@@ -700,7 +814,7 @@ export class CodexSessionController {
           }
         }
         const firstSnapshot = await this.#readThread(threadId, true);
-        if (statusType(firstSnapshot.status) === "systemError") {
+        if (statusType(firstSnapshot.status) === "systemError" && !isReadyForNewPrompt(firstSnapshot)) {
           throw controllerError("session_system_error", "The bound Codex task is in a system error state");
         }
         const active = findActiveTurn(firstSnapshot);
@@ -725,12 +839,12 @@ export class CodexSessionController {
                 throw controllerError("session_busy", "The active Codex turn changed while steering", { cause: retryError });
               }
             }
-            if (statusType(secondSnapshot.status) !== "idle") throw steerError;
+            if (!isReadyForNewPrompt(secondSnapshot)) throw steerError;
             const started = await this.#startTurn(state, prompt, client);
             return Object.freeze({ kind: "started", turnId: started, boundaryChanged: true });
           }
         }
-        if (statusType(firstSnapshot.status) !== "idle") {
+        if (!isReadyForNewPrompt(firstSnapshot)) {
           throw controllerError("session_busy", `The bound Codex task is not ready (${statusType(firstSnapshot.status)})`);
         }
         const started = await this.#startTurn(state, prompt, client);
@@ -761,16 +875,16 @@ export class CodexSessionController {
         const snapshot = await this.#readThread(threadId, true);
         const accepted = findClientInput(snapshot, clientId);
         if (accepted) return queuedPromptAcceptance(accepted);
-        if (statusType(snapshot.status) === "systemError") {
-          throw controllerError("session_system_error", "The bound Codex task is in a system error state");
-        }
         const active = findActiveTurn(snapshot);
         if (active || statusType(snapshot.status) === "active") {
           return Object.freeze({ kind: "waiting", reason: "turn_active", turnId: active?.id || state.activeTurnId });
         }
+        if (statusType(snapshot.status) === "systemError" && !isReadyForNewPrompt(snapshot)) {
+          throw controllerError("session_system_error", "The bound Codex task is in a system error state");
+        }
         const goal = await this.getGoal(threadId, { refresh: true });
         if (isGoalRunning(goal)) return Object.freeze({ kind: "waiting", reason: "goal_active" });
-        if (statusType(snapshot.status) !== "idle") {
+        if (!isReadyForNewPrompt(snapshot)) {
           return Object.freeze({ kind: "waiting", reason: `session_${statusType(snapshot.status)}` });
         }
         try {

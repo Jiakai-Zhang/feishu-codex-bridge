@@ -33,7 +33,7 @@ export class SessionMemberCardFlow {
       reply: [
         "### 已读取成员名片",
         "",
-        "请回复该成员使用的一级目录名。目录名不能包含空格或路径分隔符。",
+        "如果该成员只需在群里 @Bot，请回复 `/group`；如果还需要 Bot 私聊和个人 Project，请回复该成员使用的一级目录名。",
         "",
         "发送 `/cancel` 取消；重新发送另一张名片会替换当前选择。",
       ].join("\n"),
@@ -48,6 +48,18 @@ export class SessionMemberCardFlow {
       return { handled: true, reply: "已取消通过用户名片登记成员。" };
     }
     if (!this.has(conversationId)) return { handled: false };
+    if (/^\/group(?:@[^\s]+)?$/i.test(content)) {
+      const state = this.states.get(conversationId);
+      if (state.actorOpenId !== actorOpenId) {
+        return { handled: true, reply: "这个成员登记流程属于另一名用户。" };
+      }
+      state.updatedAtMs = this.now();
+      return {
+        handled: true,
+        action: "allow",
+        target: { ...state.target },
+      };
+    }
     if (content.startsWith("/")) {
       this.states.delete(conversationId);
       return { handled: false };

@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { SessionPromptQueue } from "../../../src/persistence/session-prompt-queue.mjs";
 import {
   buildSessionStreamCard,
   buildSessionStreamCardFollowups,
@@ -147,6 +148,61 @@ test("builds one updateable progress card from public commentary", () => {
   assert.doesNotMatch(JSON.stringify(card), /reasoning|tool output/i);
 });
 
+test("subagent lifecycle status never falls back to a standalone timestamped post", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function processTurnProgress(");
+  const end = source.indexOf("async function queueTurnDelivery(", start);
+  assert.ok(start >= 0 && end > start);
+  const createHandler = new Function(
+    "relaySettings", "channelConnectivity", "resolveRelayBinding", "log",
+    "tryEnsureTurnStreamCard", "streamCards", "channel", "buildSessionStreamCard",
+    "safeError", "inspectBinding", "buildSessionProgressPost", "config", "deliveryIdempotencyKey",
+    "completed", "externalTurnDeliveryId",
+    `${source.slice(start, end)}\nreturn processTurnProgress;`,
+  );
+  for (const kind of ["subagent", undefined]) {
+    for (const scenario of ["success", "failed-update", "missing-card", "offline", "disabled"]) {
+      const posts = [];
+      const savedProgress = [];
+      const updates = [];
+      const handler = createHandler(
+        { get: () => ({ publicProgress: scenario !== "disabled" }) },
+        { connected: scenario !== "offline" }, () => ({ chatId: "chat-fixture" }), () => {},
+        async () => scenario === "missing-card" ? undefined : { messageId: "card-fixture" },
+        { appendProgress: async (_threadId, _turnId, progress) => {
+          savedProgress.push(progress);
+          return { messageId: "card-fixture", progress: [progress], createdAt: 100 };
+        } },
+        {
+          updateCard: async (_id, card) => {
+            updates.push(card);
+            if (scenario === "failed-update") throw new Error("card temporarily unavailable");
+          },
+          rawClient: { im: { message: { create: async post => { posts.push(post); return { code: 0 }; } } } },
+        },
+        buildSessionStreamCard, () => "card temporarily unavailable", async () => {},
+        ({ text }) => ({ zh_cn: { content: [[{ tag: "md", text }]] } }),
+        { sessionRelay: { displayTimeZone: "Asia/Shanghai" }, maxReplyChars: 4000 }, () => "uuid-fixture",
+        new Set(), () => "delivery-fixture",
+      );
+      await handler({
+        kind, threadId: "thread-fixture", turnId: "turn-fixture", chatId: "chat-fixture",
+        itemId: "item-fixture", sequence: 1, createdAtMs: 100,
+        text: kind === "subagent" ? "子 agent 协作状态\n子 agent #1：已完成" : "正在汇总结果",
+      });
+      const fallbackExpected = kind !== "subagent" && ["failed-update", "missing-card"].includes(scenario);
+      assert.equal(posts.length, fallbackExpected ? 1 : 0, `${kind}: ${scenario}`);
+      const cardExpected = ["success", "failed-update"].includes(scenario);
+      assert.equal(savedProgress.length, cardExpected ? 1 : 0, `${kind}: ${scenario}`);
+      assert.equal(updates.length, cardExpected ? 1 : 0, `${kind}: ${scenario}`);
+      if (kind === "subagent" && cardExpected) {
+        assert.equal(savedProgress[0].kind, "subagent");
+        assert.match(JSON.stringify(updates[0]), /子 agent #1：已完成/);
+      }
+    }
+  }
+});
+
 test("preserves markdown and images when the same card becomes the final answer", () => {
   const card = buildSessionStreamCard({
     answerSegments: [
@@ -168,6 +224,115 @@ test("preserves markdown and images when the same card becomes the final answer"
     alt: { tag: "plain_text", content: "Codex 回复中的图片" },
   });
   assert.match(card.body.elements.at(-1).content, /12,345/);
+});
+
+test("queue acknowledgement is absorbed by progress and final content", () => {
+  const queued = { position: 2 };
+  const waiting = buildSessionStreamCard({ queued });
+  assert.equal(waiting.schema, "2.0");
+  assert.equal(waiting.config.update_multi, true);
+  assert.match(JSON.stringify(waiting), /当前排位：2/);
+  assert.match(JSON.stringify(waiting), /settings input steer/);
+  assert.doesNotMatch(JSON.stringify(waiting), /已处理/);
+  const working = buildSessionStreamCard({ queued, progress: [{ sequence: 1, text: "正在读取配置" }] });
+  assert.match(JSON.stringify(working), /正在读取配置/);
+  assert.doesNotMatch(JSON.stringify(working), /下一轮队列|当前排位|settings input/);
+  const done = buildSessionStreamCard({ queued, answer: "完成" });
+  assert.doesNotMatch(JSON.stringify(done), /下一轮队列|当前排位|settings input/);
+  assert.match(JSON.stringify(buildSessionStreamCard({ queued: { cancelled: true } })), /已取消排队/);
+});
+
+test("hands queued cards to the accepted turn durably and idempotently", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "queued-stream-card-"));
+  const filePath = path.join(directory, "cards.json");
+  const store = await SessionStreamCardStore.open(filePath);
+  await store.start({
+    threadId: "thread-a", turnId: "queued:input-a", chatId: "chat-a",
+    messageId: "card-a", sourceMessageId: "input-a", queued: { position: 2 }, createdAt: 100,
+  });
+  await store.start({
+    threadId: "thread-a", turnId: "queued:input-b", chatId: "chat-a",
+    messageId: "card-b", sourceMessageId: "input-b", queued: { position: 3 }, createdAt: 200,
+  });
+  const reopened = await SessionStreamCardStore.open(filePath);
+  await reopened.updateQueued("thread-a", "queued:input-a", { position: 1 });
+  const accepted = await reopened.handoffQueued("thread-a", "input-a", "turn-a", { startedAtMs: 500 });
+  assert.equal(accepted.messageId, "card-a");
+  assert.equal(accepted.createdAt, 500);
+  assert.equal(accepted.queued, undefined);
+  assert.equal(reopened.get("thread-a", "queued:input-a"), undefined);
+  assert.equal(reopened.get("thread-a", "queued:input-b").messageId, "card-b");
+  await reopened.appendProgress("thread-a", "turn-a", { sequence: 1, text: "working" });
+  const recovered = await SessionStreamCardStore.open(filePath);
+  const retry = await recovered.handoffQueued("thread-a", "input-a", "turn-a", { startedAtMs: 999 });
+  assert.equal(retry.messageId, "card-a");
+  assert.equal(retry.createdAt, 500);
+  assert.equal(retry.progress.length, 1);
+  assert.equal(await recovered.handoffQueued("thread-other", "input-b", "turn-b"), undefined);
+  assert.equal(await recovered.handoffQueued("thread-a", "missing", "turn-b"), undefined);
+  assert.equal(await recovered.handoffQueued("thread-a", "input-b", "queued:input-b"), undefined);
+});
+
+test("queue acknowledgements use the card before dispatch and suppress separate command replies", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  assert.match(source, /afterPersist: async[\s\S]*tryEnsureQueuedStreamCard/);
+  assert.match(source, /if \(!queued\.acknowledgedByCard\) await queueDelivery/);
+  assert.match(source, /if \(!queueAcknowledgedByCard\) await queueDelivery/);
+  assert.match(source, /sourceMessageId: queued\.messageId/);
+  assert.match(source, /sourceMessageId \|\| clientId \|\| inputLedger\.findTurnInitiator/);
+  assert.match(source, /handoffQueued\(threadId, source, turnId\)/);
+  assert.match(source, /serializeStreamCardStart\(record\.threadId/);
+});
+
+test("dispatch waits for the queue card and early progress can hand it off before acceptance", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "queue-card-dispatch-"));
+  const cards = await SessionStreamCardStore.open(path.join(directory, "cards.json"));
+  let releaseCard;
+  let cardStarted;
+  const gate = new Promise((resolve) => { releaseCard = resolve; });
+  const started = new Promise((resolve) => { cardStarted = resolve; });
+  let submissions = 0;
+  const queue = await SessionPromptQueue.open(path.join(directory, "queue.json"), {
+    getController: () => ({
+      startQueuedPrompt: async ({ sessionThreadId, threadId, clientUserMessageId }) => {
+        submissions++;
+        // Commentary can arrive before turn/start's response and onAccepted.
+        const card = await cards.handoffQueued(sessionThreadId || threadId, clientUserMessageId, "turn-a");
+        assert.equal(card.messageId, "card-a");
+        await cards.appendProgress("thread-a", "turn-a", { sequence: 1, text: "working" });
+        return { kind: "started", turnId: "turn-a" };
+      },
+    }),
+    onAccepted: async (queued, result) => {
+      const card = await cards.handoffQueued(queued.sessionThreadId, queued.messageId, result.turnId);
+      assert.equal(card.messageId, "card-a");
+      assert.equal(card.progress.length, 1);
+    },
+  });
+  const enqueuing = queue.enqueue({
+    messageId: "input-a", sessionThreadId: "thread-a", chatId: "chat-a", text: "work",
+  }, {
+    afterPersist: async () => {
+      cardStarted();
+      await gate;
+      await cards.start({
+        threadId: "thread-a", turnId: "queued:input-a", chatId: "chat-a",
+        messageId: "card-a", sourceMessageId: "input-a", queued: { position: 1 },
+      });
+    },
+  });
+  await started;
+  const dispatching = queue.dispatch("thread-a");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(submissions, 0);
+  releaseCard();
+  await enqueuing;
+  await dispatching;
+  assert.equal(submissions, 1);
+  assert.equal(cards.list().length, 1);
+  assert.equal(queue.count("thread-a"), 0);
+  const recovered = await SessionStreamCardStore.open(path.join(directory, "cards.json"));
+  assert.equal(recovered.get("thread-a", "turn-a").messageId, "card-a");
 });
 
 test("unwraps heartbeat XML when a progress card becomes the final answer", () => {
@@ -248,6 +413,41 @@ test("refreshes the active stream-card clock every three seconds without racing 
   assert.match(source, /setInterval\(refreshActiveStreamCardClocks, STREAM_CARD_CLOCK_REFRESH_MS\)/);
   assert.match(source, /enqueueTurnOutput\(record\.threadId,[\s\S]*status\?\.activeTurnId !== current\.turnId/);
   assert.match(source, /progress: current\.progress,[\s\S]*startedAtMs: current\.createdAt,[\s\S]*nowMs: Date\.now\(\)/);
-  assert.match(source, /record\.turnId\.startsWith\("queued:"\)/);
+  assert.match(source, /current\.turnId\.startsWith\("queued:"\)/);
   assert.match(source, /clearInterval\(streamCardClockTimer\)/);
+});
+
+test("terminal cards stop showing active progress clocks and never render native error details", () => {
+  for (const type of ["failed", "interrupted", "completed"]) {
+    const card = buildSessionStreamCard({
+      executionStatus: { type, reason: "network", updatedAtMs: Date.now(), message: "private native payload" },
+      startedAtMs: 1, nowMs: 999999,
+      progress: [{ sequence: 1, text: "saved checkpoint" }],
+    });
+    const rendered = JSON.stringify(card);
+    assert.match(rendered, /继续/);
+    assert.match(rendered, /saved checkpoint/);
+    assert.doesNotMatch(rendered, /正在处理|已处理|private native payload/);
+  }
+});
+
+test("reconnecting and native retry status have explicit nonterminal notices", () => {
+  assert.match(JSON.stringify(buildSessionStreamCard({ executionStatus: { type: "reconnecting" } })), /自动重连/);
+  assert.match(JSON.stringify(buildSessionStreamCard({ executionStatus: { type: "retrying" } })), /自动重试/);
+  assert.match(JSON.stringify(buildSessionStreamCard({ executionStatus: { type: "failed", reason: "capacity" } })), /capacity/);
+  assert.doesNotMatch(JSON.stringify(buildSessionStreamCard({ executionStatus: { type: "failed", reason: "authentication" } })), /自动重试/);
+});
+
+test("optional execution status is backward compatible and persists only whitelisted data", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "session-stream-status-"));
+  const file = path.join(directory, "cards.json");
+  const store = await SessionStreamCardStore.open(file);
+  await store.start({ threadId: "thread", turnId: "turn", chatId: "chat", messageId: "card" });
+  assert.equal((await SessionStreamCardStore.open(file)).get("thread", "turn").executionStatus, undefined);
+  await store.updateExecutionStatus("thread", "turn", { type: "reconnecting", updatedAtMs: 10, message: "private native payload", additionalDetails: "secret" });
+  const restored = (await SessionStreamCardStore.open(file)).get("thread", "turn");
+  assert.deepEqual(restored.executionStatus, { type: "reconnecting", updatedAtMs: 10 });
+  assert.doesNotMatch(await readFile(file, "utf8"), /private native payload|secret|additionalDetails/);
+  await store.updateExecutionStatus("thread", "turn", { type: "running" });
+  assert.equal((await SessionStreamCardStore.open(file)).get("thread", "turn").executionStatus, undefined);
 });

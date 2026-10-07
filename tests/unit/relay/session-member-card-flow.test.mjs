@@ -45,6 +45,28 @@ test("keeps the card selection while rejecting an unsafe directory name", () => 
   assert.equal(flow.has("chat:owner"), true);
 });
 
+test("registers a user-card target as group-only with /group", () => {
+  const flow = new SessionMemberCardFlow();
+  const started = flow.begin({
+    conversationId: "chat:owner",
+    actorOpenId: "ou_owner",
+    target: { openId: "ou_member", name: "Alice" },
+  });
+
+  const result = flow.handle({
+    conversationId: "chat:owner",
+    actorOpenId: "ou_owner",
+    text: "/group",
+  });
+
+  assert.match(started.reply, /`\/group`/);
+  assert.deepEqual(result, {
+    handled: true,
+    action: "allow",
+    target: { openId: "ou_member", name: "Alice" },
+  });
+});
+
 test("supports cancellation and releases slash commands to the normal router", () => {
   const flow = new SessionMemberCardFlow();
   flow.begin({
@@ -101,4 +123,9 @@ test("wires user cards and their pending directory reply before normal Session r
   assert.ok(inbound.indexOf('msg.rawContentType === "share_user"') < inbound.indexOf("if (!binding)"));
   assert.ok(inbound.indexOf("processPendingMemberCardText") < inbound.indexOf("parseMembersCommand"));
   assert.match(source, /resolveFeishuUserCardOpenId\(msg, \{ client: channel\.rawClient \}\)/);
+  assert.match(source, /dmAllowlist: directBridgeOpenIds\(\)/);
+  assert.match(source, /msg\.chatType === "p2p" && !sessionAccess\.canDirectMessage\(msg\.senderId\)/);
+  assert.doesNotMatch(source, /msg\.senderIsBot !== false \|\| !sessionAccess\.isActive\(msg\.senderId\)/);
+  assert.match(source, /allowGroupMembers: true/);
+  assert.match(source, /if \(!sessionAccess\.isActive\(msg\.senderId\)\) return false/);
 });

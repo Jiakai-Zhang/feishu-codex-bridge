@@ -1,4 +1,5 @@
 import path from "node:path";
+import { collectSubagentProgress, isSubagentItem } from "./codex-subagent-progress.mjs";
 import {
   parseCodexDesktopFilePrompt,
   parseFeishuAttachmentContexts,
@@ -604,6 +605,9 @@ export class CodexTurnCollector {
         unphasedAnswer: "",
         progressSequence: 0,
         progressItemSequences: new Map(),
+        subagents: new Map(),
+        subagentProgressText: "",
+        subagentProgressSequence: 0,
       };
       this.turns.set(key, state);
     }
@@ -612,6 +616,14 @@ export class CodexTurnCollector {
 
   #collectItem(state, item, completedAtMs) {
     if (!state || !item) return;
+    if (isSubagentItem(item)) {
+      const text = collectSubagentProgress(state.subagents, item);
+      if (text && text !== state.subagentProgressText) {
+        state.subagentProgressText = text;
+        state.subagentProgressSequence = ++state.progressSequence;
+      }
+      return text;
+    }
     if (item.type === "userMessage") {
       const prompt = userPromptDetailsFromItem(item);
       if (!prompt.text && prompt.resources.length === 0) return;
@@ -701,24 +713,29 @@ export class CodexTurnCollector {
     this.threadUsageTotals.set(state.threadId, total);
   }
 
-  #emitProgress(state, item, completedAtMs) {
-    if (!state || item?.type !== "agentMessage" || item.phase !== "commentary") return;
-    const text = String(item.text || "").trim();
+  #emitProgress(state, item, completedAtMs, subagentText) {
+    const subagent = isSubagentItem(item);
+    if (!state || (!subagent && (item?.type !== "agentMessage" || item.phase !== "commentary"))) return;
+    // Unsupported lifecycle values must not repeat the last known public state.
+    if (subagent && !subagentText) return;
+    const text = subagent ? subagentText : String(item.text || "").trim();
     if (!text || typeof this.onTurnProgress !== "function") return;
     const itemKey = progressItemKey(item);
-    const key = `${state.key}:${itemKey}`;
+    const sequence = subagent ? state.subagentProgressSequence : state.progressItemSequences.get(itemKey);
+    const key = subagent ? `${state.key}:subagent:${sequence}` : `${state.key}:${itemKey}`;
     if (this.emittedProgress.has(key)) return;
     this.emittedProgress.add(key);
     if (this.emittedProgress.size > 10_000) {
       this.emittedProgress = new Set([...this.emittedProgress].slice(-8_000));
     }
     const target = this.targets.get(state.threadId);
-    const sequence = state.progressItemSequences.get(itemKey);
     const record = Object.freeze({
       threadId: state.threadId,
       turnId: state.turnId,
       chatId: target.chatId,
-      itemId: item.id == null ? itemKey : String(item.id),
+      itemId: subagent ? `subagent-progress:${sequence}` : item.id == null ? itemKey : String(item.id),
+      ...(subagent ? { kind: "subagent", activityKey: "subagents" } : {}),
+      ...(state.clientId ? { clientId: state.clientId } : {}),
       sequence,
       text,
       createdAtMs: completedAtMs ? normalizeTimestampMs(completedAtMs) : Date.now(),
@@ -797,10 +814,11 @@ export class CodexTurnCollector {
       this.#collectTurn(state, turn);
       return;
     }
-    if (method === "item/completed") {
+    if (method === "item/completed" || method === "item/started") {
+      if (method === "item/started" && !isSubagentItem(params.item)) return;
       const state = this.#state(threadId, params.turnId);
-      this.#collectItem(state, params.item, params.completedAtMs);
-      this.#emitProgress(state, params.item, params.completedAtMs);
+      const subagentText = this.#collectItem(state, params.item, params.completedAtMs);
+      this.#emitProgress(state, params.item, params.completedAtMs, subagentText);
       return;
     }
     if (method === "thread/tokenUsage/updated") {

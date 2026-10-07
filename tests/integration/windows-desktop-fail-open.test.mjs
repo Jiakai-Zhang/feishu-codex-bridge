@@ -82,7 +82,10 @@ for (const scenario of [
   test(`Windows readiness probe handles ${scenario.name}`, { skip: !powershell }, async (t) => {
     const peer = await protocolPeer(t, scenario);
     const probe = path.join(repositoryRoot, "scripts/windows/app-server-readiness.ps1");
-    const response = await shell(`. ${quote(probe)}; Test-CodexAppServerInitialize -Url ${quote(peer.url)} -TimeoutMilliseconds 1000`);
+    // Parallel Windows CI and first-use .NET initialization can exceed one
+    // second. Allow responsive peers headroom; keep the silent-peer deadline short.
+    const timeoutMilliseconds = scenario.silent ? 1000 : 5000;
+    const response = await shell(`. ${quote(probe)}; Test-CodexAppServerInitialize -Url ${quote(peer.url)} -TimeoutMilliseconds ${timeoutMilliseconds}`);
     assert.equal(response.stdout.trim().toLowerCase(), String(scenario.expected));
     assert.equal(peer.methods[0], "initialize");
     assert.ok(peer.methods.every((method) => ["initialize", "initialized"].includes(method)));

@@ -88,12 +88,12 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 应用/Bot 权限：
 
 - `im:message`：发送消息，并以 Bot 身份下载已授权成员消息中的图片与附件；
-- `im:message.p2p_msg:readonly`：接收已启用用户与机器人的单聊消息，用于 `/chat`、`/add`、成员设置与后续私聊；
+- `im:message.p2p_msg:readonly`：接收已启用用户与机器人的单聊消息，用于 `/chat`、`/todo`、`/add`、成员设置与后续私聊；
 - `im:message.group_msg`：接收群内普通消息，使单人绑定群无需 `@Bot`；多人群由 Bridge 再要求 `@Bot`/回复 Bot/斜杠命令；
 - `im:chat:readonly`：读取群基本信息；
 - `im:chat.members:read`：验证 Session owner、所有已启用共享成员和唯一当前 Bot；
-- `im:chat:create`：创建专属绑定群；
-- `im:resource`：把 Codex 输出中的图片与文件上传回飞书。
+- `im:chat:create`：创建专属绑定群并在建群时设置头像；
+- `im:resource`：上传自动生成的群头像，以及 Codex 输出中的图片与文件。
 
 用户权限：
 
@@ -105,6 +105,7 @@ Windows 脚本使用相同的随机 loopback 跳转与两分钟本机 URL 备用
 - `docx:document:readonly`：定位每群独立文档中的持续摘要受控区块；
 - `docx:document:write_only`：把完整 Markdown 回答写入新文档。
 - `drive:file:upload`：当附件超过飞书消息 30 MiB 上限时上传原文件并返回云盘链接。
+- `task:task:write`：由 Bridge Owner 在 Bot 私聊中通过 `/todo` 创建分配给自己的原生飞书任务。
 
 上述 OAuth 是 Bridge 主机当前授权用户（通常为 Bridge Owner）的个人身份。Feed 标签也是个人视图：由普通成员作为 owner 的私有群可能不在 Owner OAuth 的可见范围，因此标签只能尽力应用，不能作为该成员 Session 绑定的授权依据；授权始终由本机成员登记、固定 `chat_id` 和实时群成员校验决定。长回答文档同样由该 OAuth 用户创建后把链接发到绑定群。
 
@@ -124,10 +125,10 @@ Lark CLI 当前创建的新应用通常已默认启用 Bot、长连接和该消�
 
 ## C. 用户 OAuth 与安全校验
 
-Feed 标签、长回答云文档和超限附件云盘兜底由当前用户身份调用，需要单独授权：
+Feed 标签、长回答云文档、超限附件云盘兜底和飞书任务由当前用户身份调用，需要单独授权：
 
 ```bash
-./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
+./lark-cli.sh auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload,task:task:write"
 ```
 
 用户本人在浏览器确认后运行：
@@ -141,14 +142,14 @@ Feed 标签、长回答云文档和超限附件云盘兜底由当前用户身份
 Windows 使用完全对应的入口：
 
 ```powershell
-.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload"
+.\lark-cli.ps1 auth login --scope "im:feed_group_v1:read,im:feed_group_v1:write,im:chat.tabs:read,im:chat.tabs:write_only,docx:document:create,docx:document:readonly,docx:document:write_only,drive:file:upload,task:task:write"
 .\verify-feishu-app.ps1
 ```
 
 - 应用配置存在；
 - Bot 身份 available/verified；
 - 用户身份 available/verified；
-- 八项用户 OAuth scope 完整；
+- 九项用户 OAuth scope 完整；
 - `im.message.receive_v1` 已发布；
 - 消息事件所需应用权限已生效。
 
@@ -164,7 +165,7 @@ Windows 使用完全对应的入口：
 
 ### 2. 权限
 
-在“权限管理”核对 B 节列出的 7 项应用/Bot 权限与 4 项用户权限。缺少哪一项只补哪一项。
+在“权限管理”核对 B 节列出的 7 项应用/Bot 权限与 9 项用户权限。缺少哪一项只补哪一项。
 
 `im:message` 已满足“获取消息中的资源文件”接口的权限要求，无需为入站附件额外添加 `im:message:readonly`。如果应用选择只读权限模型，也可以用 `im:message:readonly` 满足下载接口，但 Bridge 发送回复仍需要 `im:message`。保密消息、开启防泄密模式的群，以及飞书接口不支持的表情包/合并转发子消息资源不会被下载。
 

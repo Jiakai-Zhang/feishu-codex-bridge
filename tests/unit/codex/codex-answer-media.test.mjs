@@ -137,3 +137,64 @@ test("removes renderer-only memory citation metadata from the Feishu copy", () =
   assert.equal(result.segments[0].text, "visible answer");
   assert.equal(result.strippedMetadataBlockCount, 1);
 });
+
+test("extracts inline Desktop file citations without exposing renderer metadata or paths", () => {
+  const result = extractCodexAnswerMedia('更新版共 11 页：:codex-file-citation{path="C:/private/output/入口 对照.pdf" title="report"} 请查收。');
+  assert.deepEqual(result.attachments, [{
+    type: "attachment",
+    path: path.win32.normalize("C:/private/output/入口 对照.pdf"),
+    name: "入口 对照.pdf",
+    source: "file-citation",
+  }]);
+  assert.equal(result.segments[0].text, "更新版共 11 页：📎 入口 对照.pdf 请查收。");
+  assert.doesNotMatch(JSON.stringify(result.segments), /private|codex-file-citation|title=/);
+});
+
+test("supports quoted citation attributes, Windows backslashes, POSIX and encoded paths", () => {
+  const result = extractCodexAnswerMedia([
+    String.raw`:codex-file-citation{label="first" path = "C:\private\output\one.pdf" }`,
+    ":codex-file-citation{path='/private/output/report {final}.pdf'}",
+    ':codex-file-citation{path="/C:/private/output/report%20two.pdf"}',
+    ':codex-file-citation{path="file:///C:/private/output/three.pdf"}',
+  ].join("\n"));
+  assert.deepEqual(result.attachments.map(({ name }) => name), [
+    "one.pdf", "report {final}.pdf", "report two.pdf", "three.pdf",
+  ]);
+  assert.equal(result.attachments[0].path, path.win32.normalize("C:/private/output/one.pdf"));
+  assert.doesNotMatch(JSON.stringify(result.segments), /private|codex-file-citation/);
+});
+
+test("deduplicates citations with Markdown links and visualize attachments and respects limits", () => {
+  const result = extractCodexAnswerMedia([
+    ':codex-file-citation{path="C:/private/one.pdf"} :codex-file-citation{path="C:/private/two.mp4"}',
+    "[one again](C:/private/one.pdf)",
+    '::visualize{"path":"C:/private/two.mp4"}',
+    ':codex-file-citation{path="C:/private/two.mp4"}',
+  ].join("\n"), { maxAttachments: 1 });
+  assert.equal(result.attachmentCount, 1);
+  assert.equal(result.omittedAttachmentCount, 1);
+  assert.equal(result.attachments[0].name, "one.pdf");
+  assert.doesNotMatch(JSON.stringify(result.segments), /private|codex-file-citation/);
+});
+
+test("rejects unsafe or malformed file citations without leaking their renderer attributes", () => {
+  for (const attributes of [
+    'path="https://example.com/report.pdf"',
+    'path="./report.pdf"',
+    'path="C:/private/code.mjs:42"',
+    'notpath="C:/private/report.pdf"',
+    'path="C:/private/report.pdf" path="C:/private/other.pdf"',
+    'path="C:/private/report.pdf"junk="value"',
+    'path=C:/private/report.pdf',
+    'path="C:/private/report.pdf" broken',
+    'path="C:/private/report.pdf',
+  ]) {
+    const result = extractCodexAnswerMedia(`prefix :codex-file-citation{${attributes}} suffix`);
+    assert.equal(result.attachmentCount, 0, attributes);
+    assert.doesNotMatch(JSON.stringify(result.segments), /private|codex-file-citation|example\.com/, attributes);
+    assert.match(result.segments[0].text, /^prefix /);
+  }
+  const unterminated = extractCodexAnswerMedia('result :codex-file-citation{path="C:/private/report.pdf"');
+  assert.equal(unterminated.attachmentCount, 0);
+  assert.doesNotMatch(unterminated.segments[0].text, /private|codex-file-citation/);
+});

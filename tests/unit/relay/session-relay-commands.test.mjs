@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   executeGlobalSettingsCommand,
@@ -238,6 +239,17 @@ test("routes an explicit steer independently from the Session default input mode
   });
   assert.deepEqual(calls, ["use the other API"]);
   assert.match(result, /已调整方向/);
+});
+
+test("does not delay an explicit steer acknowledgement on stream-card creation", async () => {
+  const source = await readFile(new URL("../../../src/app/session-relay.mjs", import.meta.url), "utf8");
+  const explicitSteer = source.slice(
+    source.indexOf("async function submitExplicitSteer"),
+    source.indexOf("async function processCommandMessage"),
+  );
+
+  assert.match(explicitSteer, /void tryEnsureTurnStreamCard\(/);
+  assert.doesNotMatch(explicitSteer, /await tryEnsureTurnStreamCard\(/);
 });
 
 test("rejects malformed recognized commands instead of sending them to Codex", async () => {

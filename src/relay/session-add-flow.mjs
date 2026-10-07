@@ -3,6 +3,36 @@ function selectionNumber(value) {
   return match ? Number(match[1]) : undefined;
 }
 
+export function isSessionGroupBindCommand(value) {
+  return /^\/bind(?:@[^\s]+)?\s*$/i.test(String(value || "").trim());
+}
+
+export class SessionGroupBindFlow {
+  constructor({ inspectGroup, createIndependent, provision }) {
+    this.inspectGroup = inspectGroup;
+    this.createIndependent = createIndependent;
+    this.provision = provision;
+  }
+
+  async execute({ chatId, actorOpenId }) {
+    const group = await this.inspectGroup({ chatId, ownerOpenId: actorOpenId });
+    const session = await this.createIndependent({
+      name: group.name,
+      actorOpenId,
+      chatId,
+    });
+    const result = await this.provision(session.id, {
+      session,
+      ownerOpenId: actorOpenId,
+      targetGroup: { chatId, name: group.name },
+    });
+    return Object.freeze({
+      ...result,
+      restart: false,
+    });
+  }
+}
+
 function choiceLine(number, label) {
   return `\`${number}\` ${label}`;
 }

@@ -18,7 +18,7 @@
 
 ## 能做什么
 
-- **固定绑定**：一个初始只含 Session owner 与当前 Bot 的规范绑定群，对应一个 Codex Session；启用多用户后可加入已登记成员共享该 Session，同一 Bot 可以管理多个绑定群。
+- **固定绑定**：一个飞书群对应一个 Codex Session；当前群成员可在群内 `@Bot` 共享该上下文，同一 Bot 可以管理多个绑定群。
 - **双向续聊**：飞书和 Codex Desktop 都能向同一 Session 输入，最终回答同步回绑定群。
 - **异步输入**：普通消息可按 Session 选择 `queue` 或 `steer`；持久队列在 Bridge 重启后继续恢复。
 - **原生控制**：直接在群内查看状态、切换模型与推理强度、控制 Plan/Goal、停止当前 Turn 或管理队列，不把这些命令发送给模型。
@@ -126,12 +126,12 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 | 应用权限 | 用途 |
 | --- | --- |
 | `im:message` | 发送回复、富文本和互动卡片；下载 owner 消息中的图片与附件 |
-| `im:message.p2p_msg:readonly` | 接收 Bot 私聊中的 `/chat`、`/schedule`、`/add` 与全局设置命令 |
+| `im:message.p2p_msg:readonly` | 接收 Bot 私聊中的 `/chat`、`/schedule`、`/todo`、`/add` 与全局设置命令 |
 | `im:message.group_msg` | 接收绑定群中未 `@Bot` 的普通消息 |
 | `im:chat:readonly` | 读取绑定群基本信息 |
 | `im:chat.members:read` | 校验 Session owner、已启用共享成员与唯一当前 Bot |
-| `im:chat:create` | 自动创建专属 Session 群 |
-| `im:resource` | 把 Codex 输出中的图片、视频和其他文件上传回飞书 |
+| `im:chat:create` | 自动创建专属 Session 群并在建群时设置头像 |
+| `im:resource` | 上传自动生成的群头像，以及 Codex 输出中的图片、视频和其他文件 |
 | `docx:document:create` | 创建长回答云文档（当前 `main`） |
 | `docx:document:write_only` | 写入长回答 Markdown（当前 `main`） |
 | `docx:document:readonly` | 定位每群持续摘要文档中的受控摘要区块 |
@@ -150,6 +150,7 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 - `docx:document:write_only`（当前 `main`）
 - `docx:document:readonly`（当前 `main`）
 - `drive:file:upload`（超过消息附件上限时上传原文件并返回云盘链接）
+- `task:task:write`（在 Bot 私聊中用 `/todo` 创建原生飞书任务）
 
 `auth status --json --verify` 的完整结果含身份信息，不要粘贴到聊天、Issue 或日志。App Secret 只允许在本机可见的 `setup-channel-secret.sh`/`.ps1` 交互提示中输入，并由 macOS Keychain 或 Windows DPAPI 保存。
 
@@ -165,9 +166,19 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 
 `/chat` 后面的正文是第一条 Prompt，不是标题。Owner 在尚未进入临时 Chat 的 Bot 私聊中也可直接发送 `/schedule ...`；Bridge 会自动创建临时 Chat，并把完整命令作为第一条 Prompt 提交。私聊默认使用 Bridge 启动时的 Codex 工作目录；在已有绑定群中使用时继承原 Session 的工作目录。发送 `/endchat` 结束临时上下文：群内随后返回固定绑定的原 Session，私聊中则可再次发送 `/chat` 新建上下文。已经提交的临时消息不会被取消，完成后仍会回复原飞书会话。完成后的公开对话先归档为 `<workspace>/work/feishu-codex-bridge/temporary-chat-archives/` 下的 Markdown 文件，再从 Codex 永久删除；失败会安全重试。临时 Chat、队列和返回位置会跨 Bridge 重启保留。
 
+Owner 还可在 Bot 私聊直接创建原生飞书任务，无需进入 `/chat`，也不会调用模型：
+
+```text
+/todo 明天要给xxx老师写报告
+```
+
+Bridge 按显示时区识别“今天/明天/后天”、具体日期和本周/下周星期；不写日期时会创建无截止日期任务。成功后私聊返回任务标题、截止日期和可用的任务链接。
+
 ### 2. 创建绑定
 
 启动并完成 Desktop relay 验证后，在目标 Codex 任务中使用 `$feishu-session-bind`，为当前任务创建或复用专属绑定群。初次安装不需要先建 Bot 私聊。
+
+也可以把 Bot 加入一个尚未绑定的已有群，然后由 Owner 或完整成员在该群发送 `/bind`。Bridge 会核验发送者确实在群内、群内只有当前 Bot，再使用群名创建一个全新的独立 Codex Session，并把当前群固定绑定为它的上下文；其他当前群成员无需预先登记，也不会复用其他 Session 或聊天记录。自动创建使用发送者已分配的个人 Project 根目录，因此必须先完成多用户目录配置。绑定在当前进程内立即生效，不会为了首条 Prompt 重载并丢失空 Session。除精确的 `/bind` 外，未绑定群中的其他消息会被静默忽略。
 
 在已经存在的 Bot 私聊中，仍可选发送：
 
@@ -175,13 +186,17 @@ GitHub CLI 未安装、未登录或无权访问时请暂停；不得索取或输
 /add
 ```
 
-该可选向导会按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会创建私有群、校验成员、尽可能应用个人 Agent 标签并写入固定绑定。绑定群中的 `/add` 会引导回 Bot 私聊，避免把个人任务列表展示给群成员。
+该可选向导会按编号选择 Codex Desktop Project（或“独立”）和 Session。Bridge 会根据群名生成稳定的彩色头像、创建私有群、校验成员、尽可能应用个人 Agent 标签并写入固定绑定；头像上传失败时使用飞书默认头像，不阻断建群。绑定群中的 `/add` 会引导回 Bot 私聊，避免把个人任务列表展示给群成员。
 
 Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 Agent 任务；尚无原生归属的用户任务只有在 cwd 唯一落入该 Project 根目录或 Git worktree 时才会被安全补充，Bridge 不修改 Codex 全局状态。选择任意已有 Project 后都可直接“新建任务”；Project 暂时为空时，向导还会提供“重新扫描”和“返回 Project 列表”。
 
-绑定群只有一名人类用户时可直接发送文本、图片或附件，无需 `@Bot`；多人群只有 `@Bot`、回复 Bot 或斜杠命令会进入 Codex，其他消息保留为普通群聊。多人普通 Prompt 固定排入新 Turn，显式 `/steer <调整方向>` 才调整当前回答。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。普通文件可以连续上传，草稿按“Session + 发送者”隔离，直到同一发送者的第一条普通文字 Prompt 到达。Session Relay 不提供 `/new`、`/use` 或全局长期任务切换；每个群的长期绑定始终指向自己的 Session，临时 `/chat` 不会修改该绑定。
+绑定群只有一名人类用户时可直接发送文本或非图片/视频附件，无需 `@Bot`；图片和视频在任何群中都必须 `@Bot` 或回复 Bot 才会进入 Codex。多人群的其他消息也只有 `@Bot`、回复 Bot 或斜杠命令会进入 Codex。普通群聊不会触发回复或 Codex Turn，但当前群已关联项目档案时，会作为被动讨论记录进入下一次档案更新；其中未 `@Bot`、未回复 Bot 的图片和视频不会进入任何 Codex 或项目档案上下文，图文混合消息也只保留文字和非图片/视频资源。多人普通 Prompt 固定排入新 Turn，显式 `/steer <调整方向>` 才调整当前回答。图片作为 Codex 原生 `localImage` 视觉输入；PDF、Office 文档、压缩包、音视频和其他普通文件会保存到受控本机缓存，并按 Codex Desktop 自身持久化文件 Prompt 的格式提交（文件名、本地路径和 `My request for Codex`）。这让模型可以读取原文件，Desktop 可按原生文件消息呈现；Bridge 不再发送自定义 XML，也不把底层本机路径回显到飞书。普通文件可以连续上传，草稿按“Session + 发送者”隔离，直到同一发送者的第一条普通文字 Prompt 到达。Session Relay 不提供 `/new`、`/use` 或全局长期任务切换；每个群的长期绑定始终指向自己的 Session，临时 `/chat` 不会修改该绑定。
 
-可选多用户模式由 Owner 在 Bridge 主机运行 macOS `./setup-project-root.sh` 或 Windows `.\setup-project-root.ps1`，设置唯一 Project 根目录和自己的一级目录。随后可在 Bot 私聊或已有绑定群直接发送一张飞书用户名片，并按 Bot 提示回复该成员的目录名；原有 `/members add <目录名> @成员` 仍可使用。登记成功后，Bot 会主动私聊新成员并提示发送 `/add`；若应用可用范围或消息投递阻止主动私聊，Owner 会收到明确的手动兜底提示，成员登记不会回滚。每个用户只能 `/add` 自己目录中的 Project/Session；Owner 仍可看到自己目录和不属于任何成员的旧任务。把已登记成员加入绑定群即共享该 Session，但不会共享 Project 列表或目录；发送名片本身也不会自动邀请成员入群。群内出现未登记/已停用成员时，Session 内容收发会安全停止。
+已绑定群的当前成员无需逐个登记，即可在群内 `@Bot` 或回复 Bot 参与共享上下文；他们不会因此进入 Bot 私聊白名单，也没有个人 Project、`/add`、独立 Session 或管理命令权限。Bridge 每次收发敏感内容仍实时核验完整群成员、Session owner 和唯一 Bot，成员被移出群后会立即失去群内使用权。
+
+如需让某位群成员使用受限的参与者命令，Owner 可将其显式登记为“仅群聊”：在 Bot 私聊或已有绑定群发送用户名片后回复 `/group`，或使用 `/members allow @成员`。该登记仍不会开放私聊或个人 Project。
+
+如需完整多用户模式，Owner 再在 Bridge 主机运行 macOS `./setup-project-root.sh` 或 Windows `.\setup-project-root.ps1`，设置唯一 Project 根目录和自己的一级目录；发送用户名片后回复成员目录名，或使用 `/members add <目录名> @成员`。完整成员可私聊 Bot，并只能 `/add` 自己目录中的 Project/Session。显式停用的成员仍会触发 fail closed，直至其被重新启用或移出群。
 
 ### 3. 会话命令
 
@@ -189,17 +204,19 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 
 | 命令 | 作用 |
 | --- | --- |
+| `/bind` | 在尚未绑定的已有群中创建全新独立 Codex Session，并把当前群固定绑定为其上下文 |
 | `/chat [首条 Prompt]` | 在当前飞书私聊或绑定群创建/继续独立的临时 Codex Chat |
 | `/endchat` | 结束临时 Chat；归档内容后删除 Codex 对话，群内返回原绑定任务，私聊等待下一次 `/chat` |
 | `/status` | 查看连接、Turn、模型、Plan、Token、Goal、队列和待提交附件摘要 |
 | `/capacity` | 查看当前上下文剩余量、账户额度窗口、重置时间和账户计划；不调用模型 |
+| `/todo [日期] <事项>` | 仅在 Owner 与 Bot 私聊中创建原生飞书任务；不调用模型 |
 | `/stop` | 暂停活动 Goal（如有）并中止当前 Turn；不清空队列 |
 | `/steer <调整方向>` | 显式调整当前 Turn；共享群仅 Session owner 或当前 Turn 初始发起者可用 |
 | `/queue <Prompt>` | 把 Prompt 作为独立新 Turn 持久排队 |
 | `/queue` / `remove` / `clear` | 查看、删除或清空待执行 Prompt |
 | `/attachments` / `clear` | 查看或放弃当前 Session 暂存的待提交附件 |
-| `/doc` | 查看当前群的独立持续摘要文档和待同步状态 |
-| `/doc create` / `bind <URL>` | 新建独立摘要文档，或关联已有飞书 Docx/Wiki 文档 |
+| `/doc` | 查看当前群的独立项目档案文档和待同步状态 |
+| `/doc create` / `bind <URL>` | 新建独立项目档案，或关联已有飞书 Docx/Wiki 文档 |
 | `/doc summarize` / `unbind` | 立即处理新增回合，或解除关联但保留文档 |
 | `/settings` | 查看当前 Session 的输入、公开进度和最终提醒设置 |
 | `/settings input steer\|queue` | 设置普通消息是调整当前 Turn，还是排队新 Turn |
@@ -213,7 +230,7 @@ Project 列表只显示未归档的顶层用户任务，排除 guardian 等子 A
 | `/goal ...` | 创建、暂停、恢复、替换、设置预算或清除原生 Goal |
 | `/delete` | 经二次确认解除当前群绑定；不删除群或 Codex Session |
 | `/cancel` | 取消进行中的 `/add` 向导或用户名片登记流程 |
-| 用户名片、`/members ...` | Bridge Owner 登记、停用或查看多用户成员；路径只在主机本地设置 |
+| 用户名片、`/members ...` | Bridge Owner 登记仅群聊或完整成员、停用成员及查看状态；路径只在主机本地设置 |
 
 未知斜杠文本不会被 Bridge 吞掉。例如 `/review this change` 仍按当前 `queue|steer` 设置交给 Codex。完整参数和行为见 [Session Relay 参考](docs/SESSION_RELAY.md)。
 
@@ -238,14 +255,14 @@ Session owner 可在自己的绑定群运行 `/permissions`，为该 Session 单
 - 公开进度始终不 `@`；卡片成功完成后不另发 `@` 提醒。无卡片或更新失败时，兜底最终消息可按 Session 设置 `@` 初始 Turn 发起者，Desktop-only Turn 回退到 Session owner，私聊临时 Chat 不额外 `@`。
 - 固定版支持本地图片与原生附件。当前 `main` 中，图片不超过 10 MiB 时内嵌；视频及其他文件不超过 30 MiB 时作为原生附件发送。更大的 MP4 在 FFmpeg 可用时先压缩到约 27 MiB 后发送原生视频；压缩失败、质量预算过低或其他超限文件会上传原文件到飞书云盘并返回链接。所有路径都不会暴露本机绝对路径。
 - 当前 `main` 中，最终文本超过 `maxReplyChars` 时会写入当前用户的飞书云文档；创建失败则回退到普通文本投递。
-- 每个固定绑定群可关联一份独立持续摘要文档，并自动固定为群顶部的“持续摘要”标签页。默认等待 60 秒合并相邻回合，由后台 ephemeral Luna（`gpt-5.6-luna`，low effort）处理；每次模型输入只有“上次摘要 + 尚未处理的新回合”，不重读完整聊天历史或整份文档，也不改变群聊主任务的模型设置。
+- 每个固定绑定群可关联一份独立项目档案，并自动固定为群顶部的“项目档案”标签页。档案固定维护项目目标、当前状态、关键决策、待办事项、阻塞与未决问题、已完成里程碑和重要资料；未完成待办会跨轮次保留，直到对话明确说明完成、取消或替代。群成员未 `@Bot` 的普通讨论也会写入档案队列，但不会触发回复或主 Session Turn；未 `@Bot`、未回复 Bot 的图片和视频会被忽略，图文混合消息仅保留文字和非图片/视频资源。功能只记录项目档案启用后的新消息，不回填此前历史。默认等待 60 秒合并相邻内容，由后台 ephemeral Luna（`gpt-5.6-luna`，low effort）处理；每次模型输入只有“上次档案 + 尚未处理的新内容”，不重读完整聊天历史或整份文档，也不改变群聊主任务的模型设置。
 - Bridge 启动时不会补发历史答案；若启动时绑定 Session 正在运行，会接管活动 Turn，并补齐断线期间刚完成的结果。
 - 最终回答和附件先写入持久发件箱，使用确定性投递 ID 重试；发送失败不会重复运行 Codex。
 
 ## 安全边界
 
-- 入站消息的 `chat_id` 必须精确匹配固定绑定，发送者必须是群内已启用 Bridge 用户。
-- 发送任何可能包含任务内容的结果前，会重新核验 Session owner、所有人类成员与唯一当前 Bot；未登记/已停用成员、第三方 Bot 或无法完整核验时 fail closed。
+- 入站消息的 `chat_id` 必须精确匹配固定绑定，发送者必须是经实时核验的当前群成员；私聊、任务列表和管理命令仍额外检查登记身份与权限。
+- 发送任何可能包含任务内容的结果前，会重新核验 Session owner、当前完整群成员与唯一当前 Bot；Owner 缺失、显式停用成员、第三方 Bot 或无法完整核验时 fail closed。普通群成员无需登记，但只能在群内参与。
 - 默认 `sandboxMode` 是 `workspace-write`。配置也接受 `read-only` 和高风险的 `danger-full-access`；Session owner 可通过 `/permissions` 设置仅属于自己 Session 的持久覆盖。不要在不可信群、共享应用或不受控工作区启用全权限。
 - 共享 App Server 只允许 `ws://` loopback 地址，不接受远程监听器。
 - App Secret、OAuth token、App ID、open ID、chat ID、Codex Session 标识、真实配置和本机任务路径都不应进入聊天、日志或 Git。

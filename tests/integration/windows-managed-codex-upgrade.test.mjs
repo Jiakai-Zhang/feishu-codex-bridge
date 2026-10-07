@@ -335,3 +335,56 @@ test("an unverified listener is left running when App Server ownership cannot be
   assert.match(`${result.stderr}\n${result.stdout}`, /already in use by an unverified process/);
   assert.equal(listener.listening, true);
 });
+
+test("stopping a verified App Server leaves its tool descendants running", {
+  skip: process.platform !== "win32",
+  timeout: 30_000,
+}, async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "app-server-descendants-"));
+  const source = await fs.readFile(path.join(repositoryRoot, "start-app-server.ps1"), "utf8");
+  const start = source.indexOf("function Stop-VerifiedAppServerProcess {");
+  const end = source.indexOf("function Find-VerifiedAppServerProcess", start);
+  assert.ok(start >= 0 && end > start);
+  const childPidPath = path.join(directory, "child.pid");
+  const parentScript = path.join(directory, "parent.cjs");
+  const childScript = path.join(directory, "child.cjs");
+  const childReady = path.join(directory, "child.ready");
+  await fs.writeFile(childScript, `
+    require('node:fs').writeFileSync(process.argv[2], 'ready');
+    setInterval(() => {}, 1000);
+  `);
+  await fs.writeFile(parentScript, `
+    const { spawn } = require('node:child_process');
+    const fs = require('node:fs');
+    const child = spawn(process.execPath, [process.argv[3], process.argv[4]], {
+      stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    fs.writeFileSync(process.argv[2], String(child.pid));
+    setInterval(() => {}, 1000);
+  `);
+  const parent = spawn(process.execPath, [parentScript, childPidPath, childScript, childReady], {
+    stdio: "ignore", windowsHide: true,
+  });
+  let childPid;
+  t.after(async () => {
+    await stopProcess(parent.pid);
+    await stopProcess(childPid);
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    childPid = Number(await fs.readFile(childPidPath, "utf8").catch(() => ""));
+    if (childPid > 0 && await fs.access(childReady).then(() => true, () => false)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(childPid > 0);
+  assert.equal(await processExists(childPid), true, "the tool child must be ready before the replacement");
+  const stopper = path.join(directory, "stop.ps1");
+  await fs.writeFile(stopper, `${source.slice(start, end)}\n`
+    + `Stop-VerifiedAppServerProcess -Process (Get-Process -Id ${parent.pid}) -Reason 'test replacement'\n`);
+  const result = spawnSync(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", stopper], {
+    windowsHide: true, encoding: "utf8", timeout: 20_000,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(await processExists(parent.pid), false);
+  assert.equal(await processExists(childPid), true, "an unrelated tool child must survive listener replacement");
+});

@@ -282,8 +282,9 @@ test("standalone App Server follows managed Codex Desktop upgrades", async () =>
   assert.match(source, /codex-code-mode-host\.exe/);
   assert.match(source, /Test-CodexAppServerCapability/);
   assert.match(source, /previousAppServerProcess[\s\S]*managed Codex upgrade/);
-  assert.match(source, /Stop-VerifiedAppServerProcessTree/);
-  assert.match(source, /taskkill\.exe[\s\S]*\/T[\s\S]*\/F/);
+  assert.match(source, /Stop-VerifiedAppServerProcess/);
+  assert.match(source, /Stop-Process -InputObject \$currentProcess -Force/);
+  assert.doesNotMatch(source, /taskkill\.exe/);
   assert.match(source, /Update-ConfiguredCodexExecutable/);
   assert.match(source, /Request-BridgeReloadForCodexSwitch/);
   assert.match(source, /restart\.request[\s\S]*stop\.request/);

@@ -173,6 +173,99 @@ test("downloads an inbound Feishu media message as an MP4 Codex file attachment"
   });
 });
 
+test("attaches a quoted image using its original message id, not the reply id", async () => {
+  await fixture(async (directory) => {
+    const channel = fakeChannel(new Map([
+      ["quoted_image", { contentType: "image/png", buffer: Buffer.from("quoted-image") }],
+      ["current_file", { contentType: "application/pdf", buffer: Buffer.from("current-file") }],
+    ]));
+    const store = new FeishuInboundAttachmentStore(directory);
+    const prompt = await prepareFeishuPrompt({
+      messageId: "om_reply", chatId: "oc_test", replyToMessageId: "om_quote",
+      content: "compare these", resources: [{ type: "file", fileKey: "current_file", fileName: "current.pdf" }],
+    }, channel, store, { quotedMessage: {
+      messageId: "om_quote", chatId: "oc_test", content: "![image](quoted_image)",
+      resources: [{ type: "image", fileKey: "quoted_image" }],
+      replyToMessageId: "om_not_fetched",
+    } });
+    assert.deepEqual(channel.requests.map(({ path: request }) => request.message_id), ["om_reply", "om_quote"]);
+    assert.deepEqual(prompt.attachments.map(({ kind }) => kind), ["file", "image"]);
+    assert.equal(prompt.text.includes("compare these"), true);
+    assert.equal(prompt.text.includes("quoted_image"), false);
+    assert.deepEqual(buildCodexPromptInput(prompt).map(({ type }) => type), ["text", "localImage"]);
+  });
+});
+
+test("includes directly quoted text as context distinct from the current request", async () => {
+  const prompt = await prepareFeishuPrompt({
+    messageId: "om_reply", chatId: "oc_test", replyToMessageId: "om_quote", content: "explain this",
+  }, {}, undefined, { quotedMessage: { messageId: "om_quote", chatId: "oc_test", content: "quoted passage" } });
+  assert.equal(prompt.text.includes("quoted passage"), true);
+  assert.equal(prompt.text.endsWith("explain this"), true);
+  assert.deepEqual(prompt.attachments, []);
+});
+
+test("rejects cross-chat and mismatched quoted sources before any download", async () => {
+  for (const quotedMessage of [
+    { messageId: "om_quote", chatId: "oc_other" },
+    { messageId: "om_other", chatId: "oc_test" },
+    { messageId: "om_reply", chatId: "oc_test" },
+  ]) {
+    await assert.rejects(prepareFeishuPrompt({
+      messageId: "om_reply", replyToMessageId: "om_quote", chatId: "oc_test", content: "read quote",
+    }, {}, undefined, { quotedMessage }), { code: "quoted_message_unavailable" });
+  }
+});
+
+test("quoted files, audio and video use normal bounded attachment handling", async () => {
+  await fixture(async (directory) => {
+    for (const [type, contentType, fileName] of [
+      ["file", "application/pdf", "quote.pdf"], ["audio", "audio/mpeg", "quote.mp3"], ["video", "video/mp4", "quote.mp4"],
+    ]) {
+      const channel = fakeChannel(new Map([["quoted_key", { contentType, buffer: Buffer.from("quoted-resource") }]]));
+      const prompt = await prepareFeishuPrompt({
+        messageId: "om_reply", chatId: "oc_test", replyToMessageId: `om_quote_${type}`, content: "read this",
+      }, channel, new FeishuInboundAttachmentStore(directory), { quotedMessage: {
+        messageId: `om_quote_${type}`, chatId: "oc_test", resources: [{ type, fileKey: "quoted_key", fileName }],
+      } });
+      assert.equal(prompt.attachments[0].kind, "file");
+      assert.equal(prompt.attachments[0].name, fileName);
+      assert.equal(channel.requests[0].params.type, "file");
+    }
+  });
+});
+
+test("current and quoted attachments share item and total byte limits", async () => {
+  await fixture(async (directory) => {
+    const channel = fakeChannel(new Map([
+      ["current_key", { contentType: "image/png", buffer: Buffer.alloc(5) }],
+      ["quote_key", { contentType: "image/png", buffer: Buffer.alloc(5) }],
+    ]));
+    const message = {
+      messageId: "om_reply", chatId: "oc_test", replyToMessageId: "om_quote", content: "compare",
+      resources: [{ type: "image", fileKey: "current_key" }],
+    };
+    const quotedMessage = { messageId: "om_quote", chatId: "oc_test", resources: [{ type: "image", fileKey: "quote_key" }] };
+    await assert.rejects(prepareFeishuPrompt(message, channel,
+      new FeishuInboundAttachmentStore(directory, { maxItems: 1 }), { quotedMessage }), { code: "attachment_too_many" });
+    assert.equal(channel.requests.length, 0);
+    await assert.rejects(prepareFeishuPrompt(message, channel,
+      new FeishuInboundAttachmentStore(directory, { maxTotalBytes: 9 }), { quotedMessage }), { code: "attachment_total_too_large" });
+  });
+});
+
+test("disabled and failed quoted attachment downloads never produce a partial prompt", async () => {
+  await fixture(async (directory) => {
+    const channel = fakeChannel(new Map());
+    const store = new FeishuInboundAttachmentStore(directory);
+    const message = { messageId: "om_reply", chatId: "oc_test", replyToMessageId: "om_quote", content: "read this" };
+    const quotedMessage = { messageId: "om_quote", chatId: "oc_test", resources: [{ type: "image", fileKey: "missing_key" }] };
+    await assert.rejects(prepareFeishuPrompt(message, channel, store, { quotedMessage, enabled: false }), { code: "attachment_disabled" });
+    assert.equal(channel.requests.length, 0);
+    await assert.rejects(prepareFeishuPrompt(message, channel, store, { quotedMessage }), { code: "attachment_download_failed" });
+  });
+});
+
 test("rejects an oversized streamed attachment and removes its partial download", async () => {
   await fixture(async (directory) => {
     const channel = fakeChannel(new Map([

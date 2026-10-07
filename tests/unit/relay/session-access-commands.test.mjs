@@ -8,9 +8,38 @@ import {
 
 test("parses the owner member-management command surface", () => {
   assert.deepEqual(parseMembersCommand("/members"), { action: "status" });
+  assert.deepEqual(parseMembersCommand("/members allow @user"), { action: "allow", args: "@user" });
   assert.deepEqual(parseMembersCommand("/members add alice @user"), { action: "add", args: "alice @user" });
   assert.deepEqual(parseMembersCommand("/members remove @user"), { action: "remove", args: "@user" });
   assert.equal(parseMembersCommand("hello"), undefined);
+});
+
+test("registers a group-only member without sending a private onboarding message", async () => {
+  const calls = [];
+  let onboardingCalls = 0;
+  const accessStore = {
+    addGroupMember: async (record) => calls.push(record),
+    snapshot: () => ({ projectRoot: "private", users: [
+      { role: "owner", accessScope: "full" },
+      { role: "member", accessScope: "group", status: "active", displayName: "Alice" },
+    ] }),
+    isConfigured: () => true,
+  };
+
+  const result = await executeMembersCommand(parseMembersCommand("/members allow @user"), {
+    accessStore,
+    botOpenId: "ou_bot",
+    mentions: [{ openId: "ou_member", name: "Alice", isBot: false }],
+    listBindings: async () => [],
+    sendMemberOnboarding: async () => { onboardingCalls += 1; },
+  });
+
+  assert.equal(result.restart, true);
+  assert.equal(result.onboarding, undefined);
+  assert.equal(onboardingCalls, 0);
+  assert.deepEqual(calls, [{ openId: "ou_member", displayName: "Alice" }]);
+  assert.match(result.markdown, /仅群聊/);
+  assert.match(result.markdown, /不能私聊 Bot/);
 });
 
 test("adds exactly one mentioned member with one safe directory name", async () => {

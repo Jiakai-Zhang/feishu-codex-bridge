@@ -36,6 +36,7 @@ test("configures one owner root and persists member directories without exposing
     assert.deepEqual(member, {
       openId: "ou_member",
       role: "member",
+      accessScope: "full",
       status: "active",
       directoryName: "member-a",
       displayName: "Member A",
@@ -47,6 +48,55 @@ test("configures one owner root and persists member directories without exposing
     const reopened = await SessionAccessStore.open(statePath, { ownerOpenId: "ou_owner" });
     assert.equal(reopened.isActive("ou_member"), true);
     assert.equal(reopened.getUser("ou_member").directoryName, "member-a");
+  });
+});
+
+test("registers group-only members without private chat or Project access", async () => {
+  await fixture(async ({ statePath, projectRoot }) => {
+    const store = await SessionAccessStore.open(statePath, { ownerOpenId: "ou_owner" });
+    await store.configureProjectRoot({ projectRoot, ownerDirectoryName: "owner" });
+
+    const member = await store.addGroupMember({
+      openId: "ou_member",
+      displayName: "Member A",
+    });
+
+    assert.equal(member.accessScope, "group");
+    assert.equal(store.isActive("ou_member"), true);
+    assert.equal(store.canDirectMessage("ou_member"), false);
+    assert.equal(store.getUserRoot("ou_member"), undefined);
+    assert.deepEqual(store.listDirectUsers().map(({ openId }) => openId), ["ou_owner"]);
+
+    const reopened = await SessionAccessStore.open(statePath, { ownerOpenId: "ou_owner" });
+    assert.equal(reopened.getUser("ou_member").accessScope, "group");
+    assert.equal(reopened.canDirectMessage("ou_member"), false);
+  });
+});
+
+test("keeps legacy members on full access and supports explicit scope changes", async () => {
+  await fixture(async ({ statePath, projectRoot }) => {
+    await fs.mkdir(projectRoot, { recursive: true });
+    await fs.writeFile(statePath, JSON.stringify({
+      projectRoot,
+      users: [
+        { openId: "ou_owner", role: "owner", status: "active", directoryName: "owner" },
+        { openId: "ou_member", role: "member", status: "active", directoryName: "member-a" },
+      ],
+      projects: [],
+    }));
+    await fs.mkdir(path.join(projectRoot, "owner"));
+    await fs.mkdir(path.join(projectRoot, "member-a"));
+
+    const store = await SessionAccessStore.open(statePath, { ownerOpenId: "ou_owner" });
+    assert.equal(store.canDirectMessage("ou_member"), true);
+
+    await store.addGroupMember({ openId: "ou_member" });
+    assert.equal(store.canDirectMessage("ou_member"), false);
+    assert.equal(store.getUserRoot("ou_member"), undefined);
+
+    await store.addMember({ openId: "ou_member", directoryName: "member-a" });
+    assert.equal(store.canDirectMessage("ou_member"), true);
+    assert.ok(store.getUserRoot("ou_member"));
   });
 });
 
