@@ -125,12 +125,10 @@ function Set-DesktopRelayPointer {
         if (-not [string]::IsNullOrWhiteSpace($current) -and $current -ne $ExpectedUrl) {
             throw 'A different Codex Desktop relay pointer is configured; the watchdog will not overwrite it.'
         }
-        # Never publish a persistent dependency. Store/system restarts may precede
-        # this watchdog, so only the explicit launcher may pass a relay to Desktop.
-        if ($current -eq $ExpectedUrl) {
-            [Environment]::SetEnvironmentVariable($variableName, $null, [EnvironmentVariableTarget]::User)
+        if ($current -ne $ExpectedUrl) {
+            [Environment]::SetEnvironmentVariable($variableName, $ExpectedUrl, [EnvironmentVariableTarget]::User)
             Send-EnvironmentChanged
-            Write-WatchdogLog -Message 'Removed the legacy pointer; Desktop relay is launcher-process-only.'
+            Write-WatchdogLog -Message 'Restored the Bridge-owned Desktop relay pointer after the App Server was verified.'
         }
         return
     }

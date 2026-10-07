@@ -153,14 +153,16 @@ if ($config) {
 
     $expectedAppServerUrl = [string]$config.sessionRelay.appServerUrl
     $configuredAppServerUrl = [Environment]::GetEnvironmentVariable('CODEX_APP_SERVER_WS_URL', [EnvironmentVariableTarget]::User)
-    $processOnlyPointerReady = [string]::IsNullOrWhiteSpace($configuredAppServerUrl)
+    $appServerMatches = -not [string]::IsNullOrWhiteSpace($expectedAppServerUrl) -and $configuredAppServerUrl -eq $expectedAppServerUrl
     $relayActivationDeferred = -not $RequireDesktopRelay -and [string]::IsNullOrWhiteSpace($configuredAppServerUrl)
-    $relayPointerReady = $processOnlyPointerReady
+    $relayPointerReady = $appServerMatches -or $relayActivationDeferred
     Add-Check -Name 'Codex Desktop relay pointer' -Passed $relayPointerReady `
-        -Detail $(if ($processOnlyPointerReady) {
-            'launcher-process-only; no persistent Desktop dependency'
+        -Detail $(if ($appServerMatches) {
+            'user environment is configured'
+        } elseif ($relayActivationDeferred) {
+            'disabled while the Bridge is stopped or before final Desktop relay activation'
         } else {
-            'persistent pointer present; migrate the owned relay, or resolve the foreign configuration manually'
+            'missing or points elsewhere; start the Bridge, then configure Desktop relay if recovery is not installed'
         })
 
     $taskName = 'FeishuCodexBridge-DesktopRelay-Watchdog'
@@ -195,7 +197,6 @@ if ($config) {
         $bridgeEnabledProperty = $relayState.PSObject.Properties['bridgeEnabled']
         $bridgeEnabled = -not $bridgeEnabledProperty -or [bool]$bridgeEnabledProperty.Value
         $watchdogHeartbeatReady = [bool]$relayState.enabled -and $bridgeEnabled -and
-            [string]$relayState.pointerMode -eq 'process-only' -and
             [string]$relayState.expectedUrl -eq $expectedAppServerUrl -and
             [string]$watchdogStatus.activationId -eq [string]$relayState.activationId -and
             [string]$watchdogStatus.state -eq 'ready' -and
